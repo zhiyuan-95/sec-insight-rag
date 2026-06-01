@@ -1,3 +1,0 @@
-1. right now, it is only downloading one year of sec files, design a ingestion plan for 10k, 10q and xbrl fact. for 10k - 5 year, 10q - 12 quarter. for xbrl I want to keep all the available data in the system and keep adding new xbrl data of a company in the system.
-2. plan 2 is messed up, the structure seems messy. I don't if codex did the right think need further verify. 
-3. there is problems in the answer of question7
