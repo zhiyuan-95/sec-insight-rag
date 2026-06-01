@@ -1,0 +1,1130 @@
+# Architecture Discussion Notes
+
+## Purpose
+
+Treat this file as a design discussion document, not an implementation task.
+
+Act like a senior software architect reviewing my financial analysis system design. Help me decide whether my module boundaries are correct.
+
+## File Role
+
+This file is an architecture discussion and decision record.
+
+Use it to capture:
+
+- the design question being considered
+- the architecture issue behind the question
+- the recommended decision
+- the reasoning and tradeoffs
+- the concrete implementation or documentation action that follows from the decision
+- follow-up questions from the project owner
+
+This file is not a replacement for `proposal.md`, `README.md`, or implementation plans. `proposal.md` should remain the current product and architecture roadmap. This file should explain why architecture decisions were made.
+
+The assistant should write the architecture answer sections. The assistant should not write in `Comments And Further Discussion` unless explicitly asked, because that section is reserved for the project owner's follow-up comments, objections, and new questions.
+
+When the assistant answers the last existing numbered question in this file, the assistant should add a blank template for the next numbered question after that answer. The template should preserve the same section structure used by prior questions and should leave the question text as a placeholder for the project owner to fill in.
+
+The `Comments And Further Discussion` section should stay brief. If the assistant is explicitly asked to answer there, the answer must be no more than 150 words. If the follow-up is too complex to answer clearly in 150 words, the assistant should say that it should become a new numbered question instead of trying to answer it in the previous question's discussion section.
+
+The project owner's writing in `Comments And Further Discussion` must be preserved. The assistant must not delete, rewrite, replace, or reorganize anything the project owner wrote there. If asked to respond to that section, the assistant may only add a brief summary, clarification, or suggestion while keeping the original comment intact.
+
+The `Decision And Implementation` section is reserved for the project owner. The assistant should leave it blank unless the project owner explicitly asks the assistant to write there. If the project owner has made a decision and asks for it to be recorded, the assistant may write a concise summary of that decision and the implementation action. If no decision has been made, leave the section blank.
+
+The original question text is owned by the project owner. When answering questions or updating this file's rules, the assistant must not rewrite, correct, paraphrase, reorder, delete, or otherwise manipulate the original question. If the assistant needs to clarify an assumption, it should write that clarification in the answer section, not by changing the question.
+
+If a requested update conflicts with an existing rule in this file, the assistant should point out the contradiction before making the change. If the conflict can be resolved by adding a clarification, the assistant may add the clarification without changing the project owner's original question text.
+
+## Important Rules
+
+- Write answers directly into this file.
+- Do not edit code unless I explicitly ask.
+- Do not agree uncritically.
+- Push back when a design would create coupling, unclear data lineage, or hard-to-test code.
+- Focus on maintainability, traceability, testing, and future LLM/RAG integration.
+- Explain things in a way that helps me make the final design decision.
+- Add a `Decision And Implementation` section for each answered design question, but leave it blank unless the project owner asks for a decision summary.
+- Leave `Comments And Further Discussion` empty unless the project owner explicitly asks the assistant to write there.
+- If asked to write in `Comments And Further Discussion`, keep the answer under 150 words; suggest a new numbered question for complex follow-ups.
+- Do not delete, rewrite, replace, or reorganize anything the project owner wrote in `Comments And Further Discussion`; only add brief summaries, clarifications, or suggestions when asked.
+- Do not change or manipulate the project owner's original question text.
+- Point out contradictions with existing file rules before updating the rules.
+
+## Main Design Question
+
+```text
+How should I separate ingestion, normalization, indicator derivation,
+financial analysis, semantic filing analysis, and LLM reasoning so the
+system remains evidence-grounded and easy to maintain?
+```
+
+## Project Context
+
+I am building an evidence-grounded financial analysis system. The system includes:
+
+- SEC/XBRL data ingestion
+- reported financial facts
+- normalized metrics
+- derived indicators
+- financial data analysis
+- semantic filing analysis
+- LLM-based reasoning/explanation
+
+## Answer Format For Each Question
+
+For each numbered question below:
+
+1. Identify the real architecture/design issue behind the question.
+2. Give a direct recommendation.
+3. Explain the reasoning in practical software-engineering terms.
+4. Explain the tradeoff: what becomes better, what becomes worse.
+5. Use examples from this project, especially SEC/XBRL ingestion, metrics normalization, indicator derivation, analysis, and LLM reasoning.
+6. If directory/file structure is involved, suggest a concrete structure with module responsibilities.
+7. Do not just compliment my idea. If my assumption is wrong, explain clearly why.
+8. Do not give generic textbook answers.
+9. If something depends on the current codebase, inspect the relevant files first and cite the file paths/functions you looked at.
+10. Ask clarifying questions only if you truly cannot give a useful recommendation. Otherwise, state your assumptions and proceed.
+11. Add `### Comments And Further Discussion` after `### Suggested Next Step`, and leave it empty for the project owner's follow-up notes and questions.
+12. If explicitly asked to answer in `### Comments And Further Discussion`, keep the answer under 150 words.
+13. If a follow-up question is too complex for a brief answer, suggest moving it to the next numbered question.
+14. Preserve anything the project owner wrote in `### Comments And Further Discussion`; do not delete or rewrite it.
+15. Add `### Decision And Implementation` after `### Comments And Further Discussion`, but do not fill it unless the project owner asks for a decision summary.
+16. Do not change the original question text. If clarification is needed, add it in the answer section.
+17. If a new instruction conflicts with an existing rule in this file, point out the conflict before changing the rule.
+
+---
+
+## Question 1 - Directory Structure
+
+Question
+
+    Should we change the overall file and directory structure based on the fact that we have ingestion, derivation, analysis, and LLM reasoning?
+
+### Core Issue
+
+    The issue is how to split the system so each part has a clear job.
+
+    This project is not just one analysis script. It has several different kinds of work:
+
+    - SEC/XBRL ingestion
+    - metrics normalization
+    - indicator calculation
+    - financial data analysis
+    - semantic filing analysis
+    - LLM reasoning
+
+    If these parts are mixed together, the system will be harder to test, debug, and trust.
+
+### Recommendation
+
+    Yes. Keep separate folders for ingestion, processing, indicators, financial data analysis, retrieval, and LLM reasoning.
+
+    The structure in `proposal.md` and `agents.md` is a good direction:
+
+    ```text
+    src/
+      config/
+      api/
+      ingestion/
+      processing/
+      indicators/
+      analytics/
+      retrieval/
+      analyze/
+      storage/
+      evaluation/
+    ```
+
+    I would keep this structure.
+
+### Why
+
+    Each part does different work:
+
+    - `ingestion/` gets SEC data and filings.
+    - `processing/` cleans and normalizes XBRL facts.
+    - `indicators/` calculates derived financial metrics.
+    - `analytics/` performs financial data analysis.
+    - `retrieval/` finds relevant filing text.
+    - `analyze/` uses Gemini to explain the evidence.
+
+    This makes the source of each result easier to trace.
+
+### Tradeoff
+
+    Better:
+
+    - Easier to test each part.
+    - Easier to find bugs.
+    - Easier to trace final answers back to source data.
+    - Easier to add RAG and LLM reasoning later.
+
+    Worse:
+
+    - More files.
+    - More module boundaries.
+    - You need clear data contracts between steps.
+
+### Concrete Project Example
+
+    For the question "Why did revenue change?":
+
+    - `ingestion/` gets SEC company facts and filings.
+    - `processing/` normalizes revenue facts by period and unit.
+    - `indicators/` calculates revenue growth.
+    - `analytics/` checks trends or unusual changes.
+    - `retrieval/` finds MD&A text about revenue.
+    - `analyze/` uses Gemini to explain the answer with evidence.
+
+    This is cleaner than one large file doing everything.
+
+### Suggested Next Step
+
+    Keep the proposed folder structure.
+
+    Before coding, write a short responsibility note for each folder so the boundaries stay clear.
+
+### Comments And Further Discussion
+
+### Decision And Implementation
+
+    Decision: Keep the layered backend structure already described in `proposal.md`.
+
+    Implementation: Maintain separate modules for ingestion, processing, indicators, analytics, retrieval, LLM analysis, storage, workflows, and API routes. Do not collapse these responsibilities into one large module. If the structure changes later, update the current architecture documentation instead of rewriting old milestone notes.
+
+---
+
+## Question 2 - Main Goal And Evidence Separation
+
+Question
+
+    Why is the goal written as "separate reported facts, calculated indicators, financial data analysis results, semantic filing analysis, and model-generated interpretations so users can trust where each conclusion comes from"?
+
+    Shouldn't the main goal just be evidence-based financial analysis?
+
+### Core Issue
+
+    The issue is the difference between the main product goal and the internal design rule.
+
+    The main goal can be simple:
+
+    ```text
+    Build an evidence-based financial analysis system.
+    ```
+
+    But to make that goal real, the system must separate different evidence types.
+
+### Recommendation
+
+    Use "evidence-based financial analysis" as the main goal.
+
+    Use separation of evidence types as the architecture rule.
+
+    That means the system should keep these things separate and traceable:
+
+    - reported facts
+    - calculated indicators
+    - financial data analysis results
+    - semantic filing evidence
+    - LLM interpretations
+
+### Why
+
+    These are not the same kind of information.
+
+    A reported fact comes from SEC/XBRL data.
+
+    A calculated indicator comes from a formula.
+
+    A financial data analysis result comes from deterministic analysis code.
+
+    Semantic filing evidence comes from filing text.
+
+    An LLM interpretation is the model's explanation based on the evidence.
+
+    If they are mixed together, the answer may sound confident even when the evidence is weak.
+
+### Tradeoff
+
+    Better:
+
+    - More trustworthy answers.
+    - Easier to audit.
+    - Easier to cite evidence.
+    - Easier to prevent unsupported causal claims.
+
+    Worse:
+
+    - Responses may be more structured.
+    - The backend needs more metadata.
+    - Prompts need to be stricter.
+
+### Concrete Project Example
+
+    Bad answer:
+
+    ```text
+    Revenue declined because demand was weak.
+    ```
+
+    Better answer:
+
+    ```text
+    Revenue declined based on SEC XBRL facts.
+    Revenue growth was negative based on the calculated formula.
+    Financial data analysis shows this decline continued across multiple periods.
+    The filing mentions lower sales volume.
+    So weaker demand may be a reason, but only if the filing supports that claim.
+    ```
+
+    The second answer is better because it separates fact, calculation, analysis, filing evidence, and interpretation.
+
+### Suggested Next Step
+
+    Use this wording:
+
+    ```text
+    Main goal:
+    Build an evidence-based financial analysis system.
+
+    Design rule:
+    Keep reported facts, calculated indicators, financial data analysis results,
+    semantic filing evidence, and LLM interpretations separate and traceable.
+    ```
+
+### Comments And Further Discussion
+
+### Decision And Implementation
+
+    Decision: Use "evidence-based financial analysis" as the simple product goal, and use evidence separation as the internal architecture rule.
+
+    Implementation: Keep reported facts, derived indicators, deterministic analysis results, semantic filing evidence, and LLM interpretations as separate inputs and outputs. Prompt templates, response schemas, and stored analysis outputs should preserve those labels instead of blending everything into one explanation.
+
+---
+
+## Question 3 - Pipeline Flow Versus One Big File
+
+Question
+
+    Is it better to combine data ingestion, metrics normalization, and indicator derivation into one file?
+
+    The reason I ask is that ingestion, normalization, and processing seem like a data processing pipeline. Each step contains or depends on the result of the previous step, so I do not think a separate pipeline file is needed.
+
+### Core Issue
+
+    The issue is the difference between data flow and code ownership.
+
+    You are right that ingestion, normalization, and indicator derivation happen in order. Each step uses the result from the previous step.
+
+    That means the system has a pipeline flow. But it does not automatically mean the project needs a separate `pipelines/` folder or a separate pipeline file at the beginning.
+
+### Recommendation
+
+    Do not combine ingestion, normalization, and indicator derivation into one large file.
+
+    Also, do not add a separate pipeline file unless the orchestration logic becomes complex enough to deserve one.
+
+    A simple v1 structure can be:
+
+    ```text
+    src/
+      ingestion/
+      processing/
+      indicators/
+      analytics/
+      retrieval/
+      analyze/
+    ```
+
+    The important rule is:
+
+    ```text
+    Keep the logic for each stage separate.
+    Let one caller run the stages in order.
+    ```
+
+    That caller could be an API handler, an application service, or later a dedicated pipeline file if the flow grows.
+
+### Why
+
+    Each step has a different responsibility:
+
+    - Ingestion handles SEC requests, downloads, retries, throttling, and raw responses.
+    - Normalization handles XBRL concepts, units, periods, forms, and missing data.
+    - Indicator derivation handles formulas like revenue growth, margin, debt ratio, and free cash flow.
+
+    These should be tested separately.
+
+    The fact that one step depends on the previous step is normal. For example:
+
+    ```text
+    ingestion result -> processing result -> indicator result -> analytics result
+    ```
+
+    But dependency in the data flow should not mean all code belongs in one file.
+
+### Tradeoff
+
+    Better:
+
+    - Cleaner files.
+    - Easier unit tests.
+    - Easier debugging.
+    - Easier data lineage.
+    - Fewer folders than adding a `pipelines/` layer too early.
+
+    Worse:
+
+    - The API handler or service may start to contain orchestration code.
+    - If the workflow grows, you may later need to extract a dedicated pipeline module.
+    - You still need clear data objects passed between steps.
+
+### Concrete Project Example
+
+    If the SEC company facts response has duplicate revenue values, that is a `processing/` concern.
+
+    If free cash flow is calculated as operating cash flow minus capital expenditures, that is an `indicators/` concern.
+
+    If the system detects that revenue declined for three periods, that is an `analytics/` concern.
+
+    If MD&A explains that revenue changed because of sales volume, that is a `retrieval/` and semantic filing analysis concern.
+
+    If Gemini explains all of this in plain English, that belongs in `analyze/`.
+
+    Putting all of this into one file would make the system harder to audit.
+
+### Suggested Next Step
+
+    Do not create a separate `pipelines/` folder yet unless the workflow becomes hard to read.
+
+    For now, keep the stage logic separate and let one higher-level function call the steps in order.
+
+    If that higher-level function becomes too large, then extract it into a dedicated pipeline module later.
+
+### Comments And Further Discussion
+
+### Decision And Implementation
+
+    Decision: Do not combine ingestion, normalization, and indicator derivation into one file. Also do not add a dedicated pipeline folder until orchestration becomes large enough to justify it.
+
+    Implementation: Keep stage logic in `src/ingestion/`, `src/processing/`, `src/indicators/`, and `src/analytics/`. Use a thin caller or workflow function to run the stages in order. Extract a separate pipeline/workflow module only when the orchestration code becomes hard to read or test.
+
+---
+
+## Question 4 - TBD
+
+I want to combine plan2 and plan3 because that is confusing for me. I want to make it more intuitive. right now it is confusing for me, and I feel making it more complex for me. I think the ingestion layer should ingest filings and extract data from xbrl and ready to retrieve it. it not necessarily to change what we have don't. but I just to aggregate the instruction in proposal.
+
+### Core Issue
+
+    The real issue is not that the current modules are wrong. The issue is that the milestone wording makes the workflow feel split in a way that is not intuitive.
+
+    From a user or product perspective, "ingest a company" should mean:
+
+    - resolve the ticker
+    - fetch SEC submissions
+    - fetch SEC companyfacts XBRL data
+    - download relevant 10-K and 10-Q filings
+    - normalize the XBRL facts
+    - store the normalized facts so they are ready for later metrics, indicators, retrieval, and analysis
+
+    That can be described as one combined ingestion capability in `proposal.md`.
+
+    But from an implementation perspective, those steps should still be owned by separate modules because they have different failure modes and test needs.
+
+### Recommendation
+
+    Yes, aggregate plan2 and plan3 in the proposal language so the milestone is easier to understand.
+
+    I would rename the combined milestone to something like:
+
+    ```text
+    Company SEC/XBRL ingestion and normalization
+    ```
+
+    or:
+
+    ```text
+    Company data ingestion pipeline
+    ```
+
+    But I would not merge all the implementation code into `src/ingestion/`.
+
+    Keep the current implementation boundaries:
+
+    ```text
+    src/ingestion/   # SEC API requests and filing downloads
+    src/processing/  # XBRL/companyfacts normalization
+    src/storage/     # SQLite persistence
+    ```
+
+    Then add a higher-level workflow later:
+
+    ```text
+    src/workflows/company_ingestion.py
+    ```
+
+    That workflow can expose the intuitive function:
+
+    ```python
+    ingest_company(ticker: str, settings: Settings) -> CompanyIngestionResult
+    ```
+
+### Why
+
+    I inspected the current code:
+
+    - `src/ingestion/__init__.py` exposes SEC-facing functions such as `get_companyfacts`, `get_company_submissions`, `download_filing_document`, and `resolve_ticker_to_cik`.
+    - `src/processing/xbrl_normalizer.py` owns `normalize_companyfacts` and `NormalizedFact`.
+    - `src/storage/facts_repository.py` owns `RawFactRepository`, which persists normalized facts into SQLite.
+
+    Those boundaries are useful. They prevent SEC HTTP logic, XBRL cleanup logic, and database persistence logic from becoming one hard-to-debug file.
+
+    Your confusion is still valid, though. The proposal should describe the capability in a more user-centered way:
+
+    ```text
+    Ingest company SEC/XBRL data and make normalized facts available.
+    ```
+
+    Under that heading, the implementation can still have substeps.
+
+### Tradeoff
+
+    Better if the proposal aggregates plan2 and plan3:
+
+    - The milestone feels more intuitive.
+    - "Ingest a company" maps to a real user action.
+    - It becomes clearer why SEC download and XBRL normalization belong near each other in the product flow.
+
+    Better if the code stays separated:
+
+    - SEC request failures are isolated from XBRL parsing failures.
+    - Normalization can be tested without network calls.
+    - Storage can be tested with temporary SQLite databases.
+    - Later indicator and analysis layers get cleaner inputs.
+
+    Worse:
+
+    - The proposal needs to explain that one product milestone has multiple implementation layers.
+    - A separate workflow function is needed so users do not have to manually call six lower-level functions.
+
+### Concrete Project Example
+
+    The proposal can present the combined milestone like this:
+
+    ```text
+    Company SEC/XBRL ingestion and normalization
+
+    - Resolve ticker to CIK.
+    - Retrieve SEC submissions and companyfacts JSON.
+    - Download latest 10-K and 10-Q filing documents.
+    - Normalize companyfacts into raw financial fact records.
+    - Store normalized facts in SQLite with source metadata and quality flags.
+    ```
+
+    The implementation should still be staged:
+
+    ```text
+    src.ingestion
+      gets raw SEC data
+
+    src.processing
+      converts companyfacts into NormalizedFact records
+
+    src.storage
+      persists normalized facts
+
+    src.workflows
+      combines the above into ingest_company(...)
+    ```
+
+    That gives you the intuitive "one ingestion operation" without losing traceability.
+
+### Suggested Next Step
+
+    After combining the old plan2 and plan3 milestone wording in `proposal.md`, the next implementation task should be the workflow wrapper:
+
+    ```text
+    src/workflows/company_ingestion.py
+    ```
+
+    The workflow should call existing ingestion, processing, and storage functions. It should not duplicate their logic.
+
+### Comments And Further Discussion
+
+### Decision And Implementation
+
+    Decision: Combine the old plan2 and plan3 wording into one intuitive company ingestion and normalization milestone, but keep the implementation modules separated.
+
+    Implementation: Describe the milestone in `proposal.md` as `Company SEC/XBRL ingestion and normalization`. Keep SEC access in `src/ingestion/`, XBRL normalization in `src/processing/`, SQLite persistence in `src/storage/`, and user-facing orchestration in `src/workflows/company_ingestion.py` when that workflow is added.
+
+---
+
+## Question 5 - TBD
+
+Question
+
+   I want to add a file called structure.md, which records the change of the system. because the structure of the system changes from the original plan.txt and proposal, sometimes I will change the code and the change has been made should be synchronized. I am thinking I should change the plan accordingly base on the change that we made or change the overall proposal or add a new file called structure which constantly recoding the change of the system structure. what is the best solution?
+
+### Core Issue
+
+    The real architecture issue is documentation ownership.
+
+    You are trying to avoid a common project problem: the code structure changes, but the planning documents still describe an older design.
+
+    The risky part is not adding one more file. The risky part is creating multiple documents that all claim to describe the "current system." If `proposal.md`, `plan1.txt`, `plan2.txt`, and a new `structure.md` all repeat the same architecture details, they will eventually disagree.
+
+    So the design question is:
+
+    ```text
+    Which document should be the source of truth for the current architecture,
+    and which documents should be historical planning notes?
+    ```
+
+### Recommendation
+
+    Do not keep rewriting every old plan file every time the code changes.
+
+    Use this documentation model:
+
+    ```text
+    proposal.md
+      Current product goal, architecture direction, MVP scope, milestones, and evidence rules.
+
+    plan1.txt, plan2.txt
+      Historical milestone implementation notes. Do not treat them as the current architecture source of truth after the milestone is done.
+
+    docs/structure.md
+      Optional current module map and responsibility guide.
+
+    discussion.txt
+      Architecture discussion and reasoning behind decisions.
+
+    README.md
+      How to install, run, and test the project.
+    ```
+
+    My recommendation is: add `docs/structure.md` only if you keep it short and current-focused.
+
+    Do not use it as a running diary of every change. Git history already records changes over time. A structure document should describe the current intended shape of the system, not every past version.
+
+### Why
+
+    I inspected the current project files:
+
+    - `proposal.md` already describes the current high-level backend architecture, including `ingestion`, `processing`, `indicators`, `analytics`, `retrieval`, `analyze`, `storage`, `workflows`, and `evaluation`.
+    - `plan1.txt` describes the initial scaffold milestone.
+    - `plan2.txt` describes the combined SEC/XBRL ingestion and normalization milestone.
+    - `src/` already mostly follows the proposal structure.
+    - `docs/` currently only contains `.gitkeep`, so it is available for a real architecture note.
+
+    That means the project already has a reasonable split:
+
+    - `proposal.md` is the living plan.
+    - `plan1.txt` and `plan2.txt` are milestone records.
+    - `discussion.txt` is for architectural reasoning.
+    - `docs/` is the right place for stable reference documentation.
+
+    If you constantly update `plan1.txt` and `plan2.txt`, they stop being useful as milestone records. For example, `plan1.txt` is about the initial scaffold. If you later edit it to include indicator formulas, retrieval, or LLM reasoning, it no longer accurately explains what Milestone 1 was supposed to do.
+
+    A better approach is to keep old plans as historical notes and update only the documents that are supposed to represent the current design.
+
+### Tradeoff
+
+    Better:
+
+    - Less documentation drift.
+    - Easier to know which file to trust.
+    - Old milestone notes remain useful for understanding past decisions.
+    - New contributors can read one structure document instead of reconstructing the architecture from several plans.
+    - The proposal stays focused on product scope and roadmap instead of becoming a low-level file inventory.
+
+    Worse:
+
+    - You need discipline about what each document is for.
+    - `docs/structure.md` can become stale if it is too detailed.
+    - Some architecture changes require updating both `proposal.md` and `docs/structure.md`.
+    - You may need to move or mark old plans as historical so they do not look authoritative.
+
+### Concrete Project Example
+
+    Suppose the next change adds `src/workflows/company_ingestion.py`.
+
+    Update `proposal.md` if this changes the official architecture or milestone plan:
+
+    ```text
+    Application workflows
+    - Add `src/workflows/company_ingestion.py` for thin orchestration.
+    ```
+
+    Update `docs/structure.md` if you want a concise current structure map:
+
+    ```text
+    src/workflows/
+      Owns user-facing orchestration.
+      Calls ingestion, processing, storage, retrieval, analytics, and analysis modules.
+      Must not duplicate SEC HTTP, XBRL normalization, SQL, formula, retrieval, or LLM logic.
+    ```
+
+    Do not rewrite `plan1.txt`, because Milestone 1 is already historical.
+
+    Do not rewrite `plan2.txt` unless you are correcting that specific milestone record.
+
+    Another example:
+
+    If you later decide that retrieval indexing should not run automatically during company ingestion, that decision should go into `discussion.txt` or a small architecture note because it explains a design boundary.
+
+    The current module map in `docs/structure.md` would then say:
+
+    ```text
+    src/ingestion/
+      SEC requests and filing downloads only.
+
+    src/retrieval/
+      Filing chunking, indexing, and retrieval only.
+
+    src/workflows/
+      May call both ingestion and retrieval when a user-facing workflow needs both steps.
+    ```
+
+### Suggested Next Step
+
+    Create `docs/structure.md`, not root-level `structure.md`, because this is project documentation.
+
+    Keep it short. Suggested content:
+
+    ```text
+    # System Structure
+
+    ## Source Of Truth
+    - `proposal.md` defines current product scope, architecture direction, and MVP milestones.
+    - `docs/structure.md` summarizes current module responsibilities.
+    - `plan1.txt` and `plan2.txt` are historical milestone notes.
+
+    ## Current Backend Modules
+    - `src/ingestion/`: SEC API access, ticker/CIK lookup, submissions, companyfacts, filing downloads.
+    - `src/processing/`: XBRL/companyfacts normalization, units, periods, quality flags.
+    - `src/storage/`: SQLite connection and repositories.
+    - `src/indicators/`: derived financial indicator formulas and source fact references.
+    - `src/analytics/`: deterministic financial data analysis and chart-ready outputs.
+    - `src/retrieval/`: filing loading, chunking, indexing, and retrieval.
+    - `src/analyze/`: Gemini/RAG orchestration and prompt templates.
+    - `src/workflows/`: thin orchestration across modules.
+    - `src/api/`: FastAPI routes and request/response schemas.
+
+    ## Update Rule
+    When architecture changes, update `proposal.md` if scope or milestones change, and update `docs/structure.md` if module responsibilities change.
+    ```
+
+    I would also add one sentence near the top of `plan1.txt` and `plan2.txt` later:
+
+    ```text
+    Historical milestone note. For current architecture, see `proposal.md` and `docs/structure.md`.
+    ```
+
+    That prevents old plans from competing with the current design.
+
+### Comments And Further Discussion
+	question: so which file should have the most updated structure of the system?
+	answer: `docs/structure.md` should have the most updated module structure and responsibilities. `proposal.md` should stay as the current product goal, architecture direction, and milestone roadmap. If folders or module responsibilities change, update `docs/structure.md`. If scope, milestones, or architecture direction changes, update `proposal.md`. Do not keep updating old plan files except to mark or correct historical milestone notes.
+### Decision And Implementation
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+## Question 6 - TBD
+
+Question
+
+	we are going to keep latest 5-year of 10k and 12 quarters of 10q in the systems. which means our systems is going to do some deque kind of operation first in first out. and I want to ingest xbrl facts into my rag system I want to add all the xbrl fact available of the company in the system. but then length of the historical data of the company in the system would depend on the date of the ingestion of the company since the eariliest traceable date will roll forward. how should I handle it?
+
+### Core Issue
+
+    The real issue is the difference between retention, retrieval scope, and source-of-truth storage.
+
+    You want the system to feel current and manageable by keeping the latest 5 years of 10-K data and 12 quarters of 10-Q data available for normal use.
+
+    But you also want to ingest all available XBRL facts for a company so the RAG and analysis system has a broad historical record.
+
+    Those two goals conflict only if "keep latest 5 years / 12 quarters" means physically deleting older raw facts.
+
+    If older raw XBRL facts are deleted, then the earliest traceable date depends on when the company was first ingested. That makes analysis inconsistent across companies and weakens auditability.
+
+### Recommendation
+
+    Do not implement this as a physical FIFO deletion of raw XBRL facts.
+
+    Use a two-layer policy instead:
+
+    ```text
+    Raw XBRL fact archive:
+      Keep all normalized XBRL facts available from SEC companyfacts.
+      This is the source-of-truth history.
+
+    Active analysis window:
+      Default to latest 5 fiscal years of 10-K data and latest 12 quarters of 10-Q data.
+      This is the normal inspection, metrics, analytics, and RAG scope.
+    ```
+
+    In other words:
+
+    ```text
+    Store broadly.
+    Retrieve narrowly by default.
+    Preserve traceability.
+    ```
+
+    The "deque" behavior should be a query/filtering policy, not a destructive storage policy.
+
+### Why
+
+    I inspected the current and planned storage direction:
+
+    - `src/storage/database.py` currently creates `raw_xbrl_facts`.
+    - `src/storage/facts_repository.py` upserts raw facts and retrieves them by CIK/concept.
+    - `plan2_5.txt` adds planned `companies`, `filings`, and `financial_metrics` tables.
+
+    That structure is already pointing in the right direction.
+
+    `raw_xbrl_facts` should remain the complete auditable layer. It is compact compared with filing HTML and is useful for long-term trend checks, restatement review, and future reprocessing.
+
+    The latest 5 years / 12 quarters rule should apply to the default business-facing layer:
+
+    - `financial_metrics`
+    - indicator calculation
+    - deterministic analytics
+    - RAG evidence selection
+    - API responses unless the user asks for older history
+
+    This avoids making the system's historical range depend on the original ingestion date.
+
+    For example, if AAPL is first ingested in 2026, SEC companyfacts may still include many older years. The system should keep those raw facts. But the default "company snapshot" can still focus on FY2021-FY2025 and the latest 12 quarters.
+
+    This gives you both:
+
+    - current, manageable answers for users
+    - deeper history for audit, rebuilds, and future analysis
+
+### Tradeoff
+
+    Better:
+
+    - Default answers stay focused on recent financial performance.
+    - Raw XBRL evidence remains auditable.
+    - Different companies have more consistent historical coverage.
+    - You can rebuild base metrics or indicators later without re-fetching everything.
+    - You avoid losing data because of a rolling-window mistake.
+
+    Worse:
+
+    - The local SQLite database stores more raw facts.
+    - Retrieval code needs an explicit active-window filter.
+    - You need to distinguish "stored history" from "default analysis window."
+    - If filing HTML storage becomes large, you may need a separate file-retention policy.
+
+### Concrete Project Example
+
+    Use this model:
+
+    ```text
+    raw_xbrl_facts
+      all normalized XBRL facts available from SEC companyfacts
+      not physically FIFO-deleted by the 5-year / 12-quarter rule
+
+    filings
+      filing metadata for ingested filings
+      can mark whether a filing is inside the active analysis window
+
+    financial_metrics
+      mapped base metrics from raw_xbrl_facts
+      default queries return latest 5 annual periods and latest 12 quarterly periods
+
+    retrieval / RAG
+      does not embed every XBRL fact as text by default
+      retrieves structured facts from SQLite and converts only relevant facts into answer evidence
+    ```
+
+    For a revenue question:
+
+    ```text
+    User asks: Why did revenue change?
+
+    System default:
+      retrieve recent revenue metrics from financial_metrics
+      use latest 5 annual periods or latest 12 quarters
+      trace each metric to raw_xbrl_facts and filings
+      retrieve filing text only for relevant filings
+      let Gemini explain using labeled evidence
+
+    System audit mode:
+      query older raw_xbrl_facts if needed
+      show original XBRL concept, unit, period, accession number, and quality flags
+    ```
+
+    This is better than putting all XBRL facts into a vector index. XBRL facts are structured data, so SQLite is the better retrieval system for them. Vector retrieval is better for filing text such as MD&A, Risk Factors, Business, and notes.
+
+### Suggested Next Step
+
+    Update Plan 2.5 with one explicit rule:
+
+    ```text
+    Retention rule:
+    Keep all normalized raw XBRL facts available from SEC companyfacts.
+    Apply the latest 5-year 10-K and latest 12-quarter 10-Q limit as the default active analysis window, not as physical deletion of raw facts.
+    ```
+
+    Then add planned fields or query behavior such as:
+
+    ```text
+    filings.is_active_window
+    financial_metrics.is_active_window
+    default_period_window = latest_5_annual_and_latest_12_quarterly
+    ```
+
+    If local filing HTML storage becomes a problem, use a separate policy:
+
+    ```text
+    Keep filing metadata and raw facts.
+    Keep downloaded filing HTML for active-window filings by default.
+    Re-download older filing HTML only when needed.
+    ```
+
+### Comments And Further Discussion
+	question1: for "If local filing HTML storage becomes a problem" what kind of problem are you talking about? are you talking about the 5annuel and 12 quarter report would take too much of storage? then how the separate policy will solve the problem? 
+	answer1: For one company, 5 annual reports and 12 quarterly reports probably will not be a serious storage problem. The problem appears when the system stores many companies, older filing HTML, parsed chunks, embeddings, and indexes. Raw XBRL facts are compact in SQLite, but filing HTML and retrieval indexes can grow faster. The separate policy solves this by keeping durable metadata and raw XBRL facts for all history, while keeping downloaded HTML and vector indexes mainly for the active window. If an older filing is needed later, the system can use the stored accession metadata to re-download or rebuild that filing evidence.
+
+	question2: I am not sure you get your separate policy is making sense to me. of course we are going to "    
+		Keep filing metadata and raw facts.
+    		Keep downloaded filing HTML for active-window filings by default.
+    		Re-download older filing HTML only when needed."
+		However, does it real solve the storage problem? do you get that we are going to keep the latest 5 yearly and 12 quarterly report in the system for each company, and the older html filing record, outside of the active window will be actively deleted.
+	answer2: Yes, actively deleting older HTML outside the active window helps with filing-file storage. But it only fully solves the storage problem if every artifact derived from that HTML follows the same active-window policy. That means parsed filing chunks, embeddings, and vector index records for deleted filings also need to be deleted or marked inactive. The durable layer should be filing metadata plus raw XBRL facts, because those are compact and allow rebuilds. The bulky layer should be active-window HTML, chunks, embeddings, and indexes. So the policy is not just "delete old HTML"; it is "delete or deactivate all retrieval artifacts tied to filings outside the active window."
+	question3:
+		the separate policy you give me initially is different with the answer in answer2. look at the whole conversation in this topic figure out what are you trying to say and make some amendment in the initial suggestion you gave. do amendment like this -> amendment: [change] 
+### Decision And Implementation
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+## Question7  - TBD
+
+Question
+	the separate policy you give me initially in question 6 is different with how you answer me in answer2 of comments and discussion. "delete or deactivate all retrieval artifacts tied to filings outside the active window." you didn' t say this in the initial answer. so organize you answer one more time, tell how should we handle the storage problem
+
+
+### Core Issue
+
+    The real issue is that "storage problem" covers more than downloaded filing HTML.
+
+    The initial Question 6 answer was directionally correct but incomplete. It separated durable data from active-window data, but it did not explicitly say that retrieval artifacts created from old HTML also need to follow the active-window rule.
+
+    If the system deletes old filing HTML but keeps old parsed chunks, embeddings, and vector index entries, then storage still grows and retrieval may return evidence from filings that are no longer supposed to be active.
+
+    So the storage policy must cover all filing-derived artifacts, not only the original HTML files.
+
+### Recommendation
+
+    Use a three-layer storage policy:
+
+    ```text
+    Durable structured layer:
+      Keep long term.
+      Includes company metadata, filing metadata, raw XBRL facts, and source identifiers.
+
+    Active filing evidence layer:
+      Keep only for the active window by default.
+      Includes downloaded filing HTML and extracted filing text.
+
+    Active retrieval index layer:
+      Keep only for the active window by default.
+      Includes parsed chunks, embeddings, vector index entries, and chunk metadata used for semantic retrieval.
+    ```
+
+    Amendment to the initial Question 6 recommendation:
+
+    ```text
+    Keep filing metadata and raw XBRL facts long term.
+    Keep downloaded filing HTML, parsed chunks, embeddings, and vector index entries only for active-window filings by default.
+    Delete or deactivate all retrieval artifacts tied to filings outside the active window.
+    Rebuild older filing evidence only when the user explicitly asks for older history.
+    ```
+
+    So the rule is not just:
+
+    ```text
+    delete old HTML
+    ```
+
+    The rule is:
+
+    ```text
+    delete or deactivate the whole filing-evidence bundle for filings outside the active window
+    ```
+
+### Why
+
+    Filing HTML is only the first storage object.
+
+    A retrieval pipeline usually creates several derived artifacts:
+
+    - downloaded HTML
+    - cleaned filing text
+    - section metadata
+    - parsed chunks
+    - embeddings
+    - vector index records
+    - chunk-to-filing references
+
+    If older HTML is deleted but old embeddings remain, the system has two problems:
+
+    - storage is still consumed by inactive filings
+    - retrieval may surface stale evidence from outside the intended active window
+
+    That creates a mismatch between what the product says it keeps and what the RAG system can actually retrieve.
+
+    The better design is to keep compact, auditable data permanently and keep bulky retrieval artifacts only for the active evidence window.
+
+    `raw_xbrl_facts` should stay because XBRL facts are structured, compact, and useful for rebuilding metrics. Filing HTML, chunks, embeddings, and indexes are larger and easier to rebuild from SEC accession metadata.
+
+### Tradeoff
+
+    Better:
+
+    - Storage stays bounded as more companies are added.
+    - RAG retrieval stays aligned with the active 5-year / 12-quarter policy.
+    - Raw financial facts remain auditable.
+    - Older filing evidence can still be rebuilt when needed.
+    - The system avoids keeping orphan embeddings for deleted filing files.
+
+    Worse:
+
+    - Retrieval cleanup becomes more complex than deleting files.
+    - The system needs metadata linking chunks and embeddings back to filing accession numbers.
+    - Older filing Q&A may require a rebuild step before answering.
+    - Deleting vector records can be harder depending on the vector store.
+
+### Concrete Project Example
+
+    Use this lifecycle:
+
+    ```text
+    Filing inside active window:
+      keep filing metadata
+      keep raw XBRL facts
+      keep downloaded HTML
+      keep parsed chunks
+      keep embeddings
+      keep vector index entries
+
+    Filing outside active window:
+      keep filing metadata
+      keep raw XBRL facts
+      delete downloaded HTML by default
+      delete parsed chunks by default
+      delete embeddings by default
+      delete or deactivate vector index entries by default
+    ```
+
+    The important foreign key is the filing accession number:
+
+    ```text
+    filings.accession_number
+      -> downloaded file path
+      -> filing chunks
+      -> embeddings
+      -> vector index entries
+    ```
+
+    When a filing leaves the active window, cleanup should be driven by accession number:
+
+    ```text
+    cleanup_filing_evidence(accession_number)
+      -> delete HTML file
+      -> delete chunk rows
+      -> delete embedding rows
+      -> delete/deactivate vector index records
+      -> keep filing metadata
+      -> keep raw_xbrl_facts
+    ```
+
+    If the user later asks for older history:
+
+    ```text
+    older filing requested
+      -> use filing metadata/accession number
+      -> re-download filing HTML if needed
+      -> re-parse chunks
+      -> rebuild embeddings/index entries
+      -> answer with explicit note that older evidence was rebuilt on demand
+    ```
+
+### Suggested Next Step
+
+    Update Plan 2.5 or the future retrieval milestone with this policy:
+
+    ```text
+    Active-window retention applies to filing evidence artifacts:
+    downloaded HTML, parsed text, chunks, embeddings, and vector index entries.
+
+    Long-term retention applies to durable structured artifacts:
+    company metadata, filing metadata, raw XBRL facts, and source identifiers.
+    ```
+
+    When the retrieval layer is implemented, every chunk and embedding should store:
+
+    ```text
+    cik
+    accession_number
+    form_type
+    filing_date
+    fiscal_year
+    fiscal_period
+    active_window flag
+    source file path or source URL
+    ```
+
+    This makes cleanup deterministic and prevents stale retrieval results.
+
+### Comments And Further Discussion
+
+### Decision And Implementation
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+## Question8  - TBD
+
+Question
+	I can easily delete the html files under filing for the years an and quarters outside of the active window. but how should I handle old parsed chunks, embeddings, and indexes that
+
+### Core Issue
+
+    Cannot answer yet because there is no design question to evaluate.
+
+### Recommendation
+
+    Add the actual question before expecting an architecture answer.
+
+### Why
+
+    If I invent the question, I may answer the wrong design problem and create misleading guidance.
+
+### Tradeoff
+
+    Better:
+
+    - The discussion stays precise.
+    - The answer can address the actual decision you need to make.
+
+    Worse:
+
+    - This section remains incomplete until the question is added.
+
+### Concrete Project Example
+
+    If this question is about future retrieval, indicators, or API boundaries, write that explicitly.
+
+### Suggested Next Step
+
+    Replace "No question has been written yet" with the real question.
+
+### Comments And Further Discussion

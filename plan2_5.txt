@@ -1,0 +1,458 @@
+Milestone 2.5 Design: Company Registry, Filing Inventory, and Base Metric Mapping
+
+Task Restatement
+Build the local inspection layer that sits on top of raw SEC/XBRL ingestion. This milestone should add a company registry, filing inventory, update-check state, and a business-friendly base financial metrics layer mapped from `raw_xbrl_facts`. It should preserve source traceability back to raw XBRL facts and filings. It should not calculate derived indicators, run financial analytics, build retrieval indexes, call Gemini, generate RAG answers, or add frontend code.
+
+Why This Milestone Exists
+Plan 2 stores normalized raw XBRL facts. That is the correct source-of-truth layer, but raw XBRL concepts are not the easiest interface for the rest of the product.
+
+Plan 2.5 creates the inspection and lookup layer:
+
+- Which companies have been initialized locally?
+- Which filings have been ingested?
+- When should each company be checked for new 10-K or 10-Q data?
+- Which business-friendly base metrics are available by statement type?
+- Which raw XBRL facts and filings support each metric?
+
+This makes Plan 3 indicator formulas cleaner because formulas can use stable base metric names such as `revenue`, `net_income`, `total_assets`, and `operating_cash_flow` without losing the ability to trace each value back to the original XBRL fact.
+
+Success Criteria
+- A requested ticker can be checked against a local `companies` table.
+- A missing company can be initialized from SEC metadata and stored locally.
+- Ingested 10-K and 10-Q filings can be stored in a `filings` table.
+- The system can track latest ingested annual and quarterly filing dates for a company.
+- The system can store next-check dates for annual and quarterly updates.
+- Raw XBRL facts remain stored in `raw_xbrl_facts` and remain the source of truth.
+- Selected raw facts can be mapped into business-friendly base metrics grouped by financial statement type.
+- Base metrics can be retrieved by company, statement type, metric name, fiscal year, fiscal period, and filing.
+- Every base metric row can be traced back to a filing and the source raw XBRL fact or source fact key.
+- Derived indicators such as revenue growth, margins, ratios, free cash flow, and total debt are not calculated in this milestone.
+
+Core Schema At A Glance
+
+The shortest way to understand Plan 2.5:
+
+```text
+Company
+  -> Filings
+    -> Raw XBRL facts
+      -> Clean base metrics
+```
+
+More concrete version:
+
+```text
+companies
+  What company is this?
+  When should we check SEC again?
+        |
+        | company_id
+        v
+filings
+  Which 10-K and 10-Q reports are stored locally?
+  Where is each downloaded filing file?
+        |
+        | accession_number / filing_id
+        v
+raw_xbrl_facts
+  What exactly did SEC/XBRL report?
+  This remains the source of truth from Plan 2.
+        |
+        | raw_fact_id
+        v
+financial_metrics
+  What clean base metrics can the app use?
+  Example: income_statement.revenue, balance_sheet.total_assets
+```
+
+Core relationships:
+
+```text
+one company
+  -> many filings
+    -> many raw XBRL facts
+      -> mapped into clean financial metrics
+```
+
+Example:
+
+```text
+AAPL
+  -> 2025 10-K
+    -> us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax
+      -> income_statement.revenue
+```
+
+Inspection mechanism:
+
+```text
+User requests a company
+  -> look up ticker or CIK in companies
+  -> list stored filings
+  -> list available financial_metrics
+  -> use raw_xbrl_facts only when source detail is needed
+```
+
+Purpose:
+- Quickly answer what data exists locally.
+- Show which filings were ingested.
+- Show which base metrics are available.
+- Keep every metric traceable to raw SEC/XBRL evidence.
+
+Update mechanism:
+
+```text
+User requests a company
+  -> check next_check_date_10k and next_check_date_10q
+  -> if not due: use local data
+  -> if due: check SEC submissions
+  -> compare SEC accessions with local filings
+  -> ingest only missing filings
+  -> normalize new raw_xbrl_facts
+  -> map new facts into financial_metrics
+  -> update latest filing dates and next-check dates
+```
+
+Purpose:
+- Avoid unnecessary SEC calls.
+- Avoid re-downloading filings already stored locally.
+- Keep local data fresh when new 10-K or 10-Q filings appear.
+- Preserve old filings and facts for audit instead of deleting them.
+
+Retrieval mechanism:
+
+```text
+Need user-friendly financial data
+  -> read financial_metrics
+  -> join to filings for form, filing date, accession number
+  -> join to raw_xbrl_facts for original XBRL concept and quality flags
+```
+
+Purpose:
+- Use `financial_metrics` for normal app queries.
+- Use `raw_xbrl_facts` for audit, debugging, and evidence.
+- Use `filings` to show where the metric came from.
+- Use `companies` to manage identity and refresh state.
+
+Planned Storage Tables
+
+companies
+- Own local company identity and update state.
+- Use CIK as the canonical external company identifier.
+- Store ticker, company name, exchange, SIC, SIC description, and local timestamps.
+- Store latest ingested 10-K and 10-Q filing dates.
+- Store next-check dates for 10-K and 10-Q update checks.
+
+filings
+- Own filing-level metadata for ingested SEC filings.
+- Store company_id, accession_number, form_type, filing_date, report_date, fiscal_year, fiscal_period, source, document URL, local file path, and ingested_at.
+- Treat accession_number as the stable SEC filing identifier.
+- Store amendments as separate filings unless a future policy explicitly supersedes older filings.
+
+financial_metrics
+- Own mapped base metrics, not derived indicators.
+- Store company_id, filing_id or accession_number, source raw fact reference, statement_type, metric_name, value, unit, period_type, fiscal_year, fiscal_period, start_date, end_date, filing_date, and created_at.
+- Store numeric values in a decimal-safe text representation, not SQLite REAL, to avoid floating-point drift.
+- Use a uniqueness rule that includes company, metric name, period, filing, and source fact identity.
+
+Recommended Minimum Schema Shape
+
+```sql
+CREATE TABLE companies (
+    company_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cik TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    ticker TEXT,
+    exchange TEXT,
+    sic TEXT,
+    sic_description TEXT,
+    latest_10k_filing_date TEXT,
+    latest_10q_filing_date TEXT,
+    next_check_date_10k TEXT,
+    next_check_date_10q TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+```
+
+```sql
+CREATE TABLE filings (
+    filing_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL,
+    accession_number TEXT UNIQUE NOT NULL,
+    form_type TEXT NOT NULL,
+    filing_date TEXT NOT NULL,
+    report_date TEXT,
+    fiscal_year INTEGER,
+    fiscal_period TEXT,
+    source TEXT NOT NULL DEFAULT 'SEC',
+    document_url TEXT,
+    local_path TEXT,
+    ingested_at TEXT NOT NULL,
+    FOREIGN KEY (company_id) REFERENCES companies(company_id)
+);
+```
+
+```sql
+CREATE TABLE financial_metrics (
+    metric_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL,
+    filing_id INTEGER,
+    accession_number TEXT NOT NULL,
+    raw_fact_id INTEGER,
+    statement_type TEXT NOT NULL,
+    metric_name TEXT NOT NULL,
+    value_numeric TEXT,
+    value_raw TEXT,
+    unit TEXT NOT NULL,
+    period_type TEXT NOT NULL,
+    fiscal_year INTEGER,
+    fiscal_period TEXT,
+    start_date TEXT,
+    end_date TEXT,
+    filing_date TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(company_id, metric_name, period_type, fiscal_year, fiscal_period, accession_number, raw_fact_id),
+    FOREIGN KEY (company_id) REFERENCES companies(company_id),
+    FOREIGN KEY (filing_id) REFERENCES filings(filing_id),
+    FOREIGN KEY (raw_fact_id) REFERENCES raw_xbrl_facts(id)
+);
+```
+
+Metric Mapping Scope
+
+Income statement base metrics:
+- revenue
+- cost_of_revenue
+- gross_profit
+- operating_income
+- net_income
+- eps_basic
+- eps_diluted
+- research_and_development_expense
+- selling_general_and_administrative_expense
+- interest_expense
+- income_tax_expense
+
+Balance sheet base metrics:
+- cash_and_equivalents
+- accounts_receivable
+- inventory
+- total_assets
+- current_assets
+- short_term_debt
+- long_term_debt
+- accounts_payable
+- total_liabilities
+- current_liabilities
+- shareholders_equity
+
+Cash flow statement base metrics:
+- operating_cash_flow
+- capital_expenditure
+- investing_cash_flow
+- financing_cash_flow
+- share_repurchases
+- dividends_paid
+
+Do not include in Plan 2.5:
+- revenue_growth
+- gross_margin
+- operating_margin
+- net_margin
+- current_ratio
+- debt_ratio
+- total_debt
+- free_cash_flow
+- cash_conversion
+
+Those belong to Plan 3 because they require formulas over one or more base metrics.
+
+Update-Check Design
+
+Company request flow:
+
+```text
+company requested
+  -> check companies table
+  -> initialize if missing
+  -> ingest SEC/XBRL data
+  -> store raw facts, filings, and base metrics locally
+  -> retrieve local data on later requests
+  -> check SEC only when next-check date is reached
+```
+
+Annual update rule:
+- Use latest ingested 10-K filing date as the starting point.
+- Set next_check_date_10k to the previous business day before approximately one year after the latest 10-K filing date.
+- When the check date is reached, query SEC submissions for newer 10-K filings.
+
+Quarterly update rule:
+- Use latest ingested 10-Q filing date and fiscal period as the starting point.
+- If the latest 10-Q is Q1 or Q2, set next_check_date_10q to approximately three months after the latest 10-Q filing date, adjusted to the previous business day.
+- If the latest 10-Q is Q3, set next_check_date_10q to approximately six months after the latest 10-Q filing date, adjusted to the previous business day, because the next major periodic filing is usually the annual 10-K.
+
+Important rule:
+- Next-check dates are heuristics, not guarantees.
+- When a check is due, SEC submissions remain the authority for whether a newer filing exists.
+
+Refresh Policy
+
+Default behavior:
+- Use local data when a company exists and today is before the relevant next-check date.
+- Check SEC submissions when today is on or after the relevant next-check date.
+- Compare SEC submission accession numbers against the local `filings` table.
+- Ingest only filings whose accession numbers are not already stored locally.
+- Process missing filings in chronological order so company state moves forward predictably.
+
+If no new filing is found:
+- Keep existing raw facts, filings, and base metrics unchanged.
+- Set the relevant next-check date to the next business day.
+- Return local data with a status such as `checked_no_update`.
+- Do not repeatedly query SEC on every request during the same day.
+
+If one or more new filings are found:
+- Download and store each missing filing.
+- Normalize and upsert raw XBRL facts.
+- Upsert the filing records.
+- Map new raw facts into base financial metrics.
+- Update latest ingested 10-K or 10-Q filing dates after the newest filing is processed.
+- Recalculate the relevant next-check date from the newest filing date and fiscal period.
+- Return local data with a status such as `updated`.
+
+If a local filing already exists:
+- Do not download or reprocess it by default.
+- Retrieve existing local facts and base metrics.
+- Reprocessing existing filings should require an explicit future repair or rebuild command.
+
+Amended filings:
+- Store `10-K/A` and `10-Q/A` as separate filing records when they are ingested.
+- Do not delete or overwrite the original filing record.
+- Mark amended filings by form type and accession number.
+- A future supersession policy may choose which filing should be preferred for metrics, but Plan 2.5 should preserve both records.
+
+Restatements and duplicate facts:
+- Preserve all source raw facts in `raw_xbrl_facts`.
+- Do not silently replace prior facts when a restated or amended filing appears.
+- Base metrics should prefer facts from the newest relevant accession only when the mapping policy can do so explicitly and traceably.
+- If the preferred fact is ambiguous, skip the base metric or store a quality flag rather than guessing.
+
+Metric refresh behavior:
+- Base metric rows should be upserted by company, metric name, period, accession number, and raw fact reference.
+- New filings should add new metric rows or update rows tied to the same source fact identity.
+- Existing metrics from other accessions should remain available for audit.
+- Derived indicators are not refreshed in Plan 2.5 because they belong to Plan 3.
+
+Failure behavior:
+- If SEC is unavailable or returns a retryable error during a due check, keep local data available.
+- Return local data with a warning status such as `refresh_failed_using_local_data`.
+- Do not advance next-check dates after a failed SEC check unless a future retry policy explicitly adds backoff state.
+- Do not delete local facts, filings, or metrics because a refresh failed.
+
+Module Responsibility Design
+
+src/storage:
+- Own table creation and repository methods for companies, filings, update state, and financial_metrics.
+- Preserve raw_xbrl_facts unchanged.
+- Do not fetch SEC data, normalize XBRL payloads, calculate derived indicators, run analytics, retrieve filing text, or call LLMs.
+
+src/processing:
+- Own mapping raw XBRL concepts into base metric records if the mapping is deterministic and data-shaping focused.
+- Do not calculate formulas that combine multiple metrics.
+
+src/ingestion/company.py or future src/workflows/company_ingestion.py:
+- Orchestrate the company request flow.
+- Check whether the company exists locally.
+- Decide whether a SEC update check is due.
+- Call ingestion, processing, and storage modules in order.
+- Do not duplicate SEC HTTP logic, XBRL normalization logic, SQL persistence logic, or indicator formulas.
+
+Public Interface Design
+
+Planned repository APIs:
+- CompanyRepository.initialize() -> None
+- CompanyRepository.get_by_cik(cik) -> CompanyRecord | None
+- CompanyRepository.get_by_ticker(ticker) -> CompanyRecord | None
+- CompanyRepository.upsert_company(company) -> CompanyRecord
+- CompanyRepository.update_check_state(company_id, ...) -> None
+- FilingRepository.initialize() -> None
+- FilingRepository.upsert_filings(company_id, filings) -> int
+- FilingRepository.list_filings(company_id, forms=None) -> list[FilingRecord]
+- FinancialMetricRepository.initialize() -> None
+- FinancialMetricRepository.upsert_metrics(metrics) -> int
+- FinancialMetricRepository.list_metrics(company_id, statement_type=None, metric_names=None) -> list[FinancialMetric]
+
+Planned mapping API:
+- map_raw_facts_to_financial_metrics(facts, filings) -> list[FinancialMetric]
+
+Data Integrity Rules
+- Do not replace `raw_xbrl_facts`.
+- Do not drop source XBRL concept, accession number, unit, period, or quality flag information.
+- Store base metrics only when they can be traced to a source raw fact.
+- Preserve raw and numeric values separately.
+- Store numeric values as text parsed from Decimal-compatible values.
+- Keep amended filings traceable.
+- Do not silently choose between duplicate or ambiguous source facts without a quality flag or explicit selection policy.
+
+Testing Design
+
+SQLite repository tests:
+- Create companies, filings, and financial_metrics tables.
+- Upsert a company by CIK without duplicate company rows.
+- Upsert filings by accession number without duplicate filing rows.
+- Store and retrieve latest 10-K and 10-Q filing state.
+- Store and retrieve next-check dates.
+- Store and retrieve base financial metrics.
+- Confirm financial_metrics rows link to filings and raw_xbrl_facts.
+- Confirm Decimal-compatible text values round-trip without floating-point drift.
+
+Metric mapping tests:
+- Map us-gaap revenue concepts to `revenue`.
+- Map balance sheet concepts such as Assets and StockholdersEquity to base metrics.
+- Map cash flow concepts such as NetCashProvidedByUsedInOperatingActivities to base metrics.
+- Do not produce free_cash_flow, total_debt, margins, or ratios.
+- Skip or flag metrics when required source facts are ambiguous.
+
+Workflow tests:
+- If a company does not exist locally, initialize company and filing records.
+- If a company exists and today is before next-check date, retrieve local data without SEC calls.
+- If a company exists and today is on or after next-check date, check SEC submissions for newer filings.
+- If multiple new filings are found, ingest them in chronological order.
+
+Manual Acceptance Checks
+- Ingest AAPL through the current local workflow.
+- Confirm company metadata is stored once.
+- Confirm latest 10-K and 10-Q filings are recorded.
+- Confirm base metrics can be listed by statement type.
+- Confirm each base metric can be traced back to an accession number and raw XBRL fact.
+- Confirm no derived indicators are calculated by this milestone.
+
+Out of Scope
+- Indicator formulas.
+- Derived metrics such as free cash flow, total debt, margins, ratios, growth, and cash conversion.
+- Financial trend analysis.
+- Benchmark or peer comparison.
+- Filing text chunking or retrieval indexes.
+- LlamaIndex integration.
+- Gemini integration.
+- RAG answers.
+- Frontend code.
+
+Implementation Order
+1. Keep `raw_xbrl_facts` as the source-of-truth table from Plan 2.
+2. Add company and filing record types.
+3. Add SQLite schema support for companies and filings.
+4. Add repository methods for company and filing lookup/upsert.
+5. Add financial metric record type and SQLite table.
+6. Add deterministic raw fact to base metric mapping.
+7. Add update-check date helpers.
+8. Extend the company ingestion orchestration to populate companies, filings, and financial_metrics.
+9. Add focused repository, mapping, and workflow tests.
+10. Run `uv run pytest`.
+
+Assumptions
+- Plan 2 is complete enough to provide normalized raw facts.
+- Plan 2.5 is a bridge between raw facts and derived indicators.
+- `financial_metrics` means base metrics only.
+- `derived_indicators` begins in Plan 3.
+- The first version can use heuristic next-check dates and SEC submissions as the final authority for new filings.

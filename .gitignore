@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+
+# Local configuration and secrets
+.env
+config.env
+
+# Local application storage
+*.db
+storage/
+data_store/
+
+# Generated exports
+data/exports/*
+!data/exports/.gitkeep
