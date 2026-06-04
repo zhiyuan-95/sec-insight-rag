@@ -124,6 +124,7 @@ def test_delete_ingested_company_removes_registry_data_and_filing_artifacts(tmp_
     assert result.cik == "0000320193"
     assert result.company_id == aapl.company_id
     assert result.company_found is True
+    assert result.message == "Deleted ingested company for identifier 'AAPL' (CIK 0000320193)."
     assert result.metric_rows_deleted == 1
     assert result.filing_rows_deleted == 1
     assert result.raw_fact_rows_deleted == 1
@@ -143,7 +144,7 @@ def test_delete_ingested_company_removes_registry_data_and_filing_artifacts(tmp_
         assert msft_file.exists()
 
 
-def test_delete_ingested_company_removes_cik_only_raw_facts_and_filing_directory(tmp_path: Path) -> None:
+def test_delete_ingested_company_reports_missing_cik_and_leaves_orphan_data(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     filing_file = settings.stock_filings_base_dir / "0000320193" / "0000320193-25-000079" / "aapl.htm"
     filing_file.parent.mkdir(parents=True)
@@ -158,13 +159,16 @@ def test_delete_ingested_company_removes_cik_only_raw_facts_and_filing_directory
 
     result = delete_ingested_company("320193", settings)
 
+    assert result.identifier == "320193"
     assert result.cik == "0000320193"
     assert result.company_found is False
-    assert result.message == "No company registry row found for CIK 0000320193; deleted orphan local data."
-    assert result.raw_fact_rows_deleted == 1
+    assert result.message == "No ingested company found for identifier '320193' (CIK 0000320193)."
+    assert result.raw_fact_rows_deleted == 0
     assert result.company_rows_deleted == 0
-    assert not filing_file.exists()
-    assert not (settings.stock_filings_base_dir / "0000320193").exists()
+    assert result.filing_paths_deleted == ()
+    assert filing_file.exists()
+    with connect_sqlite(settings.stock_sql_db_path) as connection:
+        assert RawFactRepository(connection).list_facts("0000320193")
 
 
 def test_delete_ingested_company_skips_locked_filing_directory(
@@ -177,10 +181,26 @@ def test_delete_ingested_company_skips_locked_filing_directory(
     filing_file.write_text("<html>aapl</html>", encoding="utf-8")
 
     with connect_sqlite(settings.stock_sql_db_path) as connection:
+        company_repository = CompanyRepository(connection)
+        filing_repository = FilingRepository(connection)
         raw_fact_repository = RawFactRepository(connection)
-        raw_fact_repository.initialize()
+        company_repository.initialize()
+        company = company_repository.upsert_company(CompanyRecord(cik="0000320193", name="Apple Inc.", ticker="AAPL"))
+        assert company.company_id is not None
         raw_fact_repository.upsert_facts(
             [_fact(cik="0000320193", concept="Revenues", accession_number="0000320193-25-000079")]
+        )
+        filing_repository.upsert_filings(
+            company.company_id,
+            [
+                FilingRecord(
+                    company_id=company.company_id,
+                    accession_number="0000320193-25-000079",
+                    form_type="10-K",
+                    filing_date=date(2025, 10, 31),
+                    local_path=filing_file,
+                )
+            ],
         )
 
     def locked_rmtree(path: Path, **kwargs: object) -> None:
@@ -191,13 +211,44 @@ def test_delete_ingested_company_skips_locked_filing_directory(
     result = delete_ingested_company("320193", settings)
 
     assert result.cik == "0000320193"
-    assert result.message == "No company registry row found for CIK 0000320193; deleted orphan local data."
+    assert result.company_found is True
+    assert result.message == (
+        "Deleted ingested company for identifier '320193' (CIK 0000320193), "
+        "but some filing artifacts could not be removed."
+    )
     assert result.raw_fact_rows_deleted == 1
-    assert result.filing_paths_deleted == ()
+    assert result.company_rows_deleted == 1
+    assert filing_file in result.filing_paths_deleted
     assert result.filing_paths_skipped == (
         (settings.stock_filings_base_dir / "0000320193").resolve(),
     )
+    assert not filing_file.exists()
+
+
+def test_delete_ingested_company_reports_missing_ticker_and_leaves_orphan_data(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    filing_file = settings.stock_filings_base_dir / "0001318605" / "0001318605-25-000001" / "tsla.htm"
+    filing_file.parent.mkdir(parents=True)
+    filing_file.write_text("<html>tsla</html>", encoding="utf-8")
+
+    with connect_sqlite(settings.stock_sql_db_path) as connection:
+        raw_fact_repository = RawFactRepository(connection)
+        raw_fact_repository.initialize()
+        raw_fact_repository.upsert_facts(
+            [_fact(cik="0001318605", concept="Revenues", accession_number="0001318605-25-000001")]
+        )
+
+    result = delete_ingested_company("tsla", settings)
+
+    assert result.identifier == "TSLA"
+    assert result.cik is None
+    assert result.company_found is False
+    assert result.message == "No ingested company found for identifier 'TSLA'."
+    assert result.raw_fact_rows_deleted == 0
+    assert result.filing_paths_deleted == ()
     assert filing_file.exists()
+    with connect_sqlite(settings.stock_sql_db_path) as connection:
+        assert RawFactRepository(connection).list_facts("0001318605")
 
 
 def test_delete_ingested_company_reports_missing_cik(tmp_path: Path) -> None:

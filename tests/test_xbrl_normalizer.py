@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from src.processing import XbrlPayloadError, normalize_companyfacts
+from src.processing.concepts import COMMON_GAAP_CONCEPTS
 from src.processing.quality import (
     AMBIGUOUS_UNIT,
     DUPLICATE_FACT,
@@ -128,7 +129,17 @@ def test_normalize_companyfacts_filters_to_common_gaap_concepts_by_default() -> 
     facts = normalize_companyfacts(payload)
 
     assert {fact.taxonomy for fact in facts} == {"us-gaap"}
-    assert {fact.concept for fact in facts} == {"Revenues"}
+    assert {fact.concept for fact in facts} == {"EarningsPerShareBasic", "Revenues"}
+
+
+def test_common_gaap_concepts_contains_expanded_raw_fact_allowlist_entries() -> None:
+    assert {
+        "ResearchAndDevelopmentExpense",
+        "MarketableSecuritiesCurrent",
+        "NetCashProvidedByUsedInInvestingActivities",
+        "EarningsPerShareDiluted",
+        "OtherComprehensiveIncomeLossNetOfTax",
+    }.issubset(COMMON_GAAP_CONCEPTS)
 
 
 def test_normalize_companyfacts_can_include_and_flag_unsupported_forms() -> None:

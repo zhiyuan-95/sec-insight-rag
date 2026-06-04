@@ -43,10 +43,14 @@ def test_milestone2_fixture_mode_prints_showcase(tmp_path: Path, capsys) -> None
     assert "XBRL Normalization:" in output
     assert "XBRL Concepts Stored In Database:" in output
     assert "concept filter: common us-gaap concept list" in output
+    assert "concepts stored:" not in output
     assert "normalized fact count: 5" in output
     assert "stored row count: 4" in output
+    assert "distinct concepts ingested: 2" in output
     assert "taxonomy" in output
     assert "stored rows" in output
+    assert "Income statement:" in output
+    assert "Balance sheet:" in output
     assert "Assets" in output
     assert "Revenues" in output
     assert "database table: raw_xbrl_facts" in output
@@ -158,20 +162,65 @@ def test_milestone2_report_uses_selected_filing_scope_for_human_sections() -> No
     assert "FY2011" not in output
 
 
+def test_milestone2_concepts_are_grouped_by_statement_section() -> None:
+    experiment = _load_experiment_module()
+    result = experiment.ExperimentResult(
+        mode="fixture",
+        ticker="AAPL",
+        cik="0000320193",
+        company_name="Apple Inc.",
+        database_path=Path("fixture.db"),
+        filings_directory=Path("filings"),
+        filings=(),
+        downloaded_paths=(),
+        normalized_facts=(),
+        stored_records=(
+            experiment.StoredRawFact(raw_fact_id=1, fact=_fact(experiment, concept="Revenues")),
+            experiment.StoredRawFact(raw_fact_id=2, fact=_fact(experiment, concept="Assets")),
+            experiment.StoredRawFact(
+                raw_fact_id=3,
+                fact=_fact(experiment, concept="NetCashProvidedByUsedInOperatingActivities"),
+            ),
+            experiment.StoredRawFact(raw_fact_id=4, fact=_fact(experiment, concept="EarningsPerShareBasic")),
+            experiment.StoredRawFact(
+                raw_fact_id=5,
+                fact=_fact(experiment, concept="OtherComprehensiveIncomeLossNetOfTax"),
+            ),
+            experiment.StoredRawFact(raw_fact_id=6, fact=_fact(experiment, concept="CustomFact")),
+        ),
+        upsert_attempt_count=6,
+    )
+
+    output = experiment.format_report(result)
+
+    assert "Income statement:" in output
+    assert "Balance sheet:" in output
+    assert "Cash flow statement:" in output
+    assert "EPS and shares:" in output
+    assert "Other comprehensive income:" in output
+    assert "Unmapped financial facts:" in output
+    concept_section = output.split("XBRL Concepts Stored In Database:", maxsplit=1)[1]
+    concept_section = concept_section.split("Top 5 raw_xbrl_facts Rows:", maxsplit=1)[0]
+    assert concept_section.index("Income statement:") < concept_section.index("Revenues")
+    assert concept_section.index("Balance sheet:") < concept_section.index("Assets")
+    assert concept_section.index("Unmapped financial facts:") < concept_section.index("CustomFact")
+
+
 def _fact(
     experiment: ModuleType,
     *,
-    fiscal_year: int,
-    fiscal_period: str,
-    form: str,
-    accession_number: str,
+    fiscal_year: int = 2025,
+    fiscal_period: str = "FY",
+    form: str = "10-K",
+    accession_number: str = "0000320193-25-000079",
+    concept: str = "Assets",
 ):
     return experiment.NormalizedFact(
         cik="0001318605",
         entity_name="Tesla, Inc.",
         taxonomy="us-gaap",
-        concept="Assets",
-        label="Assets",
+        concept=concept,
+        label=concept,
         description=None,
         unit="USD",
         value_raw=100,

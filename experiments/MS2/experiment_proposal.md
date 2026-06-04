@@ -179,13 +179,17 @@ XBRL Normalization:
   form filter: 10-K, 10-Q
   normalized fact count: 5
   stored row count: 4
-  concepts stored: Assets, Revenues
+  distinct concepts ingested: 2
   quality flags observed: ambiguous_unit, duplicate_fact
 
 XBRL Concepts Stored In Database:
+  Income statement:
+  taxonomy  concept   stored rows  forms       units
+  us-gaap   Revenues  2            10-K, 10-Q  USD
+
+  Balance sheet:
   taxonomy  concept   stored rows  forms       units
   us-gaap   Assets    2            10-K        EUR, USD
-  us-gaap   Revenues  2            10-K, 10-Q  USD
 
 Top 5 raw_xbrl_facts Rows:
   id  cik         concept   unit  fiscal_year  fiscal_period  form  value
@@ -221,7 +225,7 @@ The runnable experiment should print these sections in this order:
 5. Selected filings
 6. Downloaded filing paths
 7. XBRL normalization summary
-8. XBRL concepts stored in database
+8. XBRL concepts stored in database, grouped by financial statement sector
 9. Top five `raw_xbrl_facts` rows
 10. Artifacts to inspect
 11. Expected outcome
@@ -272,8 +276,11 @@ such as:
 - quality flags
 
 The concept summary should print every XBRL concept stored for the company in
-`raw_xbrl_facts`, including taxonomy, concept name, stored row count, forms, and
-units. This should not be truncated into only a few example concepts.
+`raw_xbrl_facts`, grouped by financial statement sector, including taxonomy,
+concept name, stored row count, forms, and units. This should not be truncated
+into only a few example concepts. Supported sector headings include income
+statement, balance sheet, cash flow statement, EPS and shares, other
+comprehensive income, and unmapped financial facts.
 
 The main file artifact is:
 
@@ -312,6 +319,7 @@ Milestone 2 looks healthy when the printed report lets the project owner answer:
 - Which filing files can I open locally?
 - Which XBRL concepts were normalized?
 - Which XBRL concepts were stored in `raw_xbrl_facts` for this company?
+- Which financial statement sector does each stored concept belong to?
 - Which database table stores the normalized facts?
 - Do the first stored rows look like real SEC/XBRL facts?
 - Are duplicate or ambiguous facts visible through quality flags?

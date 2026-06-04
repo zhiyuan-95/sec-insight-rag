@@ -23,6 +23,7 @@ from src.ingestion.submissions import build_submissions_url, get_company_submiss
 from src.ingestion.tickers import COMPANY_TICKERS_URL, TickerMapping, load_ticker_mapping, resolve_ticker_to_cik
 from src.processing import NormalizedFact, normalize_companyfacts
 from src.storage import RawFactRepository, StoredRawFact, connect_sqlite
+from main import FINANCIAL_STATEMENT_BY_CONCEPT, FINANCIAL_STATEMENT_ORDER
 
 FIXTURE_DIR = PROJECT_ROOT / "data" / "fixtures"
 DEFAULT_FIXTURE_WORK_DIR = PROJECT_ROOT / "data" / "exports" / "experiments" / "MS2"
@@ -294,8 +295,7 @@ def _format_downloaded_paths(
 
 
 def _format_xbrl_summary(result: ExperimentResult) -> list[str]:
-    stored_facts = [record.fact for record in result.stored_records]
-    concepts = sorted({fact.concept for fact in stored_facts})
+    distinct_concepts = {record.fact.concept for record in result.stored_records}
     flags = sorted({flag for fact in result.normalized_facts for flag in fact.quality_flags})
     return [
         "  normalized object: NormalizedFact",
@@ -306,7 +306,7 @@ def _format_xbrl_summary(result: ExperimentResult) -> list[str]:
         f"  normalized fact count: {len(result.normalized_facts)}",
         f"  upsert attempted rows: {result.upsert_attempt_count}",
         f"  stored row count: {len(result.stored_records)}",
-        f"  concepts stored: {_format_list(concepts)}",
+        f"  distinct concepts ingested: {len(distinct_concepts)}",
         f"  quality flags observed: {_format_list(flags)}",
     ]
 
@@ -326,10 +326,11 @@ def _format_xbrl_concepts(records: tuple[StoredRawFact, ...]) -> list[str]:
             forms_by_concept[key].add(fact.form)
         units_by_concept[key].add(fact.unit)
 
-    rows = []
+    rows_by_statement: dict[str, list[list[str]]] = defaultdict(list)
     for taxonomy, concept in sorted(stored_rows_by_concept):
         key = (taxonomy, concept)
-        rows.append(
+        statement = FINANCIAL_STATEMENT_BY_CONCEPT.get(concept, "Unmapped financial facts")
+        rows_by_statement[statement].append(
             [
                 taxonomy,
                 concept,
@@ -338,7 +339,21 @@ def _format_xbrl_concepts(records: tuple[StoredRawFact, ...]) -> list[str]:
                 _format_list(sorted(units_by_concept[key])),
             ]
         )
-    return _format_table(["taxonomy", "concept", "stored rows", "forms", "units"], rows)
+
+    lines: list[str] = []
+    for statement in FINANCIAL_STATEMENT_ORDER:
+        rows = rows_by_statement.get(statement, [])
+        if not rows:
+            continue
+        lines.append(f"  {statement}:")
+        lines.extend(
+            f"  {line}"
+            for line in _format_table(
+                ["taxonomy", "concept", "stored rows", "forms", "units"],
+                rows,
+            )
+        )
+    return lines
 
 
 def _format_top_rows(records: tuple[StoredRawFact, ...]) -> list[str]:

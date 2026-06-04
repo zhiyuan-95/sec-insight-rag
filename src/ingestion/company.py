@@ -179,9 +179,8 @@ def delete_ingested_company(
 ) -> CompanyDeletionResult:
     """Delete all locally ingested data for one company.
 
-    The identifier may be a ticker that exists in the local company registry or
-    a CIK. This function does not contact SEC; if a ticker is not present in
-    the local registry, there is no local source for resolving it to a CIK.
+    The identifier may be a ticker or a CIK, but it must exist in the local
+    company registry before any rows or filing artifacts are deleted.
     """
     normalized_identifier = identifier.strip().upper()
     if not normalized_identifier:
@@ -196,7 +195,6 @@ def delete_ingested_company(
     filing_rows_deleted = 0
     raw_fact_rows_deleted = 0
     company_rows_deleted = 0
-    message: str | None = None
 
     if not settings.stock_sql_db_path.exists():
         return _company_not_found_result(normalized_identifier, cik)
@@ -217,26 +215,20 @@ def delete_ingested_company(
             company_found = True
             cik = company.cik
             company_id = company.company_id
-        elif cik is None:
+        else:
             return _company_not_found_result(normalized_identifier, cik)
 
-        if company_id is not None:
-            stored_filings = filing_repository.list_filings(company_id)
-            recorded_filing_paths = tuple(
-                filing.local_path
-                for filing in stored_filings
-                if filing.local_path is not None
-            )
-            metric_rows_deleted = metric_repository.delete_by_company_id(company_id)
-            filing_rows_deleted = filing_repository.delete_by_company_id(company_id)
-        elif cik is not None and not _has_orphan_company_data(
-            raw_repository=raw_repository,
-            filings_base_dir=settings.stock_filings_base_dir,
-            cik=cik,
-        ):
-            return _company_not_found_result(normalized_identifier, cik)
-        else:
-            message = f"No company registry row found for CIK {cik}; deleted orphan local data."
+        if company_id is None:
+            raise RuntimeError(f"Stored company record for CIK {cik} did not include a company_id")
+
+        stored_filings = filing_repository.list_filings(company_id)
+        recorded_filing_paths = tuple(
+            filing.local_path
+            for filing in stored_filings
+            if filing.local_path is not None
+        )
+        metric_rows_deleted = metric_repository.delete_by_company_id(company_id)
+        filing_rows_deleted = filing_repository.delete_by_company_id(company_id)
 
         if cik is not None:
             raw_fact_rows_deleted = raw_repository.delete_by_cik(cik)
@@ -251,6 +243,11 @@ def delete_ingested_company(
             cik=cik,
             recorded_paths=recorded_filing_paths,
         )
+    message = _company_deleted_message(
+        identifier=normalized_identifier,
+        cik=cik,
+        filing_paths_skipped=filing_paths_skipped,
+    )
 
     return CompanyDeletionResult(
         identifier=normalized_identifier,
@@ -465,17 +462,21 @@ def _company_not_found_result(identifier: str, cik: str | None) -> CompanyDeleti
     )
 
 
-def _has_orphan_company_data(
+def _company_deleted_message(
     *,
-    raw_repository: RawFactRepository,
-    filings_base_dir: Path,
-    cik: str,
-) -> bool:
-    company_dir = (filings_base_dir / cik).resolve()
-    base_dir = filings_base_dir.resolve()
-    return bool(raw_repository.list_fact_records(cik)) or (
-        company_dir.exists() and _is_safe_delete_target(company_dir, base_dir)
-    )
+    identifier: str,
+    cik: str | None,
+    filing_paths_skipped: tuple[Path, ...],
+) -> str:
+    company_label = f"identifier '{identifier}'"
+    if cik is not None:
+        company_label = f"{company_label} (CIK {cik})"
+    if filing_paths_skipped:
+        return (
+            f"Deleted ingested company for {company_label}, "
+            "but some filing artifacts could not be removed."
+        )
+    return f"Deleted ingested company for {company_label}."
 
 
 def _delete_company_filing_artifacts(

@@ -72,6 +72,8 @@ def test_map_raw_facts_to_base_metrics_maps_clean_facts_and_skips_ambiguous_sour
                 quality_flags=(AMBIGUOUS_UNIT,),
             ),
         ),
+        (7, _fact(concept="ResearchAndDevelopmentExpense", fiscal_year=2025, fiscal_period="FY", form="10-K")),
+        (8, _fact(concept="EarningsPerShareBasic", fiscal_year=2025, fiscal_period="FY", form="10-K")),
     ]
     active = active_period_keys([fact for _, fact in facts])
 
@@ -86,6 +88,8 @@ def test_map_raw_facts_to_base_metrics_maps_clean_facts_and_skips_ambiguous_sour
     }
     assert {metric.raw_fact_id for metric in metrics} == {1, 2, 3, 4}
     assert all(metric.is_active_window for metric in metrics)
+    assert "research_and_development" not in {metric.metric_name for metric in metrics}
+    assert "earnings_per_share_basic" not in {metric.metric_name for metric in metrics}
     assert "free_cash_flow" not in {metric.metric_name for metric in metrics}
     assert "total_debt" not in {metric.metric_name for metric in metrics}
 

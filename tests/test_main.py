@@ -99,6 +99,72 @@ def test_format_ingestion_report_summarizes_filings_and_xbrl_content() -> None:
     assert "0000320193-26-000013 (2 stored XBRL facts, periods: FY2026 Q2)" in report
 
 
+def test_format_ingestion_report_classifies_expanded_raw_concepts() -> None:
+    filing = FilingMetadata(
+        cik="0000320193",
+        accession_number="0000320193-26-000013",
+        form="10-Q",
+        filing_date="2026-05-01",
+        primary_document="aapl-20260328.htm",
+        document_url="https://example.test/aapl-20260328.htm",
+    )
+    result = CompanyIngestionResult(
+        ticker="AAPL",
+        cik="0000320193",
+        filings=(filing,),
+        downloaded_filings=(Path("filings/0000320193-26-000013/aapl-20260328.htm"),),
+        normalized_fact_count=5,
+        stored_fact_count=5,
+    )
+    facts = [
+        _fact(
+            concept="ResearchAndDevelopmentExpense",
+            fiscal_year=2026,
+            fiscal_period="Q2",
+            form="10-Q",
+            accession_number=filing.accession_number,
+        ),
+        _fact(
+            concept="MarketableSecuritiesCurrent",
+            fiscal_year=2026,
+            fiscal_period="Q2",
+            form="10-Q",
+            accession_number=filing.accession_number,
+        ),
+        _fact(
+            concept="NetCashProvidedByUsedInInvestingActivities",
+            fiscal_year=2026,
+            fiscal_period="Q2",
+            form="10-Q",
+            accession_number=filing.accession_number,
+        ),
+        _fact(
+            concept="EarningsPerShareBasic",
+            fiscal_year=2026,
+            fiscal_period="Q2",
+            form="10-Q",
+            accession_number=filing.accession_number,
+            unit="USD/shares",
+        ),
+        _fact(
+            concept="OtherComprehensiveIncomeLossNetOfTax",
+            fiscal_year=2026,
+            fiscal_period="Q2",
+            form="10-Q",
+            accession_number=filing.accession_number,
+        ),
+    ]
+
+    report = format_ingestion_report(result, facts, metrics=[])
+
+    assert "Income statement: 1 concept, 1 stored fact" in report
+    assert "Balance sheet: 1 concept, 1 stored fact" in report
+    assert "Cash flow statement: 1 concept, 1 stored fact" in report
+    assert "EPS and shares: 1 concept, 1 stored fact" in report
+    assert "Other comprehensive income: 1 concept, 1 stored fact" in report
+    assert "Unmapped financial facts" not in report
+
+
 def _fact(
     *,
     concept: str,
@@ -106,6 +172,7 @@ def _fact(
     fiscal_period: str,
     form: str,
     accession_number: str,
+    unit: str = "USD",
 ) -> NormalizedFact:
     return NormalizedFact(
         cik="0000320193",
@@ -114,7 +181,7 @@ def _fact(
         concept=concept,
         label=concept,
         description=None,
-        unit="USD",
+        unit=unit,
         value_raw=100,
         value=Decimal("100"),
         start_date=date(fiscal_year, 1, 1),
