@@ -1,0 +1,483 @@
+Milestone 3 Design: Indicator Engine
+
+Task Restatement
+Build the deterministic derived indicator layer that sits on top of the base financial metrics created in Milestone 2.5. This milestone should calculate core financial indicators from `financial_metrics`, preserve formula and source traceability, store results locally, and make those results easy for later analytics and RAG layers to consume.
+
+This milestone should not add LLM reasoning, Gemini calls, RAG synthesis, filing retrieval, benchmark comparison, frontend code, or broad API expansion unless the project scope changes.
+
+Before Coding Checklist
+- Restate the requested implementation scope.
+- List formula edge cases before editing code.
+- Identify expected changed files.
+- Ask for confirmation before adding or changing the SQLite schema, because implementing this milestone likely requires a new `financial_indicators` table.
+- Keep the change small and focused on indicators.
+
+Why This Milestone Exists
+Milestone 2.5 created the clean base metric layer:
+
+```text
+raw_xbrl_facts
+  -> financial_metrics
+```
+
+That layer gives the project stable metric names such as `revenue`, `net_income`, `total_assets`, and `operating_cash_flow` while preserving traceability back to raw SEC/XBRL facts.
+
+Milestone 3 adds the next deterministic layer:
+
+```text
+financial_metrics
+  -> financial_indicators
+```
+
+The purpose is to calculate useful financial ratios, growth rates, margins, and cash-flow indicators without using an LLM. These indicators should become structured evidence for Milestone 4 analytics and later RAG explanations.
+
+Core Scope
+- Define a small indicator formula registry.
+- Calculate indicators from existing base metrics.
+- Use `Decimal` for calculations.
+- Store formulas, formula versions, calculated values, and source references.
+- Preserve links back to source `financial_metrics` rows and underlying raw XBRL fact IDs.
+- Default normal reads to the active analysis window.
+- Add unit tests for formula behavior and repository behavior.
+- Update `docs/structure.md` when source modules, storage tables, or test responsibilities change.
+
+Out Of Scope
+- Do not use Gemini or any other LLM for calculations.
+- Do not run deterministic financial analysis beyond calculating indicators.
+- Do not add benchmark or peer comparison logic.
+- Do not build retrieval indexes or filing chunking.
+- Do not add frontend code.
+- Do not introduce a new LLM provider or model.
+- Do not calculate unsupported indicators from unreliable or missing inputs.
+- Do not modify raw data files.
+
+Important Edge Cases
+- Missing required base metrics.
+- A required denominator is zero.
+- Prior-period value is missing for growth calculations.
+- Prior-period value is zero for growth calculations.
+- Units do not match across source metrics.
+- Annual and quarterly periods are accidentally mixed.
+- Balance sheet facts are instant values while income statement and cash-flow facts are duration values.
+- Cash-flow concepts may use negative or positive sign conventions.
+- Capital expenditures may be reported as a positive cash outflow concept.
+- Net income may be negative, making cash conversion interpretation tricky.
+- Multiple raw concepts may map to the same base metric.
+- Multiple filings may contain values for the same metric and period.
+- Inactive-window metrics should not be used by default.
+- A calculated indicator should remain traceable even when it uses multiple base metrics.
+- Skipped indicators should expose a reason rather than failing silently.
+
+Likely Files Changed During Implementation
+- `src/indicators/__init__.py`
+- `src/indicators/formulas.py`
+- `src/indicators/models.py`
+- `src/indicators/engine.py`
+- `src/storage/database.py`
+- `src/storage/indicators_repository.py`
+- `src/storage/__init__.py`
+- `src/ingestion/company.py`
+- `tests/test_indicator_formulas.py`
+- `tests/test_indicator_engine.py`
+- `tests/test_indicators_repository.py`
+- `tests/test_company_ingestion.py`
+- `docs/structure.md`
+
+Core Data Flow
+
+```text
+SEC companyfacts
+  |
+  v
+raw_xbrl_facts
+  |
+  v
+financial_metrics
+  |
+  v
+financial_indicators
+```
+
+More concrete version:
+
+```text
+financial_metrics
+  income_statement.revenue
+  income_statement.gross_profit
+  income_statement.operating_income
+  income_statement.net_income
+  balance_sheet.total_assets
+  balance_sheet.total_liabilities
+  balance_sheet.current_assets
+  balance_sheet.current_liabilities
+  cash_flow_statement.operating_cash_flow
+  cash_flow_statement.capital_expenditure
+        |
+        v
+financial_indicators
+  revenue_growth
+  gross_margin
+  operating_margin
+  net_margin
+  debt_ratio
+  current_ratio
+  free_cash_flow
+  cash_conversion
+```
+
+Initial Indicator Catalog
+
+Revenue growth
+- Name: `revenue_growth`
+- Formula: `(current_revenue - prior_revenue) / abs(prior_revenue)`
+- Required metrics: current `revenue`, prior comparable `revenue`
+- Period type: duration
+- Output unit: ratio
+- Skip when prior revenue is missing or zero.
+
+Gross margin
+- Name: `gross_margin`
+- Formula: `gross_profit / revenue`
+- Required metrics: `gross_profit`, `revenue`
+- Period type: duration
+- Output unit: ratio
+- Skip when revenue is missing or zero.
+
+Operating margin
+- Name: `operating_margin`
+- Formula: `operating_income / revenue`
+- Required metrics: `operating_income`, `revenue`
+- Period type: duration
+- Output unit: ratio
+- Skip when revenue is missing or zero.
+
+Net margin
+- Name: `net_margin`
+- Formula: `net_income / revenue`
+- Required metrics: `net_income`, `revenue`
+- Period type: duration
+- Output unit: ratio
+- Skip when revenue is missing or zero.
+
+Debt ratio
+- Name: `debt_ratio`
+- Formula: `total_liabilities / total_assets`
+- Required metrics: `total_liabilities`, `total_assets`
+- Period type: instant
+- Output unit: ratio
+- Skip when total assets are missing or zero.
+
+Current ratio
+- Name: `current_ratio`
+- Formula: `current_assets / current_liabilities`
+- Required metrics: `current_assets`, `current_liabilities`
+- Period type: instant
+- Output unit: ratio
+- Skip when current liabilities are missing or zero.
+
+Free cash flow
+- Name: `free_cash_flow`
+- Formula: `operating_cash_flow - abs(capital_expenditure)`
+- Required metrics: `operating_cash_flow`, `capital_expenditure`
+- Period type: duration
+- Output unit: same currency unit as source metrics
+- Skip when source units do not match.
+
+Cash conversion
+- Name: `cash_conversion`
+- Formula: `operating_cash_flow / net_income`
+- Required metrics: `operating_cash_flow`, `net_income`
+- Period type: duration
+- Output unit: ratio
+- Skip when net income is missing or zero.
+
+Formula Rules
+- All indicator calculations must be deterministic.
+- Use `Decimal`, not float.
+- Do not call Gemini or any LLM.
+- Do not infer missing values.
+- Do not mix units.
+- Do not mix annual and quarterly periods.
+- Do not mix instant and duration facts in one formula unless the formula explicitly allows it.
+- Store a clear skip reason for expected invalid inputs.
+- Raise explicit errors for programming mistakes or unsupported formula definitions.
+
+Period Alignment Rules
+Period identity should use:
+
+```text
+company_id
+period_type
+fiscal_year
+fiscal_period
+active-window status
+```
+
+For same-period indicators:
+
+```text
+gross_margin for FY 2025
+  uses gross_profit FY 2025
+  uses revenue FY 2025
+```
+
+For prior-period indicators:
+
+```text
+revenue_growth for FY 2025
+  uses revenue FY 2025
+  uses revenue FY 2024
+```
+
+Quarterly revenue growth can be supported, but only when the prior comparable period is unambiguous. A conservative first implementation can calculate:
+
+```text
+FY 2025 vs FY 2024
+Q2 2025 vs Q1 2025
+```
+
+Do not calculate year-over-year quarterly growth until the project explicitly defines that convention.
+
+Source Traceability Rules
+Every stored indicator should include:
+- Indicator name.
+- Formula name.
+- Formula version.
+- Calculated value.
+- Output unit.
+- Fiscal year and fiscal period.
+- Source metric IDs.
+- Source raw fact IDs when available.
+- Source accession numbers.
+- Active-window flag.
+- Skip reason when the indicator cannot be calculated.
+
+Traceability example:
+
+```text
+financial_indicators.net_margin FY 2025
+  value = net_income / revenue
+  source metrics:
+    financial_metrics.net_income FY 2025
+    financial_metrics.revenue FY 2025
+  source facts:
+    raw_xbrl_facts.id for NetIncomeLoss
+    raw_xbrl_facts.id for RevenueFromContractWithCustomerExcludingAssessedTax
+```
+
+Proposed Storage Table
+Implementation should confirm before changing schema. The likely new table is `financial_indicators`.
+
+Recommended minimum shape:
+
+```sql
+CREATE TABLE financial_indicators (
+    indicator_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL,
+    indicator_name TEXT NOT NULL,
+    formula_name TEXT NOT NULL,
+    formula_version TEXT NOT NULL,
+    value_numeric TEXT,
+    unit TEXT NOT NULL,
+    period_type TEXT NOT NULL,
+    fiscal_year INTEGER,
+    fiscal_period TEXT,
+    start_date TEXT,
+    end_date TEXT,
+    filing_date TEXT,
+    source_metric_ids TEXT NOT NULL,
+    source_raw_fact_ids TEXT NOT NULL,
+    source_accession_numbers TEXT NOT NULL,
+    is_active_window INTEGER NOT NULL DEFAULT 1,
+    calculation_status TEXT NOT NULL,
+    skip_reason TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (
+        company_id,
+        indicator_name,
+        period_type,
+        fiscal_year,
+        fiscal_period,
+        formula_version
+    ),
+    FOREIGN KEY (company_id) REFERENCES companies(company_id)
+);
+```
+
+Suggested indexes:
+
+```sql
+CREATE INDEX idx_financial_indicators_company_active
+ON financial_indicators (company_id, is_active_window);
+
+CREATE INDEX idx_financial_indicators_lookup
+ON financial_indicators (company_id, indicator_name, fiscal_year, fiscal_period);
+```
+
+Store JSON lists as text for:
+- `source_metric_ids`
+- `source_raw_fact_ids`
+- `source_accession_numbers`
+
+This matches the repository pattern already used for serializing structured values.
+
+Indicator Models
+Recommended dataclasses:
+
+```text
+IndicatorDefinition
+  indicator_name
+  formula_name
+  formula_version
+  required_metric_names
+  output_unit
+  period_type
+
+IndicatorResult
+  company_id
+  indicator_name
+  formula_name
+  formula_version
+  value_numeric
+  unit
+  period_type
+  fiscal_year
+  fiscal_period
+  start_date
+  end_date
+  filing_date
+  source_metric_ids
+  source_raw_fact_ids
+  source_accession_numbers
+  is_active_window
+  calculation_status
+  skip_reason
+```
+
+Possible calculation statuses:
+
+```text
+calculated
+skipped
+```
+
+Potential skip reasons:
+
+```text
+missing_required_metric
+zero_denominator
+missing_prior_period
+zero_prior_period
+unit_mismatch
+period_type_mismatch
+ambiguous_metric_set
+```
+
+Repository Design
+Add `FinancialIndicatorRepository` with:
+
+- `initialize()`
+- `upsert_indicators(indicators: list[FinancialIndicator]) -> int`
+- `list_indicators(company_id, indicator_names=None, active_only=True) -> list[FinancialIndicator]`
+- Optional `delete_for_company(company_id)` only if recalculation needs a clean replacement policy.
+
+The first implementation should prefer upsert over delete-and-insert.
+
+Engine Design
+Add an engine that accepts base metrics and returns indicator results:
+
+```text
+calculate_indicators(company_id, metrics, active_only=True)
+  -> list[IndicatorResult]
+```
+
+Responsibilities:
+- Group metrics by period.
+- Choose one usable metric per metric name and period.
+- Apply formula definitions.
+- Build source reference lists.
+- Return calculated and skipped indicator results.
+
+The engine should not:
+- Read from SQLite directly.
+- Write to SQLite directly.
+- Fetch SEC data.
+- Call Gemini.
+
+This keeps calculation testable and lets storage remain separate.
+
+Integration With Company Ingestion
+After Milestone 3 is implemented, company ingestion can add one step after base metrics are stored:
+
+```text
+stored base metrics
+  -> list active company metrics
+  -> calculate indicators
+  -> upsert financial_indicators
+  -> include stored_indicator_count in CompanyIngestionResult
+```
+
+This keeps `src/ingestion/company.py` as orchestration only. Formula logic stays in `src/indicators/`, and persistence stays in `src/storage/`.
+
+Testing Plan
+
+Formula tests:
+- Revenue growth calculates correctly.
+- Revenue growth skips missing prior period.
+- Revenue growth skips zero prior period.
+- Margins calculate correctly.
+- Ratios calculate correctly.
+- Free cash flow handles positive capital expenditure as cash outflow.
+- Free cash flow rejects unit mismatch.
+- Cash conversion skips zero net income.
+
+Engine tests:
+- Groups annual periods correctly.
+- Groups quarterly periods correctly.
+- Does not mix annual and quarterly periods.
+- Does not use inactive metrics when active-only is true.
+- Preserves source metric IDs.
+- Preserves source raw fact IDs.
+- Returns clear skip reasons.
+
+Repository tests:
+- Round-trips Decimal values as text.
+- Round-trips source references as JSON lists.
+- Upserts by company, indicator, period, and formula version.
+- Filters active-window indicators by default.
+
+Integration tests:
+- Company ingestion stores base metrics and then stores indicators.
+- `CompanyIngestionResult` reports stored indicator count.
+- Indicators remain traceable back to source metrics and raw facts.
+
+Success Criteria
+- Core indicators can be calculated from base metrics.
+- The engine uses deterministic formulas only.
+- Formula definitions and formula versions are stored.
+- Every calculated indicator includes source metric and raw fact references.
+- Invalid calculations are skipped with explicit reasons.
+- Annual and quarterly periods are not mixed incorrectly.
+- Active-window filtering is respected by default.
+- Relevant unit and repository tests pass.
+- Company ingestion can persist indicators after base metrics are stored.
+- `docs/structure.md` reflects the implemented indicator layer and new tests.
+
+Suggested Implementation Order
+1. Confirm schema change for `financial_indicators`.
+2. Add indicator dataclasses and formula registry.
+3. Add pure formula helpers with unit tests.
+4. Add indicator engine and period grouping tests.
+5. Add SQLite schema and repository.
+6. Add repository tests.
+7. Wire indicator calculation into company ingestion.
+8. Update integration tests.
+9. Update `docs/structure.md`.
+10. Run relevant tests.
+
+Open Decisions Before Coding
+- Whether quarterly revenue growth should be sequential quarter-over-quarter only, or also year-over-year.
+- Whether skipped indicators should be persisted, or only returned from the engine.
+- Whether formula versions should start as `v1` or use semantic versions such as `1.0.0`.
+- Whether `free_cash_flow` should always use `abs(capital_expenditure)` or preserve reported sign conventions for specific SEC concepts.
+- Whether total debt should wait until debt concepts are explicitly mapped in `financial_metrics`.

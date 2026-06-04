@@ -8,7 +8,7 @@ from pathlib import Path
 from src.config import Settings, load_settings
 from src.ingestion import CompanyIngestionResult, FilingMetadata, ingest_company
 from src.processing import NormalizedFact
-from src.storage import RawFactRepository, connect_sqlite
+from src.storage import CompanyRepository, FinancialMetric, FinancialMetricRepository, RawFactRepository, connect_sqlite
 
 DEFAULT_TICKER = "AAPL"
 PERIOD_ORDER = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "FY": 5}
@@ -41,8 +41,9 @@ def main(ticker: str = DEFAULT_TICKER, env_file: str | Path = "config.env") -> N
     settings = load_settings(env_file)
     result = ingest_company(ticker, settings)
     stored_facts = load_stored_facts(settings, result.cik)
+    stored_metrics = load_stored_metrics(settings, result.cik)
 
-    print(format_ingestion_report(result, stored_facts))
+    print(format_ingestion_report(result, stored_facts, stored_metrics))
 
 
 def load_stored_facts(settings: Settings, cik: str) -> list[NormalizedFact]:
@@ -53,7 +54,22 @@ def load_stored_facts(settings: Settings, cik: str) -> list[NormalizedFact]:
         return repository.list_facts(cik)
 
 
-def format_ingestion_report(result: CompanyIngestionResult, facts: list[NormalizedFact]) -> str:
+def load_stored_metrics(settings: Settings, cik: str) -> list[FinancialMetric]:
+    """Load active base financial metrics stored by the ingestion workflow."""
+    with connect_sqlite(settings.stock_sql_db_path) as connection:
+        company_repository = CompanyRepository(connection)
+        company_repository.initialize()
+        company = company_repository.get_by_cik(cik)
+        if company is None or company.company_id is None:
+            return []
+        return FinancialMetricRepository(connection).list_metrics(company.company_id)
+
+
+def format_ingestion_report(
+    result: CompanyIngestionResult,
+    facts: list[NormalizedFact],
+    metrics: list[FinancialMetric] | None = None,
+) -> str:
     """Format a human-readable report for downloaded filings and stored XBRL facts."""
     filing_paths = dict(zip(result.filings, result.downloaded_filings, strict=False))
     facts_by_accession = _facts_by_accession(facts)
@@ -79,6 +95,9 @@ def format_ingestion_report(result: CompanyIngestionResult, facts: list[Normaliz
     lines.extend(_format_concept_summary(facts))
     lines.extend(["", "XBRL financial facts by statement section:"])
     lines.extend(_format_financial_statement_fact_summary(facts))
+    if metrics is not None:
+        lines.extend(["", "Base financial metrics mapped for active analysis window:"])
+        lines.extend(_format_financial_metric_summary(metrics))
     lines.extend(["", "Downloaded filing to XBRL fact mapping:"])
     lines.extend(_format_filing_fact_mapping(result.filings, filing_paths, facts_by_accession))
 
@@ -169,6 +188,33 @@ def _format_financial_statement_fact_summary(facts: list[NormalizedFact]) -> lis
     return lines
 
 
+def _format_financial_metric_summary(metrics: list[FinancialMetric]) -> list[str]:
+    if not metrics:
+        return ["- No active base financial metrics found."]
+
+    metrics_by_statement: dict[str, list[FinancialMetric]] = defaultdict(list)
+    for metric in metrics:
+        metrics_by_statement[metric.statement_type].append(metric)
+
+    lines: list[str] = []
+    for statement, statement_metrics in sorted(metrics_by_statement.items()):
+        metric_names = sorted({metric.metric_name for metric in statement_metrics})
+        lines.append(
+            f"- {_metric_statement_label(statement)}: {len(metric_names)} "
+            f"{_pluralize('metric name', len(metric_names))}, "
+            f"{len(statement_metrics)} {_pluralize('metric value', len(statement_metrics))}"
+        )
+        for metric_name in metric_names:
+            metric_values = [metric for metric in statement_metrics if metric.metric_name == metric_name]
+            units = sorted({metric.unit for metric in metric_values})
+            periods = _periods_for_metrics(metric_values)
+            lines.append(
+                f"  - {metric_name}: {len(metric_values)} {_pluralize('value', len(metric_values))}; "
+                f"units: {_format_list(units)}; periods: {_format_list(periods, limit=8)}"
+            )
+    return lines
+
+
 def _format_statement_concepts(facts: list[NormalizedFact]) -> list[str]:
     facts_by_concept: dict[tuple[str, str], list[NormalizedFact]] = defaultdict(list)
     for fact in facts:
@@ -238,6 +284,15 @@ def _periods_for_facts(facts: list[NormalizedFact]) -> list[str]:
     return _format_period_keys(_period_keys(facts))
 
 
+def _periods_for_metrics(metrics: list[FinancialMetric]) -> list[str]:
+    return _format_period_keys(
+        {
+            (metric.fiscal_year, metric.fiscal_period, metric.end_date.isoformat() if metric.end_date else "")
+            for metric in metrics
+        }
+    )
+
+
 def _period_keys(facts: list[NormalizedFact]) -> set[tuple[int | None, str | None, str]]:
     keys: set[tuple[int | None, str | None, str]] = set()
     for fact in facts:
@@ -283,5 +338,5 @@ def _pluralize(label: str, count: int) -> str:
     return label if count == 1 else f"{label}s"
 
 
-if __name__ == "__main__":
-    main()
+def _metric_statement_label(statement_type: str) -> str:
+    return statement_type.replace("_", " ").title()

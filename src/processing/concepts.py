@@ -1,4 +1,4 @@
-"""Common SEC XBRL concepts used by the MVP."""
+"""Common SEC XBRL constants and base-metric concept mappings."""
 
 COMMON_GAAP_CONCEPTS = {
     "Assets",

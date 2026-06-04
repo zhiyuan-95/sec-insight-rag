@@ -1,6 +1,6 @@
 """SEC ingestion package."""
 
-from src.ingestion.company import CompanyIngestionResult, ingest_company
+from src.ingestion.company import CompanyDeletionResult, CompanyIngestionResult, delete_ingested_company, ingest_company
 from src.ingestion.companyfacts import build_companyfacts_url, get_companyfacts
 from src.ingestion.errors import (
     FilingNotFoundError,
@@ -26,6 +26,7 @@ from src.ingestion.tickers import TickerMapping, load_ticker_mapping, resolve_ti
 __all__ = [
     "FilingMetadata",
     "FilingNotFoundError",
+    "CompanyDeletionResult",
     "CompanyIngestionResult",
     "SecClient",
     "SecConfigurationError",
@@ -39,6 +40,7 @@ __all__ = [
     "build_filing_document_url",
     "build_submissions_url",
     "download_filing_document",
+    "delete_ingested_company",
     "get_company_submissions",
     "get_companyfacts",
     "ingest_company",

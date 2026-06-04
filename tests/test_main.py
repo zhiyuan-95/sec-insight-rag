@@ -5,6 +5,7 @@ from pathlib import Path
 from main import format_ingestion_report
 from src.ingestion import CompanyIngestionResult, FilingMetadata
 from src.processing import NormalizedFact
+from src.storage import FinancialMetric
 
 
 def test_format_ingestion_report_summarizes_filings_and_xbrl_content() -> None:
@@ -59,7 +60,26 @@ def test_format_ingestion_report_summarizes_filings_and_xbrl_content() -> None:
         ),
     ]
 
-    report = format_ingestion_report(result, facts)
+    metrics = [
+        FinancialMetric(
+            company_id=1,
+            accession_number="0000320193-26-000013",
+            raw_fact_id=3,
+            statement_type="income_statement",
+            metric_name="revenue",
+            value_numeric=Decimal("100"),
+            value_raw=100,
+            unit="USD",
+            period_type="duration",
+            fiscal_year=2026,
+            fiscal_period="Q2",
+            start_date=date(2026, 1, 1),
+            end_date=date(2026, 12, 31),
+            filing_date=date(2026, 5, 1),
+        )
+    ]
+
+    report = format_ingestion_report(result, facts, metrics)
 
     assert "10-K annual files: 1 covering 1 fiscal year: FY2025" in report
     assert "10-Q quarterly files: 1 covering 1 fiscal quarter: FY2026 Q2" in report
@@ -68,6 +88,9 @@ def test_format_ingestion_report_summarizes_filings_and_xbrl_content() -> None:
     assert "XBRL financial facts by statement section:" in report
     assert "Balance sheet: 1 concept, 2 stored facts" in report
     assert "Income statement: 1 concept, 1 stored fact" in report
+    assert "Base financial metrics mapped for active analysis window:" in report
+    assert "Income Statement: 1 metric name, 1 metric value" in report
+    assert "revenue: 1 value; units: USD; periods: FY2026 Q2" in report
     assert "us-gaap:Assets: 2 facts; units: USD; periods: FY2026 Q2, FY2025" in report
     assert "us-gaap:Revenues: 1 fact; units: USD; periods: FY2026 Q2" in report
     assert "us-gaap:Assets [USD] (1 fact)" in report

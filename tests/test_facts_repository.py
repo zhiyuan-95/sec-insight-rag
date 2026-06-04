@@ -20,8 +20,11 @@ def test_raw_fact_repository_creates_table_and_round_trips_facts(tmp_path: Path)
 
     inserted = repository.upsert_facts(facts)
     stored = repository.list_facts("0000320193")
+    stored_records = repository.list_fact_records("0000320193")
 
     assert inserted == len(facts)
+    assert all(record.raw_fact_id is not None for record in stored_records)
+    assert [record.fact for record in stored_records] == stored
     assert {fact.concept for fact in stored} == {"Assets", "Revenues"}
     revenue = next(fact for fact in stored if fact.concept == "Revenues" and fact.form == "10-Q")
     assert revenue.value == Decimal("94000000000")

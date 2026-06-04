@@ -63,6 +63,74 @@ def test_normalize_companyfacts_filters_to_10k_and_10q_by_default() -> None:
     assert {fact.form for fact in facts} == {"10-K", "10-Q"}
 
 
+def test_normalize_companyfacts_filters_to_common_gaap_concepts_by_default() -> None:
+    payload = {
+        "cik": 320193,
+        "entityName": "Apple Inc.",
+        "facts": {
+            "us-gaap": {
+                "Revenues": {
+                    "label": "Revenue",
+                    "units": {
+                        "USD": [
+                            {
+                                "val": 94000000000,
+                                "start": "2025-03-30",
+                                "end": "2025-06-28",
+                                "fy": 2025,
+                                "fp": "Q3",
+                                "form": "10-Q",
+                                "filed": "2025-08-01",
+                                "accn": "0000320193-25-000073",
+                            }
+                        ]
+                    },
+                },
+                "EarningsPerShareBasic": {
+                    "label": "Basic EPS",
+                    "units": {
+                        "USD/shares": [
+                            {
+                                "val": 6.13,
+                                "start": "2024-09-29",
+                                "end": "2025-09-27",
+                                "fy": 2025,
+                                "fp": "FY",
+                                "form": "10-K",
+                                "filed": "2025-10-31",
+                                "accn": "0000320193-25-000079",
+                            }
+                        ]
+                    },
+                }
+            },
+            "dei": {
+                "EntityCommonStockSharesOutstanding": {
+                    "label": "Shares Outstanding",
+                    "units": {
+                        "shares": [
+                            {
+                                "val": 15000000000,
+                                "end": "2025-09-27",
+                                "fy": 2025,
+                                "fp": "FY",
+                                "form": "10-K",
+                                "filed": "2025-10-31",
+                                "accn": "0000320193-25-000079",
+                            }
+                        ]
+                    },
+                }
+            },
+        },
+    }
+
+    facts = normalize_companyfacts(payload)
+
+    assert {fact.taxonomy for fact in facts} == {"us-gaap"}
+    assert {fact.concept for fact in facts} == {"Revenues"}
+
+
 def test_normalize_companyfacts_can_include_and_flag_unsupported_forms() -> None:
     facts = normalize_companyfacts(_companyfacts_fixture(), forms=None)
 

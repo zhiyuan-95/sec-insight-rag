@@ -53,6 +53,7 @@ def normalize_companyfacts(
     payload: dict[str, Any],
     concepts: set[str] | None = None,
     forms: set[str] | None = DEFAULT_FORMS,
+    taxonomies: set[str] | None = DEFAULT_TAXONOMIES,
 ) -> list[NormalizedFact]:
     """Normalize a SEC companyfacts payload into fact records."""
     cik = _normalize_cik(_required(payload, "cik", "companyfacts payload"))
@@ -61,14 +62,15 @@ def normalize_companyfacts(
     if not isinstance(facts_payload, dict):
         raise XbrlPayloadError("companyfacts payload missing facts object")
 
-    requested_concepts = concepts if concepts is not None else COMMON_GAAP_CONCEPTS
     requested_forms = {form.upper() for form in forms} if forms is not None else None
+    requested_taxonomies = set(taxonomies) if taxonomies is not None else None
+    requested_concepts = COMMON_GAAP_CONCEPTS if concepts is None else concepts
 
     normalized: list[NormalizedFact] = []
     for taxonomy, taxonomy_payload in facts_payload.items():
         if not isinstance(taxonomy_payload, dict):
             raise XbrlPayloadError(f"taxonomy payload was not an object: {taxonomy}")
-        if concepts is None and taxonomy not in DEFAULT_TAXONOMIES:
+        if requested_taxonomies is not None and taxonomy not in requested_taxonomies:
             continue
         for concept, concept_payload in taxonomy_payload.items():
             if concept not in requested_concepts:

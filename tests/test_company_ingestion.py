@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -6,7 +7,7 @@ import pytest
 from src.config import Settings
 from src.ingestion import CompanyIngestionResult, FilingMetadata, SecConfigurationError, TickerMapping, ingest_company
 from src.ingestion import company as company_module
-from src.storage import RawFactRepository, connect_sqlite
+from src.storage import CompanyRepository, FilingRepository, FinancialMetricRepository, RawFactRepository, connect_sqlite
 
 
 def _settings(tmp_path: Path, sec_user_agent: str | None = "Example contact@example.com") -> Settings:
@@ -60,6 +61,10 @@ def test_ingest_company_orchestrates_sec_processing_and_storage(
     assert len(result.downloaded_filings) == 2
     assert result.normalized_fact_count == 5
     assert result.stored_fact_count == 5
+    assert result.company_id is not None
+    assert result.stored_filing_count == 2
+    assert result.stored_metric_count == 1
+    assert result.active_metric_count == 1
     assert result.warnings == (
         "Normalized facts include quality flag: ambiguous_unit",
         "Normalized facts include quality flag: duplicate_fact",
@@ -72,9 +77,29 @@ def test_ingest_company_orchestrates_sec_processing_and_storage(
 
     with connect_sqlite(tmp_path / "stock.db") as connection:
         stored = RawFactRepository(connection).list_facts("0000320193")
+        company = CompanyRepository(connection).get_by_cik("0000320193")
+        assert company is not None
+        assert company.company_id is not None
+        filings = FilingRepository(connection).list_filings(company.company_id)
+        metrics = FinancialMetricRepository(connection).list_metrics(company.company_id)
 
     assert len(stored) == 4
     assert {fact.concept for fact in stored} == {"Assets", "Revenues"}
+    assert company.name == "Apple Inc."
+    assert company.latest_10k_filing_date == date(2025, 10, 31)
+    assert company.latest_10q_filing_date == date(2025, 8, 1)
+    assert company.next_check_date_10k == date(2026, 10, 30)
+    assert company.next_check_date_10q == date(2026, 1, 30)
+    assert {filing.accession_number for filing in filings} == {
+        "0000320193-25-000073",
+        "0000320193-25-000079",
+    }
+    assert all(filing.is_active_window for filing in filings)
+    assert len(metrics) == 1
+    assert metrics[0].statement_type == "income_statement"
+    assert metrics[0].metric_name == "revenue"
+    assert metrics[0].accession_number == "0000320193-25-000073"
+    assert metrics[0].raw_fact_id is not None
 
 
 def test_ingest_company_rejects_missing_sec_user_agent(tmp_path: Path) -> None:

@@ -14,7 +14,7 @@ config.env.*
 # Local application storage
 stock_data.db
 *.db
-storage/
+/storage/
 data_store/
 
 # Generated exports
@@ -26,5 +26,6 @@ my ideas/
 discussion.txt
 plan1.txt
 plan2.txt
+plan2.5.txt
 plan2_5.txt
 to_do.txt
