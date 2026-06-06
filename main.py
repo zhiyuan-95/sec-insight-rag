@@ -12,124 +12,26 @@ from src.storage import CompanyRepository, FinancialMetric, FinancialMetricRepos
 
 DEFAULT_TICKER = "AAPL"
 PERIOD_ORDER = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "FY": 5}
-INCOME_STATEMENT_CONCEPTS = {
-    "CostOfGoodsAndServicesSold",
-    "CostOfRevenue",
-    "CostsAndExpenses",
-    "GeneralAndAdministrativeExpense",
-    "GrossProfit",
-    "IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest",
-    "IncomeTaxExpenseBenefit",
-    "InterestExpenseNonOperating",
-    "InterestIncomeExpenseNonOperatingNet",
-    "NetIncomeLoss",
-    "NetIncomeLossAvailableToCommonStockholdersBasic",
-    "OperatingExpenses",
-    "OperatingIncomeLoss",
-    "ResearchAndDevelopmentExpense",
-    "RevenueFromContractWithCustomerExcludingAssessedTax",
-    "Revenues",
-    "SalesRevenueNet",
-    "SellingAndMarketingExpense",
-    "SellingGeneralAndAdministrativeExpense",
-}
-BALANCE_SHEET_CONCEPTS = {
-    "AccountsPayableCurrent",
-    "AccountsReceivableNetCurrent",
-    "AccruedLiabilitiesCurrent",
-    "AccumulatedOtherComprehensiveIncomeLossNetOfTax",
-    "Assets",
-    "AssetsCurrent",
-    "CashAndCashEquivalentsAtCarryingValue",
-    "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents",
-    "CommonStocksIncludingAdditionalPaidInCapital",
-    "ContractWithCustomerLiabilityCurrent",
-    "ContractWithCustomerLiabilityNoncurrent",
-    "DebtCurrent",
-    "DebtNoncurrent",
-    "DeferredRevenueCurrent",
-    "DeferredRevenueNoncurrent",
-    "DeferredTaxAssetsNet",
-    "DeferredTaxLiabilitiesNoncurrent",
-    "FinanceLeaseLiabilityCurrent",
-    "FinanceLeaseLiabilityNoncurrent",
-    "Goodwill",
-    "IntangibleAssetsNetExcludingGoodwill",
-    "InventoryNet",
-    "Liabilities",
-    "LiabilitiesAndStockholdersEquity",
-    "LiabilitiesCurrent",
-    "LongTermDebtAndFinanceLeaseObligationsCurrent",
-    "LongTermDebtAndFinanceLeaseObligationsNoncurrent",
-    "LongTermDebtCurrent",
-    "LongTermDebtNoncurrent",
-    "MarketableSecuritiesCurrent",
-    "NoncontrollingInterestInConsolidatedEntity",
-    "OperatingLeaseLiabilityCurrent",
-    "OperatingLeaseLiabilityNoncurrent",
-    "OperatingLeaseRightOfUseAsset",
-    "OtherAssetsCurrent",
-    "OtherAssetsNoncurrent",
-    "OtherLiabilitiesCurrent",
-    "OtherLiabilitiesNoncurrent",
-    "PrepaidExpenseAndOtherAssetsCurrent",
-    "PropertyPlantAndEquipmentNet",
-    "RetainedEarningsAccumulatedDeficit",
-    "ShortTermBorrowings",
-    "ShortTermInvestments",
-    "StockholdersEquity",
-    "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest",
-    "TreasuryStockValue",
-}
-CASH_FLOW_STATEMENT_CONCEPTS = {
-    "CashAndCashEquivalentsPeriodIncreaseDecrease",
-    "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect",
-    "DepreciationDepletionAndAmortization",
-    "DepreciationDepletionAndAmortizationExpense",
-    "EffectOfExchangeRateOnCashAndCashEquivalents",
-    "IncreaseDecreaseInAccountsPayable",
-    "IncreaseDecreaseInAccountsReceivable",
-    "IncreaseDecreaseInInventories",
-    "NetCashProvidedByUsedInFinancingActivities",
-    "NetCashProvidedByUsedInInvestingActivities",
-    "NetCashProvidedByUsedInOperatingActivities",
-    "PaymentsForRepurchaseOfCommonStock",
-    "PaymentsOfDividends",
-    "PaymentsToAcquireBusinessesNetOfCashAcquired",
-    "PaymentsToAcquireInvestments",
-    "PaymentsToAcquirePropertyPlantAndEquipment",
-    "PaymentsToRepayLongTermDebt",
-    "PaymentsToRepayShortTermDebt",
-    "ProceedsFromIssuanceOfCommonStock",
-    "ProceedsFromIssuanceOfLongTermDebt",
-    "ProceedsFromMaturitiesPrepaymentsAndCallsOfAvailableForSaleSecurities",
-    "ProceedsFromSaleOfInvestments",
-    "ProceedsFromSaleOfPropertyPlantAndEquipment",
-    "ProceedsFromShortTermDebt",
-    "ShareBasedCompensation",
-}
-EPS_AND_SHARE_CONCEPTS = {
-    "CommonStocksSharesAuthorized",
-    "CommonStocksSharesIssued",
-    "CommonStocksSharesOutstanding",
-    "EarningsPerShareBasic",
-    "EarningsPerShareDiluted",
-    "WeightedAverageNumberOfDilutedSharesOutstanding",
-    "WeightedAverageNumberOfSharesOutstandingBasic",
-}
-OTHER_COMPREHENSIVE_INCOME_CONCEPTS = {
-    "ComprehensiveIncomeNetOfTax",
-    "OtherComprehensiveIncomeLossAvailableForSaleSecuritiesAdjustmentNetOfTax",
-    "OtherComprehensiveIncomeLossForeignCurrencyTransactionAndTranslationAdjustmentNetOfTax",
-    "OtherComprehensiveIncomeLossNetOfTax",
-    "OtherComprehensiveIncomeUnrealizedHoldingGainLossOnSecuritiesArisingDuringPeriodNetOfTax",
-}
 FINANCIAL_STATEMENT_BY_CONCEPT = {
-    **{concept: "Income statement" for concept in INCOME_STATEMENT_CONCEPTS},
-    **{concept: "Balance sheet" for concept in BALANCE_SHEET_CONCEPTS},
-    **{concept: "Cash flow statement" for concept in CASH_FLOW_STATEMENT_CONCEPTS},
-    **{concept: "EPS and shares" for concept in EPS_AND_SHARE_CONCEPTS},
-    **{concept: "Other comprehensive income" for concept in OTHER_COMPREHENSIVE_INCOME_CONCEPTS},
+    "Assets": "Balance sheet",
+    "AssetsCurrent": "Balance sheet",
+    "CashAndCashEquivalentsAtCarryingValue": "Balance sheet",
+    "Liabilities": "Balance sheet",
+    "LiabilitiesCurrent": "Balance sheet",
+    "StockholdersEquity": "Balance sheet",
+    "CostOfRevenue": "Income statement",
+    "GrossProfit": "Income statement",
+    "NetIncomeLoss": "Income statement",
+    "OperatingIncomeLoss": "Income statement",
+    "ResearchAndDevelopmentExpense": "Income statement",
+    "RevenueFromContractWithCustomerExcludingAssessedTax": "Income statement",
+    "Revenues": "Income statement",
+    "MarketableSecuritiesCurrent": "Balance sheet",
+    "EarningsPerShareBasic": "EPS and shares",
+    "NetCashProvidedByUsedInOperatingActivities": "Cash flow statement",
+    "NetCashProvidedByUsedInInvestingActivities": "Cash flow statement",
+    "PaymentsToAcquirePropertyPlantAndEquipment": "Cash flow statement",
+    "OtherComprehensiveIncomeLossNetOfTax": "Other comprehensive income",
 }
 FINANCIAL_STATEMENT_ORDER = (
     "Income statement",
@@ -183,6 +85,10 @@ def format_ingestion_report(
     lines = [
         f"Ticker: {result.ticker}",
         f"CIK: {result.cik}",
+        f"Run status: {result.status}",
+        f"SEC checked: {_format_bool(result.sec_checked)}",
+        f"Refresh due: 10-K={_format_optional_bool(result.refresh_due_10k)}, "
+        f"10-Q={_format_optional_bool(result.refresh_due_10q)}",
         "",
         "Downloaded SEC filing files:",
     ]
@@ -230,7 +136,7 @@ def _facts_by_accession(facts: list[NormalizedFact]) -> dict[str, list[Normalize
 
 def _format_download_summary(
     filings_by_form: dict[str, list[FilingMetadata]],
-    filing_paths: dict[FilingMetadata, Path],
+    filing_paths: dict[FilingMetadata, Path | None],
     facts_by_accession: dict[str, list[NormalizedFact]],
 ) -> list[str]:
     lines: list[str] = []
@@ -339,7 +245,7 @@ def _format_statement_concepts(facts: list[NormalizedFact]) -> list[str]:
 
 def _format_filing_fact_mapping(
     filings: tuple[FilingMetadata, ...],
-    filing_paths: dict[FilingMetadata, Path],
+    filing_paths: dict[FilingMetadata, Path | None],
     facts_by_accession: dict[str, list[NormalizedFact]],
 ) -> list[str]:
     if not filings:
@@ -445,3 +351,13 @@ def _pluralize(label: str, count: int) -> str:
 
 def _metric_statement_label(statement_type: str) -> str:
     return statement_type.replace("_", " ").title()
+
+
+def _format_bool(value: bool) -> str:
+    return "yes" if value else "no"
+
+
+def _format_optional_bool(value: bool | None) -> str:
+    if value is None:
+        return "unknown"
+    return _format_bool(value)

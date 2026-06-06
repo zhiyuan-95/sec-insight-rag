@@ -7,7 +7,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from src.processing.concepts import COMMON_GAAP_CONCEPTS, DEFAULT_FORMS, DEFAULT_TAXONOMIES, SUPPORTED_REPORT_FORMS
+from src.processing.concepts import DEFAULT_FORMS, DEFAULT_TAXONOMIES, SUPPORTED_REPORT_FORMS
 from src.processing.errors import XbrlPayloadError
 from src.processing.periods import classify_period, parse_sec_date, validate_period
 from src.processing.quality import (
@@ -64,7 +64,7 @@ def normalize_companyfacts(
 
     requested_forms = {form.upper() for form in forms} if forms is not None else None
     requested_taxonomies = set(taxonomies) if taxonomies is not None else None
-    requested_concepts = COMMON_GAAP_CONCEPTS if concepts is None else concepts
+    requested_concepts = set(concepts) if concepts is not None else None
 
     normalized: list[NormalizedFact] = []
     for taxonomy, taxonomy_payload in facts_payload.items():
@@ -73,7 +73,7 @@ def normalize_companyfacts(
         if requested_taxonomies is not None and taxonomy not in requested_taxonomies:
             continue
         for concept, concept_payload in taxonomy_payload.items():
-            if concept not in requested_concepts:
+            if requested_concepts is not None and concept not in requested_concepts:
                 continue
             if not isinstance(concept_payload, dict):
                 raise XbrlPayloadError(f"concept payload was not an object: {concept}")

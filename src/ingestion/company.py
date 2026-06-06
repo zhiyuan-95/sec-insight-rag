@@ -5,13 +5,14 @@ from __future__ import annotations
 import shutil
 import stat
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable, TYPE_CHECKING
 
 from src.ingestion.companyfacts import get_companyfacts
-from src.ingestion.filings import FilingMetadata, require_latest_filings, download_filing_document
-from src.ingestion.refresh_policy import next_check_date_for_filing
+from src.ingestion.errors import SecIngestionError
+from src.ingestion.filings import FilingMetadata, download_filing_document, list_recent_filings
+from src.ingestion.refresh_policy import next_business_day, next_check_date_for_filing
 from src.ingestion.sec_client import SecClient
 from src.ingestion.submissions import get_company_submissions
 from src.ingestion.tickers import load_ticker_mapping, resolve_ticker_to_cik
@@ -47,7 +48,7 @@ class CompanyIngestionResult:
     ticker: str
     cik: str
     filings: tuple[FilingMetadata, ...]
-    downloaded_filings: tuple[Path, ...]
+    downloaded_filings: tuple[Path | None, ...]
     normalized_fact_count: int
     stored_fact_count: int
     warnings: tuple[str, ...] = ()
@@ -55,6 +56,10 @@ class CompanyIngestionResult:
     stored_filing_count: int = 0
     stored_metric_count: int = 0
     active_metric_count: int = 0
+    status: str = "updated"
+    sec_checked: bool = True
+    refresh_due_10k: bool | None = None
+    refresh_due_10q: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -82,25 +87,60 @@ class _FilingPeriodSummary:
 
 
 def ingest_company(ticker: str, settings: Settings) -> CompanyIngestionResult:
-    """Ingest one company from SEC data into local storage."""
-    client = SecClient(settings.sec_user_agent)
-
-    ticker_mapping = load_ticker_mapping(client)
+    """Ingest or inspect one company using refresh-aware local state."""
     normalized_ticker = ticker.strip().upper()
+    if not normalized_ticker:
+        raise ValueError("Ticker is required")
+
+    existing_company = _get_existing_company(settings, normalized_ticker)
+    if existing_company is not None:
+        refresh_due_10k, refresh_due_10q = _company_refresh_due(existing_company)
+        if not refresh_due_10k and not refresh_due_10q:
+            return _build_local_ingestion_result(
+                settings=settings,
+                company=existing_company,
+                status="reused_local",
+                sec_checked=False,
+                refresh_due_10k=refresh_due_10k,
+                refresh_due_10q=refresh_due_10q,
+            )
+
+    try:
+        return _ingest_company_from_sec(
+            normalized_ticker=normalized_ticker,
+            settings=settings,
+            existing_company=existing_company,
+        )
+    except SecIngestionError as exc:
+        if existing_company is None:
+            raise
+        refresh_due_10k, refresh_due_10q = _company_refresh_due(existing_company)
+        return _build_local_ingestion_result(
+            settings=settings,
+            company=existing_company,
+            status="refresh_failed_using_local_data",
+            sec_checked=True,
+            refresh_due_10k=refresh_due_10k,
+            refresh_due_10q=refresh_due_10q,
+            warnings=(f"SEC refresh failed; using existing local data: {exc}",),
+        )
+
+
+def _ingest_company_from_sec(
+    *,
+    normalized_ticker: str,
+    settings: Settings,
+    existing_company: CompanyRecord | None,
+) -> CompanyIngestionResult:
+    client = SecClient(settings.sec_user_agent)
+    ticker_mapping = load_ticker_mapping(client)
     cik = resolve_ticker_to_cik(normalized_ticker, ticker_mapping)
     ticker_entry = ticker_mapping[normalized_ticker]
 
     submissions = get_company_submissions(client, cik)
     companyfacts = get_companyfacts(client, cik)
-
-    filings = tuple(require_latest_filings(submissions, {"10-K", "10-Q"}))
-    downloaded_filings = tuple(
-        download_filing_document(client, filing, settings.stock_filings_base_dir)
-        for filing in filings
-    )
-
-    normalized_facts = normalize_companyfacts(companyfacts)
-    warnings = _collect_quality_warnings(normalized_facts)
+    normalized_facts = normalize_companyfacts(companyfacts, concepts=None, forms=None, taxonomies=None)
+    warnings = list(_collect_quality_warnings(normalized_facts))
 
     with connect_sqlite(settings.stock_sql_db_path) as connection:
         raw_repository = RawFactRepository(connection)
@@ -109,11 +149,39 @@ def ingest_company(ticker: str, settings: Settings) -> CompanyIngestionResult:
         metric_repository = FinancialMetricRepository(connection)
 
         raw_repository.initialize()
+        existing_company = company_repository.get_by_cik(cik)
+        existing_filings = (
+            filing_repository.list_filings(existing_company.company_id)
+            if existing_company is not None and existing_company.company_id is not None
+            else []
+        )
+        existing_filing_by_accession = {
+            filing.accession_number: filing
+            for filing in existing_filings
+        }
+        existing_accessions = set(existing_filing_by_accession)
+
         stored_fact_count = raw_repository.upsert_facts(normalized_facts)
         stored_fact_records = raw_repository.list_fact_records(cik)
         stored_facts = [record.fact for record in stored_fact_records]
         active_keys = active_period_keys(stored_facts)
         active_accessions = active_accessions_for_facts(stored_facts, active_keys)
+        recent_filings = tuple(list_recent_filings(submissions, {"10-K", "10-Q"}))
+        filings = _select_active_window_filings(recent_filings, active_accessions)
+        missing_active_accessions = sorted(active_accessions - {filing.accession_number for filing in filings})
+        if missing_active_accessions:
+            shown = ", ".join(missing_active_accessions[:5])
+            suffix = f" (+{len(missing_active_accessions) - 5} more)" if len(missing_active_accessions) > 5 else ""
+            warnings.append(f"Active-window accessions missing from SEC recent filings: {shown}{suffix}")
+        downloaded_filings = tuple(
+            _download_or_reuse_filing(
+                client=client,
+                filing=filing,
+                base_dir=settings.stock_filings_base_dir,
+                existing_filing=existing_filing_by_accession.get(filing.accession_number),
+            )
+            for filing in filings
+        )
 
         company = company_repository.upsert_company(
             _build_company_record(
@@ -128,6 +196,21 @@ def ingest_company(ticker: str, settings: Settings) -> CompanyIngestionResult:
         if company.company_id is None:
             raise RuntimeError(f"Stored company record for CIK {cik} did not include a company_id")
 
+        refresh_due_10k, refresh_due_10q = _company_refresh_due(existing_company or company)
+        new_accessions = {filing.accession_number for filing in filings} - existing_accessions
+        status = _ingestion_status(existing_company, new_accessions)
+        if existing_company is not None and status == "checked_no_update":
+            override_10k = next_business_day(date.today() + timedelta(days=1)) if refresh_due_10k else None
+            override_10q = next_business_day(date.today() + timedelta(days=1)) if refresh_due_10q else None
+            company_repository.update_check_state(
+                company.company_id,
+                next_check_date_10k=override_10k,
+                next_check_date_10q=override_10q,
+            )
+            refreshed_company = company_repository.get_by_cik(cik)
+            if refreshed_company is not None:
+                company = refreshed_company
+
         filing_records = _build_filing_records(
             company_id=company.company_id,
             filings=filings,
@@ -138,6 +221,14 @@ def ingest_company(ticker: str, settings: Settings) -> CompanyIngestionResult:
         stored_filing_count = filing_repository.upsert_filings(company.company_id, filing_records)
         filing_repository.set_active_window(company.company_id, active_accessions)
         stored_filings = filing_repository.list_filings(company.company_id)
+        _, skipped_cleanup_paths = _delete_inactive_filing_artifacts(
+            base_dir=settings.stock_filings_base_dir,
+            filings=stored_filings,
+        )
+        if skipped_cleanup_paths:
+            warnings.append(
+                f"Skipped inactive filing evidence cleanup for {len(skipped_cleanup_paths)} local paths"
+            )
         filing_id_by_accession = {
             filing.accession_number: filing.filing_id
             for filing in stored_filings
@@ -163,12 +254,173 @@ def ingest_company(ticker: str, settings: Settings) -> CompanyIngestionResult:
         downloaded_filings=downloaded_filings,
         normalized_fact_count=len(normalized_facts),
         stored_fact_count=stored_fact_count,
-        warnings=warnings,
+        warnings=tuple(warnings),
         company_id=company.company_id,
         stored_filing_count=stored_filing_count,
         stored_metric_count=stored_metric_count,
         active_metric_count=active_metric_count,
+        status=status,
+        sec_checked=True,
+        refresh_due_10k=refresh_due_10k,
+        refresh_due_10q=refresh_due_10q,
     )
+
+
+def _get_existing_company(settings: Settings, normalized_identifier: str) -> CompanyRecord | None:
+    if not settings.stock_sql_db_path.exists():
+        return None
+    with connect_sqlite(settings.stock_sql_db_path) as connection:
+        repository = CompanyRepository(connection)
+        repository.initialize()
+        cik = _cik_from_identifier(normalized_identifier)
+        if cik is not None:
+            return repository.get_by_cik(cik)
+        return repository.get_by_ticker(normalized_identifier)
+
+
+def _company_refresh_due(company: CompanyRecord) -> tuple[bool, bool]:
+    today = date.today()
+    return (
+        _date_is_due(company.next_check_date_10k, today),
+        _date_is_due(company.next_check_date_10q, today),
+    )
+
+
+def _date_is_due(next_check_date: date | None, today: date) -> bool:
+    return next_check_date is None or today >= next_check_date
+
+
+def _build_local_ingestion_result(
+    *,
+    settings: Settings,
+    company: CompanyRecord,
+    status: str,
+    sec_checked: bool,
+    refresh_due_10k: bool,
+    refresh_due_10q: bool,
+    warnings: tuple[str, ...] = (),
+) -> CompanyIngestionResult:
+    if company.company_id is None:
+        raise RuntimeError(f"Stored company record for CIK {company.cik} did not include a company_id")
+
+    with connect_sqlite(settings.stock_sql_db_path) as connection:
+        raw_repository = RawFactRepository(connection)
+        filing_repository = FilingRepository(connection)
+        metric_repository = FinancialMetricRepository(connection)
+        raw_repository.initialize()
+        active_filings = filing_repository.list_filings(company.company_id, {"10-K", "10-Q"}, active_only=True)
+        all_metrics = metric_repository.list_metrics(company.company_id, active_only=False)
+        active_metrics = metric_repository.list_metrics(company.company_id)
+        stored_fact_count = len(raw_repository.list_fact_records(company.cik))
+
+    filings = tuple(_filing_metadata_from_record(filing) for filing in active_filings)
+    downloaded_filings = tuple(filing.local_path for filing in active_filings)
+    return CompanyIngestionResult(
+        ticker=(company.ticker or "").upper(),
+        cik=company.cik,
+        filings=filings,
+        downloaded_filings=downloaded_filings,
+        normalized_fact_count=0,
+        stored_fact_count=0,
+        warnings=warnings,
+        company_id=company.company_id,
+        stored_filing_count=len(active_filings),
+        stored_metric_count=len(all_metrics),
+        active_metric_count=len(active_metrics),
+        status=status,
+        sec_checked=sec_checked,
+        refresh_due_10k=refresh_due_10k,
+        refresh_due_10q=refresh_due_10q,
+    )
+
+
+def _select_active_window_filings(
+    recent_filings: tuple[FilingMetadata, ...],
+    active_accessions: set[str],
+) -> tuple[FilingMetadata, ...]:
+    selected = [
+        filing
+        for filing in recent_filings
+        if filing.accession_number in active_accessions
+    ]
+    if not selected:
+        selected = _latest_filing_by_form(recent_filings)
+    return tuple(sorted(selected, key=lambda filing: (filing.filing_date, filing.accession_number)))
+
+
+def _latest_filing_by_form(filings: tuple[FilingMetadata, ...]) -> list[FilingMetadata]:
+    latest: dict[str, FilingMetadata] = {}
+    for filing in filings:
+        if filing.form not in latest or filing.filing_date > latest[filing.form].filing_date:
+            latest[filing.form] = filing
+    return list(latest.values())
+
+
+def _download_or_reuse_filing(
+    *,
+    client: SecClient,
+    filing: FilingMetadata,
+    base_dir: Path,
+    existing_filing: FilingRecord | None,
+) -> Path:
+    if existing_filing is not None and existing_filing.local_path is not None and existing_filing.local_path.exists():
+        return existing_filing.local_path
+    return download_filing_document(client, filing, base_dir)
+
+
+def _ingestion_status(existing_company: CompanyRecord | None, new_accessions: set[str]) -> str:
+    if existing_company is None:
+        return "initialized"
+    if new_accessions:
+        return "updated"
+    return "checked_no_update"
+
+
+def _filing_metadata_from_record(filing: FilingRecord) -> FilingMetadata:
+    primary_document = _primary_document_from_record(filing)
+    return FilingMetadata(
+        cik=filing.accession_number.split("-", 1)[0],
+        accession_number=filing.accession_number,
+        form=filing.form_type,
+        filing_date=filing.filing_date.isoformat(),
+        primary_document=primary_document,
+        document_url=filing.document_url or "",
+    )
+
+
+def _primary_document_from_record(filing: FilingRecord) -> str:
+    if filing.local_path is not None:
+        return filing.local_path.name
+    if filing.document_url:
+        document_name = filing.document_url.rstrip("/").rsplit("/", 1)[-1]
+        if document_name:
+            return document_name
+    return ""
+
+
+def _delete_inactive_filing_artifacts(
+    *,
+    base_dir: Path,
+    filings: list[FilingRecord],
+) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    base = base_dir.resolve()
+    removed: list[Path] = []
+    skipped: list[Path] = []
+    for filing in filings:
+        if filing.is_active_window or filing.local_path is None:
+            continue
+        resolved_path = filing.local_path.resolve()
+        if not resolved_path.exists():
+            continue
+        if not _is_safe_delete_target(resolved_path, base):
+            skipped.append(resolved_path)
+            continue
+        if _delete_filing_artifact_path(resolved_path):
+            removed.append(resolved_path)
+            removed.extend(_remove_empty_parent_dirs(resolved_path.parent, base))
+        else:
+            skipped.append(resolved_path)
+    return tuple(dict.fromkeys(removed)), tuple(dict.fromkeys(skipped))
 
 
 def delete_ingested_company(
@@ -309,7 +561,7 @@ def _build_filing_records(
     *,
     company_id: int,
     filings: tuple[FilingMetadata, ...],
-    downloaded_filings: tuple[Path, ...],
+    downloaded_filings: tuple[Path | None, ...],
     facts: list[NormalizedFact],
     active_accessions: set[str],
 ) -> list[FilingRecord]:

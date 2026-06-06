@@ -15,6 +15,7 @@ from src.processing.quality import (
     MISSING_FORM,
     MISSING_VALUE,
     NON_NUMERIC_VALUE,
+    UNSUPPORTED_FORM,
 )
 from src.processing.xbrl_normalizer import NormalizedFact
 
@@ -70,6 +71,7 @@ SKIPPED_QUALITY_FLAGS = {
     MISSING_FORM,
     MISSING_VALUE,
     NON_NUMERIC_VALUE,
+    UNSUPPORTED_FORM,
 }
 
 

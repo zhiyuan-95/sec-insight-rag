@@ -29,7 +29,7 @@ src/ingestion/company.py
   +-- src/ingestion/tickers.py        -> resolve ticker to CIK
   +-- src/ingestion/submissions.py    -> fetch SEC submissions
   +-- src/ingestion/companyfacts.py   -> fetch SEC XBRL companyfacts
-  +-- src/ingestion/filings.py        -> download 10-K and 10-Q filing HTML
+  +-- src/ingestion/filings.py        -> list and download active-window 10-K and 10-Q filing HTML
   +-- src/processing/xbrl_normalizer.py
   |     -> normalize companyfacts into NormalizedFact records
   +-- src/processing/active_window.py
@@ -196,6 +196,7 @@ experiments/
     milestone2_ingestion_showcase.py
   MS2_5/
     experiment_proposal.md
+    milestone25_live_sec_inspection.py
   MS3/
     experiment_proposal.md
   MS4/
@@ -211,7 +212,8 @@ experiments/
 - `experiments/MS1/experiment_proposal.md`: Human-inspection proposal for the Milestone 1 scaffold experiment. It defines the local project structure, settings, and API health output to inspect.
 - `experiments/MS2/experiment_proposal.md`: Human-inspection proposal for the Milestone 2 SEC/XBRL ingestion and normalization experiment. It defines input cases, intended terminal output, artifacts to inspect, edge cases, and expected outcomes.
 - `experiments/MS2/milestone2_ingestion_showcase.py`: Runnable Milestone 2 experiment script that prints the SEC/XBRL ingestion and normalization showcase described by the Milestone 2 proposal.
-- `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 company registry, update-check, active-window, and base-metric experiment. It defines existing-company, new-company, and repeated-run cases.
+- `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 Plan 2.5 ingestion manual examination harness. It defines one user-chosen ticker per run, isolated experiment storage, setup ingestion, already-ingested session inspection, 10-K and 10-Q update-check evidence, active-window evidence, compact terminal summary output, optional detailed Markdown terminal output, optional saved Markdown report, and full SQLite/CSV evidence artifacts.
+- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that prints a compact terminal summary by default, separates setup ingestion from the already-ingested session check, reports company-local existence, refresh due status, SEC check behavior, newly ingested filings, and next check dates, prints the detailed Markdown report with `--full-report`, optionally writes `experiments/MS2_5/experiment_report.md` with `--write-report`, keeps `experiments/MS2_5/experiment.db`, writes isolated filing downloads under `experiments/MS2_5/filings/`, and exports supporting CSVs under `data/exports/ms2_5/`.
 - `experiments/MS3/experiment_proposal.md`: Human-inspection proposal for the Milestone 3 indicator engine experiment. It defines formula, skipped-period, and source-metric traceability output.
 - `experiments/MS4/experiment_proposal.md`: Human-inspection proposal for the Milestone 4 deterministic financial analytics experiment. It defines trend, comparison, gap, outlier, and chart-ready output.
 - `experiments/MS5/experiment_proposal.md`: Human-inspection proposal for the Milestone 5 retrieval pipeline experiment. It defines chunking, retrieval metadata, score, source-path, and preview output.
@@ -279,9 +281,9 @@ Current files:
 - `tickers.py`: SEC ticker mapping and ticker-to-CIK resolution.
 - `submissions.py`: SEC submissions URL building and retrieval.
 - `companyfacts.py`: SEC companyfacts URL building and retrieval.
-- `filings.py`: Filing metadata selection and filing document download.
-- `refresh_policy.py`: Next-check date heuristics for 10-K and 10-Q refresh checks.
-- `company.py`: `ingest_company` orchestration and `CompanyIngestionResult`.
+- `filings.py`: Filing metadata listing, latest-form selection helpers, and filing document download.
+- `refresh_policy.py`: Next-check date heuristics for 10-K and 10-Q refresh checks, plus business-day helpers.
+- `company.py`: Refresh-aware `ingest_company` orchestration and `CompanyIngestionResult`.
 - `company.py`: also exposes `delete_ingested_company` for local company reset/delete orchestration.
 - `errors.py`: SEC ingestion error types.
 - `__init__.py`: Public exports for ingestion APIs.
@@ -290,8 +292,12 @@ Key responsibilities:
 
 - Resolve ticker symbols to CIKs.
 - Retrieve SEC submissions and companyfacts JSON.
-- Select latest relevant 10-K and 10-Q filings.
-- Download filing documents.
+- Check local company registry state before live SEC ingestion.
+- Reuse local company data when refresh is not due.
+- Check SEC submissions when refresh is due and preserve local data if the refresh fails.
+- Select active-window 10-K and 10-Q filings from the latest 5 annual and latest 12 quarterly fact periods.
+- Download missing active-window filing documents and reuse already downloaded filing documents.
+- Delete inactive downloaded filing evidence while preserving filing metadata and raw XBRL facts.
 - Coordinate current company ingestion by calling processing and storage modules.
 - Coordinate local company deletion by calling storage repositories and guarded filing cleanup.
 - Calculate heuristic next-check dates for annual and quarterly filing refreshes.
@@ -321,7 +327,8 @@ Current files:
 Key responsibilities:
 
 - Normalize SEC companyfacts into auditable fact records.
-- Store the common supported `us-gaap` concept list for 10-K and 10-Q forms by default.
+- Support broad raw-archive normalization across all requested forms, taxonomies, and concepts.
+- Keep the common supported `us-gaap` concept list for selective metric mapping and reporting, not as the raw archive limit.
 - Preserve raw values separately from parsed numeric values.
 - Normalize CIK, taxonomy, concept, unit, periods, fiscal year/period, form, filing date, accession number, frame, and source metadata.
 - Add quality flags for missing, malformed, unsupported, duplicate, or ambiguous facts.
@@ -483,7 +490,9 @@ tests/
   test_health.py
   test_main.py
   test_milestone2_experiment.py
+  test_milestone25_experiment.py
   test_plan25_repositories.py
+  test_refresh_policy.py
   test_sec_client.py
   test_settings.py
   test_submissions.py
@@ -501,14 +510,16 @@ Current coverage areas:
 - Ticker mapping and ticker-to-CIK resolution.
 - Submissions and companyfacts retrieval helpers.
 - Filing metadata selection and filing download helpers.
+- Refresh date business-day and market-holiday heuristics.
 - XBRL normalization, periods, and quality flags.
 - Active analysis window selection and base metric mapping.
 - SQLite raw fact repository.
 - SQLite company, filing, and financial metric repositories.
-- Company-level ingestion orchestration.
+- Company-level ingestion orchestration, including first-time initialization, local reuse when refresh is not due, due-refresh no-update handling, SEC refresh failure fallback, broad raw fact archiving, and active-window filing evidence cleanup.
 - Company-level reset/delete orchestration.
 - Root `main.py` report formatting.
 - Milestone 2 experiment CLI behavior for fixture mode, unsupported fixture tickers, and missing live SEC configuration.
+- Milestone 2.5 experiment CLI/report behavior for compact terminal summary output, optional detailed Markdown terminal output, optional saved Markdown report generation, isolated live-mode artifact generation, setup ingestion evidence, already-ingested session update-check decisions, newly ingested filing presentation, locked CSV export handling, and missing SEC user-agent configuration.
 
 ## Generated Or Local-Only Files
 
@@ -522,6 +533,7 @@ The following paths may exist locally but should not be treated as source archit
 - `stock_data.db`
 - downloaded files under `data_store/filings/`
 - generated exports under `data/exports/`
+- generated Milestone 2.5 experiment artifacts: optional `experiments/MS2_5/experiment_report.md`, `experiments/MS2_5/experiment.db`, and `experiments/MS2_5/filings/`
 
 ## Update Rule
 
