@@ -8,7 +8,7 @@ from src.config import load_settings
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
     app = FastAPI(
-        title="Financial Research Assistant",
+        title="SEC Insight RAG",
         version="0.1.0",
     )
     app.state.settings = load_settings()

@@ -2,7 +2,7 @@
 
 ## 1\. Project Goal
 
-This project is a backend-first financial research assistant that helps users understand company performance, risks, and possible drivers using SEC filings and XBRL financial data.
+SEC Insight RAG is a backend-first financial research system that helps users understand company performance, risks, and possible drivers using SEC filings and XBRL financial data.
 
 The system will ingest SEC filings and structured XBRL facts, calculate derived financial indicators, run deterministic financial analysis, retrieve relevant filing evidence, and generate retrieval-grounded language-model explanations. The main goal is to make financial analysis evidence-grounded, traceable, and easier to understand.
 

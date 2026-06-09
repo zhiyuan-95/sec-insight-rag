@@ -4,6 +4,8 @@
 
 This file is the current source of truth for the repository and module structure of the system.
 
+Current local repository folder name: `sec_insight_rag`.
+
 Keep this file updated whenever:
 
 - a top-level folder or important file is added, removed, or renamed

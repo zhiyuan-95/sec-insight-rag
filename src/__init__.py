@@ -1,1 +1,1 @@
-"""Financial Research Assistant backend package."""
+"""SEC Insight RAG backend package."""

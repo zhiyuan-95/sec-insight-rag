@@ -1,6 +1,6 @@
-# Financial Research Assistant
+# SEC Insight RAG
 
-Backend-first financial research assistant for evidence-grounded analysis of SEC filings and XBRL financial data.
+Backend-first SEC Insight RAG system for evidence-grounded analysis of SEC filings and XBRL financial data.
 
 ## Local Setup
 

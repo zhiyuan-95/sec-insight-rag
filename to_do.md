@@ -34,12 +34,11 @@
 
 \------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-2\. basically I want to write an app that trace and track the discussion that we made in during the vibe coding. the discussion and the follow up of the regrading the discussion, and the final decision. the overall structure should align with the discussion.txt in financial research assistant. but maybe it can automatically detect the user question is about which previous topic and categorize it into the corresponding topic. user decide if you want add this question and the response of the ai to the discussion, and app with provide a recommended discussion. the result why I think this kind of app might needed is because human brain is jumpy, so that topic might switches from one to another, sometimes we get lost, and I want to get a specific response from one specific question you asked.
+2\. basically I want to write an app that trace and track the discussion that we made in during the vibe coding. the discussion and the follow up of the regrading the discussion, and the final decision. the overall structure should align with the discussion.txt in sec_insight_rag. but maybe it can automatically detect the user question is about which previous topic and categorize it into the corresponding topic. user decide if you want add this question and the response of the ai to the discussion, and app with provide a recommended discussion. the result why I think this kind of app might needed is because human brain is jumpy, so that topic might switches from one to another, sometimes we get lost, and I want to get a specific response from one specific question you asked.
 
 \------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 \------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
 
 
 

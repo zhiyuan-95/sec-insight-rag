@@ -1,7 +1,7 @@
 [project]
-name = "financial-research-assistant"
+name = "sec-insight-rag"
 version = "0.1.0"
-description = "Backend-first evidence-grounded financial research assistant."
+description = "Backend-first SEC Insight RAG system for evidence-grounded financial analysis."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
