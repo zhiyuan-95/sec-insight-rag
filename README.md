@@ -1,4 +1,4 @@
-# Financial Research Assistant
+# SEC-insight-rag
 
 Backend-first financial research assistant for evidence-grounded analysis of SEC filings and XBRL financial data.
 
