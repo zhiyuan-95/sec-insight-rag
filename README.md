@@ -1,4 +1,8 @@
+<<<<<<< HEAD
 # SEC Insight RAG
+=======
+# SEC-insight-rag
+>>>>>>> ed736738427f1a2d7b78ecb406a35c24b8492ff6
 
 Backend-first SEC Insight RAG system for evidence-grounded analysis of SEC filings and XBRL financial data.
 
