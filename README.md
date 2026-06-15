@@ -10,12 +10,6 @@ Install dependencies with `uv`:
 uv sync
 ```
 
-Run the test suite:
-
-```powershell
-uv run pytest
-```
-
 Start the local FastAPI backend:
 
 ```powershell
@@ -55,13 +49,11 @@ Implemented so far:
 - Typed settings loader
 - FastAPI app factory
 - `GET /health`
-- Unit tests for settings and health checks
 - SEC ticker-to-CIK lookup helpers
 - SEC submissions and companyfacts retrieval helpers
 - Latest 10-K/10-Q filing selection and primary document download helpers
 - XBRL companyfacts normalization into raw fact records
 - SQLite storage for normalized raw XBRL facts
-- Unit tests for ingestion, normalization, and raw fact persistence
 
 - `ingest_company(...)` exported from `src.ingestion` to orchestrate ticker resolution, SEC retrieval, filing downloads, XBRL normalization, and SQLite persistence
 

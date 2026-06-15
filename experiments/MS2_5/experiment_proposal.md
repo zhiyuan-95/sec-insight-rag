@@ -7,8 +7,8 @@ company ingestion workflow. It lets a human inspect what the actual
 `ingest_company()` workflow creates, reuses, refreshes, and preserves for one
 manually chosen company.
 
-The experiment uses live SEC behavior and isolated local storage. It should not
-mutate the real project database.
+The experiment uses live SEC behavior and persistent isolated local storage. It
+should not mutate the real project database.
 
 The experiment presents evidence. It does not decide success, failure, or
 partial success. The project owner reviews the generated report, SQLite
@@ -27,15 +27,15 @@ company request
 ```
 
 The experiment should show whether a chosen ticker can be initialized through
-the real ingestion workflow, then inspected as an already-ingested company so
-the local refresh decision, SEC check behavior, newly ingested filings, and next
-check dates are visible.
+the real ingestion workflow, then preserved in steady experiment storage so
+later runs can inspect already-ingested behavior, local refresh decisions, SEC
+check behavior, newly ingested filings, and next check dates.
 
 ## Human Question
 
 For a company I choose, what does Plan 2.5 ingestion do during setup and during
-the next already-ingested session: local existence, refresh due status, SEC
-update check, newly ingested filings, next check dates, and stored evidence?
+later already-ingested sessions: local existence, refresh due status, SEC update
+check, newly ingested filings, next check dates, and stored evidence?
 
 ## Milestone Scope
 
@@ -44,9 +44,10 @@ This experiment covers:
 - one manually chosen ticker per run
 - the actual `src.ingestion.ingest_company()` workflow
 - live SEC company initialization through Plan 2.5 ingestion
-- isolated experiment storage
-- first-time setup ingestion
-- already-ingested session inspection after setup
+- persistent isolated experiment storage
+- first-time setup ingestion when the ticker is absent from experiment storage
+- already-ingested inspection when the ticker is present from a prior run
+- already-ingested session inspection after the current setup or reuse step
 - company registry state
 - filing inventory state
 - full normalized SEC companyfacts archive in `raw_xbrl_facts`
@@ -69,26 +70,32 @@ grading.
 experiments/MS2_5/
   experiment_proposal.md
   milestone25_live_sec_inspection.py
+  experiment_report.md
+
+experiments/storage/
   experiment.db
   filings/
 
-data/exports/ms2_5/
-  companies.csv
-  filings.csv
-  raw_xbrl_facts.csv
-  financial_metrics.csv
-  metric_traceability_sample.csv
+data/exports/
+  ms2_5/
+    companies.csv
+    filings.csv
+    raw_xbrl_facts.csv
+    financial_metrics.csv
+    metric_traceability_sample.csv
 ```
 
 The experiment should print a compact terminal summary by default.
-`experiment.db` and the CSV exports should overwrite stable paths on each run.
+`experiments/storage/experiment.db` should persist across runs and across
+milestone experiments. The CSV exports should overwrite stable paths on each
+run.
 The detailed Markdown report should be printed only when the user asks for it
 with `--full-report`. `experiment_report.md` should be written only when the
 user asks for the saved Markdown artifact with `--write-report`.
 
 ## Data Mode
 
-This experiment uses live SEC behavior and isolated local storage.
+This experiment uses live SEC behavior and persistent isolated local storage.
 
 ```text
 live
@@ -97,17 +104,18 @@ live
   May observe different SEC data depending on the run date.
 
 isolated local storage
-  Writes to experiments/MS2_5/experiment.db.
-  Writes filing downloads to experiments/MS2_5/filings/.
+  Writes to experiments/storage/experiment.db.
+  Writes filing downloads to experiments/storage/filings/.
   Does not write to the real stock_data.db.
   Does not write filing downloads to the real data_store/filings/ path.
-  Keeps the experiment database after the run for manual SQLite inspection.
+  Keeps the experiment database after and between runs for manual SQLite
+  inspection.
 ```
 
 The experiment should not use the real project database as its write target.
-That keeps first-time ingestion, refresh-date generation, active-window
-selection, and filing evidence storage inspectable without changing real local
-company state.
+That keeps first-time ingestion, repeat-run reuse, refresh-date generation,
+active-window selection, and filing evidence storage inspectable without
+changing real local company state.
 
 ## Command
 
@@ -136,7 +144,9 @@ Rules:
 - `--full-report` prints the detailed Markdown report to the terminal
 - `--write-report` writes the detailed Markdown report to `experiment_report.md`
 - both 10-K and 10-Q behavior are presented for that ticker
-- hidden test/support options may override the database, report, filings, and
+- normal runs do not delete `experiments/storage/experiment.db`; repeat runs
+  should make already-ingested behavior visible
+- hidden support options may override the database, report, filings, and
   export paths, but normal use should rely on the stable paths above
 
 ## Report And Evidence Artifacts
@@ -150,7 +160,7 @@ compact terminal stdout
 Kept SQLite artifact:
 
 ```text
-experiments/MS2_5/experiment.db
+experiments/storage/experiment.db
 ```
 
 Supporting CSV artifacts:
@@ -163,9 +173,10 @@ The compact terminal report should show the operational decision path first:
 whether the company is local, whether an update check is due this session,
 whether SEC was checked, whether new filing data was ingested, and the next
 10-K/10-Q check dates after the session. Full rows should remain available in
-`experiment.db` and CSV exports. If `--full-report` is used, the detailed
-Markdown report should show compact table samples. If `--write-report` is used,
-the same detailed Markdown report should also be written to:
+`experiments/storage/experiment.db` and CSV exports. If `--full-report` is used,
+the detailed Markdown report should show compact table samples. If
+`--write-report` is used, the same detailed Markdown report should also be
+written to:
 
 ```text
 experiments/MS2_5/experiment_report.md
@@ -238,7 +249,8 @@ already-ingested session decision.
 Purpose:
 
 Show what the system creates when the chosen ticker is missing from the
-isolated experiment database and the real Plan 2.5 ingestion workflow is used.
+persistent isolated experiment database, and what it reuses when the ticker is
+already present from an earlier experiment run.
 
 Evidence to present:
 
@@ -352,6 +364,7 @@ Evidence to present:
 - Do not duplicate SEC HTTP logic inside the experiment script.
 - Do not define pass/fail labels inside the experiment script.
 - Do not write to `stock_data.db`.
+- Do not delete or reset `experiments/storage/experiment.db` at startup.
 - Do not print secrets or the actual `SEC_USER_AGENT` value.
 - Keep the default terminal output short and point to the SQLite database, CSV
   exports, filing downloads, and optional detailed report.
@@ -398,7 +411,7 @@ At the end of the experiment, the project owner should have enough evidence to
 inspect:
 
 - which ticker was used
-- whether first-time setup created local state
+- whether first-time setup created local state or a repeat run reused it
 - whether the company exists in local storage for an already-ingested session
 - whether 10-K or 10-Q refresh checks are due
 - whether SEC was contacted for update checking

@@ -12,7 +12,7 @@ Keep this file updated whenever:
 - a `src/` module responsibility changes
 - a planned module becomes implemented
 - generated storage locations change
-- tests are added for a new system layer
+- important local verification workflows change
 
 Use `proposal.md` for the product goal, architecture direction, MVP scope, and milestones. Use this file for the most updated structure of the actual system. If `proposal.md` and this file disagree about current folders or module responsibilities, this file should be updated to reflect the actual repository structure.
 
@@ -138,18 +138,17 @@ The important rule is that each box should remain traceable. Reported facts, cal
   docs/
   experiments/
   src/
-  tests/
   stock_data.db
 ```
 
 ## Top-Level Responsibilities
 
 - `.gitignore`: Git ignore rules.
-- `README.md`: Local setup, run, and test notes.
+- `README.md`: Local setup and run notes.
 - `agents.md`: Project instructions for coding agents.
 - `config.env`: Local configuration and secrets. Do not treat as public documentation.
 - `discussion.txt`: Architecture discussion, follow-up questions, and decision notes.
-- `experiments/`: Milestone experiment folders, local experiment proposals, and future runnable experiment scripts. Explicit milestone experiment designs live in each `experiments/MS*/experiment_proposal.md` file.
+- `experiments/`: Milestone experiment folders, local experiment proposals, runnable experiment scripts, and shared generated experiment storage. Explicit milestone experiment designs live in each `experiments/MS*/experiment_proposal.md` file.
 - `main.py`: Local CLI-style script that runs company ingestion and prints a SEC/XBRL ingestion report.
 - `plan1.txt`: Historical Milestone 1 scaffold plan.
 - `plan2.txt`: Historical SEC/XBRL ingestion and normalization milestone plan.
@@ -172,7 +171,7 @@ data_store/
   filings/
 ```
 
-- `data/fixtures/`: Saved SEC API responses and sample data used by tests. Treat fixtures as immutable test inputs.
+- `data/fixtures/`: Saved SEC API responses and sample data. Treat fixtures as immutable inputs.
 - `data/exports/`: Generated CSV export location.
 - `data_store/filings/`: Downloaded SEC filing documents.
 
@@ -191,6 +190,7 @@ docs/
 
 ```text
 experiments/
+  storage/
   MS1/
     experiment_proposal.md
   MS2/
@@ -214,8 +214,9 @@ experiments/
 - `experiments/MS1/experiment_proposal.md`: Human-inspection proposal for the Milestone 1 scaffold experiment. It defines the local project structure, settings, and API health output to inspect.
 - `experiments/MS2/experiment_proposal.md`: Human-inspection proposal for the Milestone 2 SEC/XBRL ingestion and normalization experiment. It defines input cases, intended terminal output, artifacts to inspect, edge cases, and expected outcomes.
 - `experiments/MS2/milestone2_ingestion_showcase.py`: Runnable Milestone 2 experiment script that prints the SEC/XBRL ingestion and normalization showcase described by the Milestone 2 proposal.
-- `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 Plan 2.5 ingestion manual examination harness. It defines one user-chosen ticker per run, isolated experiment storage, setup ingestion, already-ingested session inspection, 10-K and 10-Q update-check evidence, active-window evidence, compact terminal summary output, optional detailed Markdown terminal output, optional saved Markdown report, and full SQLite/CSV evidence artifacts.
-- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that prints a compact terminal summary by default, separates setup ingestion from the already-ingested session check, reports company-local existence, refresh due status, SEC check behavior, newly ingested filings, and next check dates, prints the detailed Markdown report with `--full-report`, optionally writes `experiments/MS2_5/experiment_report.md` with `--write-report`, keeps `experiments/MS2_5/experiment.db`, writes isolated filing downloads under `experiments/MS2_5/filings/`, and exports supporting CSVs under `data/exports/ms2_5/`.
+- `experiments/storage/`: Generated shared experiment storage. Current MS2.5 live runs use `experiments/storage/experiment.db` and `experiments/storage/filings/` so later milestone experiments can inspect the same isolated state without touching `stock_data.db`.
+- `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 Plan 2.5 ingestion manual examination harness. It defines one user-chosen ticker per run, persistent shared isolated experiment storage, setup ingestion, already-ingested session inspection, 10-K and 10-Q update-check evidence, active-window evidence, compact terminal summary output, optional detailed Markdown terminal output, optional saved Markdown report, and full SQLite/CSV evidence artifacts.
+- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that prints a compact terminal summary by default, separates setup ingestion from the already-ingested session check, reports company-local existence, refresh due status, SEC check behavior, newly ingested filings, and next check dates, prints the detailed Markdown report with `--full-report`, optionally writes `experiments/MS2_5/experiment_report.md` with `--write-report`, preserves `experiments/storage/experiment.db` across runs, writes isolated filing downloads under `experiments/storage/filings/`, and exports supporting CSVs under `data/exports/ms2_5/`.
 - `experiments/MS3/experiment_proposal.md`: Human-inspection proposal for the Milestone 3 indicator engine experiment. It defines formula, skipped-period, and source-metric traceability output.
 - `experiments/MS4/experiment_proposal.md`: Human-inspection proposal for the Milestone 4 deterministic financial analytics experiment. It defines trend, comparison, gap, outlier, and chart-ready output.
 - `experiments/MS5/experiment_proposal.md`: Human-inspection proposal for the Milestone 5 retrieval pipeline experiment. It defines chunking, retrieval metadata, score, source-path, and preview output.
@@ -467,7 +468,7 @@ Planned responsibilities:
 
 - Check analysis quality.
 - Validate evidence references.
-- Support future regression tests for generated analysis quality.
+- Support future manual evaluation of generated analysis quality.
 
 ## Planned But Not Currently Present
 
@@ -479,69 +480,36 @@ src/workflows/
 
 When added, it should own thin application workflow orchestration. For example, `src/workflows/company_ingestion.py` can call ingestion, processing, storage, retrieval, analytics, or analysis modules without duplicating their internal logic.
 
-## Tests
+## Verification
 
-```text
-tests/
-  test_base_metrics.py
-  test_company_deletion.py
-  test_company_ingestion.py
-  test_companyfacts.py
-  test_facts_repository.py
-  test_filings.py
-  test_health.py
-  test_main.py
-  test_milestone2_experiment.py
-  test_milestone25_experiment.py
-  test_plan25_repositories.py
-  test_refresh_policy.py
-  test_sec_client.py
-  test_settings.py
-  test_submissions.py
-  test_tickers.py
-  test_xbrl_normalizer.py
-  test_xbrl_periods.py
-  test_xbrl_quality.py
-```
+This project does not maintain an automated `tests/` suite. Verification is
+manual and experiment-driven:
 
-Current coverage areas:
-
-- Settings loading and model configuration.
-- FastAPI health route.
-- SEC client behavior.
-- Ticker mapping and ticker-to-CIK resolution.
-- Submissions and companyfacts retrieval helpers.
-- Filing metadata selection and filing download helpers.
-- Refresh date business-day and market-holiday heuristics.
-- XBRL normalization, periods, and quality flags.
-- Active analysis window selection and base metric mapping.
-- SQLite raw fact repository.
-- SQLite company, filing, and financial metric repositories.
-- Company-level ingestion orchestration, including first-time initialization, local reuse when refresh is not due, due-refresh no-update handling, SEC refresh failure fallback, broad raw fact archiving, and active-window filing evidence cleanup.
-- Company-level reset/delete orchestration.
-- Root `main.py` report formatting.
-- Milestone 2 experiment CLI behavior for fixture mode, unsupported fixture tickers, and missing live SEC configuration.
-- Milestone 2.5 experiment CLI/report behavior for compact terminal summary output, optional detailed Markdown terminal output, optional saved Markdown report generation, isolated live-mode artifact generation, setup ingestion evidence, already-ingested session update-check decisions, newly ingested filing presentation, locked CSV export handling, and missing SEC user-agent configuration.
+- Use milestone experiment scripts under `experiments/MS*/` for human-readable
+  workflow inspection.
+- Inspect generated SQLite databases, filing downloads, CSV exports, terminal
+  reports, and optional Markdown reports.
+- Use `uv run python ...` for local scripts and experiment runs.
+- Do not add pytest files unless the project testing policy changes again.
 
 ## Generated Or Local-Only Files
 
 The following paths may exist locally but should not be treated as source architecture:
 
 - `.venv/`
-- `.pytest_cache/`
 - `__pycache__/`
 - `src/**/__pycache__/`
-- `tests/__pycache__/`
 - `stock_data.db`
 - downloaded files under `data_store/filings/`
 - generated exports under `data/exports/`
-- generated Milestone 2.5 experiment artifacts: optional `experiments/MS2_5/experiment_report.md`, `experiments/MS2_5/experiment.db`, and `experiments/MS2_5/filings/`
+- generated shared experiment storage under `experiments/storage/`, including `experiment.db` and `filings/`
+- generated Milestone 2.5 report artifact: optional `experiments/MS2_5/experiment_report.md`
 
 ## Update Rule
 
 When the repository structure changes:
 
-1. Update this file first if the change affects folders, modules, file responsibilities, generated storage locations, or tests.
+1. Update this file first if the change affects folders, modules, file responsibilities, generated storage locations, or verification workflows.
 2. Update `proposal.md` only if the change affects product scope, milestones, or architecture direction.
 3. Keep `plan1.txt` and `plan2.txt` historical unless correcting those specific milestone notes.
 4. Do not list cache files, virtual environments, or generated runtime data as architecture.

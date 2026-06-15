@@ -1,6 +1,5 @@
 .venv/
 __pycache__/
-.pytest_cache/
 *.py[cod]
 
 # Local configuration and secrets
@@ -16,6 +15,7 @@ stock_data.db
 *.db
 /storage/
 data_store/
+experiments/storage/
 
 # Generated exports
 data/exports/*

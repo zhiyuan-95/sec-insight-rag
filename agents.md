@@ -9,8 +9,8 @@ how to make changes, how to preserve architecture boundaries, how to use LLMs,
 and how to report completed work.
 
 Do not treat this file as the live repository map. For the current folder
-layout, implemented modules, generated storage locations, and test inventory,
-read `docs/structure.md`.
+layout, implemented modules, generated storage locations, and verification
+workflow, read `docs/structure.md`.
 
 ## Repository-specific priority
 
@@ -175,7 +175,7 @@ Rules:
   required.
 - Keep every LLM prompt template in `src/analyze/prompts.py`.
 - Do not define prompt strings inline in API routes, ingestion code, retrieval
-  code, storage code, workflows, or tests.
+  code, storage code, or workflows.
 - Prompt templates should make the model separate reported facts, base metrics,
   derived indicators, financial data analysis results, semantic filing analysis,
   and interpretations.
@@ -241,7 +241,6 @@ Rules:
 - Do not rename files, functions, classes, modules, or public interfaces unless
   explicitly asked.
 - Do not change database schema unless explicitly asked.
-- Do not change test expectations just to make tests pass.
 - Keep local docs synchronized with behavior when the task changes documented
   behavior.
 - Respect user-owned notes and planning files; do not rewrite them unless the
@@ -274,17 +273,17 @@ If the task is small and unambiguous, proceed without unnecessary questions.
 - Do not duplicate existing behavior.
 - Update docs only when behavior, structure, or responsibilities change.
 
-## Testing
+## Verification
 
-- Add or update tests for new behavior.
-- Use mocked API responses when testing SEC/XBRL API logic.
-- Prefer `uv run pytest ...` for test execution in this repo.
+This project does not maintain an automated `tests/` suite.
+
+- Do not add pytest files or test-only dependencies unless the user explicitly
+  changes the project testing policy.
 - Prefer `uv run python ...` for local scripts and experiment runs.
-- Run relevant tests after changes when possible.
-- If tests fail, explain the failure before attempting a fix.
-- Do not hide failing tests.
-- Do not weaken tests unless the expected behavior has legitimately changed.
-- For bug fixes, add a regression test when practical.
+- Use milestone experiments, terminal reports, generated SQLite databases, CSV
+  exports, and downloaded filing artifacts for manual verification.
+- When behavior is changed, explain what manual verification was performed or
+  why it was not performed.
 
 ## Documentation rules
 
@@ -295,7 +294,7 @@ Update `docs/structure.md` when changes affect:
 - Module responsibilities.
 - Storage locations.
 - Generated artifacts.
-- Test coverage areas.
+- Verification workflows.
 
 Update `proposal.md` only when changes affect product goals, architecture
 direction, MVP scope, or milestone intent.
@@ -321,8 +320,8 @@ Do not add:
 - New data stores unless SQLite/local files are insufficient for the current
   milestone.
 
-Prefer clear functions, explicit data flow, small modules, focused tests,
-traceable outputs, deterministic calculations, and minimal moving parts.
+Prefer clear functions, explicit data flow, small modules, traceable outputs,
+deterministic calculations, and minimal moving parts.
 
 ## After coding
 
@@ -332,10 +331,9 @@ After implementation, summarize:
 - Important implementation decisions.
 - Assumptions made.
 - Edge cases handled.
-- Tests added or updated.
-- Tests run and their results.
-- Any tests not run and why.
+- Manual verification performed.
+- Any verification not run and why.
 
 If the change affected repository structure, module responsibilities, important
-files, storage locations, generated artifacts, or test coverage areas, mention
+files, storage locations, generated artifacts, or verification workflows, mention
 that `docs/structure.md` was updated.

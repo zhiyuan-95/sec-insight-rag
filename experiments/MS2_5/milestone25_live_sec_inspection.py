@@ -26,9 +26,10 @@ from src.ingestion import (
 from src.storage import CompanyRepository, connect_sqlite, initialize_database
 
 EXPERIMENT_DIR = PROJECT_ROOT / "experiments" / "MS2_5"
-DEFAULT_DB_PATH = EXPERIMENT_DIR / "experiment.db"
+EXPERIMENT_STORAGE_DIR = PROJECT_ROOT / "experiments" / "storage"
+DEFAULT_DB_PATH = EXPERIMENT_STORAGE_DIR / "experiment.db"
 DEFAULT_REPORT_PATH = EXPERIMENT_DIR / "experiment_report.md"
-DEFAULT_FILINGS_DIR = EXPERIMENT_DIR / "filings"
+DEFAULT_FILINGS_DIR = EXPERIMENT_STORAGE_DIR / "filings"
 DEFAULT_EXPORTS_DIR = PROJECT_ROOT / "data" / "exports" / "ms2_5"
 FORMS = ("10-K", "10-Q")
 
@@ -115,8 +116,7 @@ def run_experiment(
     settings: Settings,
     paths: ExperimentPaths,
 ) -> ExperimentRun:
-    """Run setup ingestion, then inspect the already-ingested session path."""
-    _reset_database(paths.database)
+    """Run ingestion against steady experiment storage, then inspect the local session path."""
     run_timestamp = datetime.now(timezone.utc).isoformat()
     normalized_ticker = _normalize_ticker(ticker)
 
@@ -216,12 +216,6 @@ def _normalize_ticker(ticker: str) -> str:
     if any(char.isspace() for char in value):
         raise ValueError(f"Ticker must be a single symbol, received: {ticker!r}")
     return value
-
-
-def _reset_database(database: Path) -> None:
-    database.parent.mkdir(parents=True, exist_ok=True)
-    if database.exists():
-        database.unlink()
 
 
 def _company_exists(database: Path, ticker: str) -> bool:
@@ -567,7 +561,7 @@ def format_compact_report(run: ExperimentRun, *, report_written: bool = False) -
         "Run Context",
         f"  ticker: {run.ticker}",
         f"  run timestamp: {run.run_timestamp}",
-        "  mode: live SEC, isolated experiment storage",
+        "  mode: live SEC, shared isolated experiment storage",
         f"  SEC_USER_AGENT configured: {_yes_no(run.sec_user_agent_configured)}",
         f"  report output: {'saved Markdown + compact terminal summary' if report_written else 'compact terminal summary'}",
         "",
@@ -581,14 +575,6 @@ def format_compact_report(run: ExperimentRun, *, report_written: bool = False) -
         "Already-Ingested Session Check",
     ]
     lines.extend(_session_decision_lines(run, indent="  "))
-    lines.extend(
-        [
-            f"  next 10-K check date after session: {session_after_company.get('next_check_date_10k') or 'not available'}",
-            f"  next 10-Q check date after session: {session_after_company.get('next_check_date_10q') or 'not available'}",
-            "",
-            "Stored Rows After Session",
-        ]
-    )
     lines.extend(_compact_counts(run.session_after_snapshot, indent="  "))
     lines.extend(["", "Active Window After Session"])
     lines.extend(_compact_active_window(run.session_after_snapshot, indent="  "))
@@ -685,15 +671,7 @@ def _session_decision_sections(run: ExperimentRun) -> list[str]:
             ),
         },
         {"field": "SEC update check performed", "value": _yes_no(decision.sec_checked)},
-        {"field": "SEC result", "value": _status_summary(decision)},
-        {
-            "field": "next 10-K check date after session",
-            "value": after_company.get("next_check_date_10k") or "not available",
-        },
-        {
-            "field": "next 10-Q check date after session",
-            "value": after_company.get("next_check_date_10q") or "not available",
-        },
+        {"field": "SEC result", "value": _status_summary(decision)}
     ]
     lines = _markdown_table(rows)
     lines.extend(["", "### New Filings Ingested During Session", ""])

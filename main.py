@@ -10,7 +10,7 @@ from src.ingestion import CompanyIngestionResult, FilingMetadata, ingest_company
 from src.processing import NormalizedFact
 from src.storage import CompanyRepository, FinancialMetric, FinancialMetricRepository, RawFactRepository, connect_sqlite
 
-DEFAULT_TICKER = "AAPL"
+DEFAULT_TICKER = "MSFT"
 PERIOD_ORDER = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "FY": 5}
 FINANCIAL_STATEMENT_BY_CONCEPT = {
     "Assets": "Balance sheet",

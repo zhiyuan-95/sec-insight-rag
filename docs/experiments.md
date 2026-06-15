@@ -12,9 +12,9 @@ actual experiment design.
 ## Core Rule
 
 ```text
-Tests verify.
 Experiments demonstrate.
 Milestone proposal files define exactly what to print and inspect.
+Manual review is the verification path.
 ```
 
 An experiment is a runnable, human-readable showcase of one milestone's main
@@ -74,6 +74,8 @@ local
   Uses local project storage such as stock_data.db and data_store/filings/.
   May write generated local storage when the experiment intentionally ingests
   or refreshes a company.
+  Shared isolated experiment storage should live under experiments/storage/
+  when multiple milestone experiments need to inspect the same generated state.
 
 live
   Contacts an external service such as SEC or Gemini.
