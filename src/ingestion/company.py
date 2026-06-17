@@ -9,6 +9,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable, TYPE_CHECKING
 
+from src.indicators import calculate_indicators
 from src.ingestion.companyfacts import get_companyfacts
 from src.ingestion.errors import SecIngestionError
 from src.ingestion.filings import FilingMetadata, download_filing_document, list_recent_filings
@@ -29,6 +30,7 @@ from src.storage import (
     CompanyRepository,
     FilingRecord,
     FilingRepository,
+    FinancialIndicatorRepository,
     FinancialMetric,
     FinancialMetricRepository,
     RawFactRepository,
@@ -56,6 +58,8 @@ class CompanyIngestionResult:
     stored_filing_count: int = 0
     stored_metric_count: int = 0
     active_metric_count: int = 0
+    stored_indicator_count: int = 0
+    active_indicator_count: int = 0
     status: str = "updated"
     sec_checked: bool = True
     refresh_due_10k: bool | None = None
@@ -70,6 +74,7 @@ class CompanyDeletionResult:
     cik: str | None
     company_id: int | None
     company_found: bool
+    indicator_rows_deleted: int
     metric_rows_deleted: int
     filing_rows_deleted: int
     raw_fact_rows_deleted: int
@@ -147,6 +152,7 @@ def _ingest_company_from_sec(
         company_repository = CompanyRepository(connection)
         filing_repository = FilingRepository(connection)
         metric_repository = FinancialMetricRepository(connection)
+        indicator_repository = FinancialIndicatorRepository(connection)
 
         raw_repository.initialize()
         existing_company = company_repository.get_by_cik(cik)
@@ -245,7 +251,13 @@ def _ingest_company_from_sec(
             filing_id_by_accession=filing_id_by_accession,
         )
         stored_metric_count = metric_repository.upsert_metrics(financial_metrics)
-        active_metric_count = len(metric_repository.list_metrics(company.company_id))
+        active_metrics = metric_repository.list_metrics(company.company_id)
+        active_metric_count = len(active_metrics)
+        stored_indicator_count, active_indicator_count = _refresh_company_indicators(
+            company_id=company.company_id,
+            active_metrics=active_metrics,
+            indicator_repository=indicator_repository,
+        )
 
     return CompanyIngestionResult(
         ticker=normalized_ticker,
@@ -259,6 +271,8 @@ def _ingest_company_from_sec(
         stored_filing_count=stored_filing_count,
         stored_metric_count=stored_metric_count,
         active_metric_count=active_metric_count,
+        stored_indicator_count=stored_indicator_count,
+        active_indicator_count=active_indicator_count,
         status=status,
         sec_checked=True,
         refresh_due_10k=refresh_due_10k,
@@ -290,6 +304,47 @@ def _date_is_due(next_check_date: date | None, today: date) -> bool:
     return next_check_date is None or today >= next_check_date
 
 
+def _refresh_company_metrics_from_stored_facts(
+    *,
+    company_id: int,
+    stored_fact_records: list,
+    stored_filings: list[FilingRecord],
+    metric_repository: FinancialMetricRepository,
+) -> int:
+    stored_facts = [record.fact for record in stored_fact_records]
+    if not stored_facts:
+        return 0
+    active_keys = active_period_keys(stored_facts)
+    filing_id_by_accession = {
+        filing.accession_number: filing.filing_id
+        for filing in stored_filings
+        if filing.filing_id is not None
+    }
+    base_metrics = map_raw_facts_to_base_metrics(
+        ((record.raw_fact_id, record.fact) for record in stored_fact_records),
+        active_keys,
+    )
+    financial_metrics = _build_financial_metrics(
+        company_id=company_id,
+        base_metrics=base_metrics,
+        filing_id_by_accession=filing_id_by_accession,
+    )
+    return metric_repository.upsert_metrics(financial_metrics)
+
+
+def _refresh_company_indicators(
+    *,
+    company_id: int,
+    active_metrics: list[FinancialMetric],
+    indicator_repository: FinancialIndicatorRepository,
+) -> tuple[int, int]:
+    indicator_repository.deactivate_by_company_id(company_id)
+    indicators = calculate_indicators(company_id, active_metrics)
+    stored_indicator_count = indicator_repository.upsert_indicators(indicators)
+    active_indicator_count = len(indicator_repository.list_indicators(company_id))
+    return stored_indicator_count, active_indicator_count
+
+
 def _build_local_ingestion_result(
     *,
     settings: Settings,
@@ -307,11 +362,27 @@ def _build_local_ingestion_result(
         raw_repository = RawFactRepository(connection)
         filing_repository = FilingRepository(connection)
         metric_repository = FinancialMetricRepository(connection)
+        indicator_repository = FinancialIndicatorRepository(connection)
         raw_repository.initialize()
+        stored_fact_records = raw_repository.list_fact_records(company.cik)
+        stored_filings = filing_repository.list_filings(company.company_id)
+        _refresh_company_metrics_from_stored_facts(
+            company_id=company.company_id,
+            stored_fact_records=stored_fact_records,
+            stored_filings=stored_filings,
+            metric_repository=metric_repository,
+        )
         active_filings = filing_repository.list_filings(company.company_id, {"10-K", "10-Q"}, active_only=True)
         all_metrics = metric_repository.list_metrics(company.company_id, active_only=False)
         active_metrics = metric_repository.list_metrics(company.company_id)
-        stored_fact_count = len(raw_repository.list_fact_records(company.cik))
+        stored_indicator_count, active_indicator_count = _refresh_company_indicators(
+            company_id=company.company_id,
+            active_metrics=active_metrics,
+            indicator_repository=indicator_repository,
+        )
+        all_indicators = indicator_repository.list_indicators(company.company_id, active_only=False)
+        active_indicators = indicator_repository.list_indicators(company.company_id)
+        stored_fact_count = len(stored_fact_records)
 
     filings = tuple(_filing_metadata_from_record(filing) for filing in active_filings)
     downloaded_filings = tuple(filing.local_path for filing in active_filings)
@@ -327,6 +398,8 @@ def _build_local_ingestion_result(
         stored_filing_count=len(active_filings),
         stored_metric_count=len(all_metrics),
         active_metric_count=len(active_metrics),
+        stored_indicator_count=max(len(all_indicators), stored_indicator_count),
+        active_indicator_count=max(len(active_indicators), active_indicator_count),
         status=status,
         sec_checked=sec_checked,
         refresh_due_10k=refresh_due_10k,
@@ -443,6 +516,7 @@ def delete_ingested_company(
     company_found = False
     recorded_filing_paths: tuple[Path, ...] = ()
 
+    indicator_rows_deleted = 0
     metric_rows_deleted = 0
     filing_rows_deleted = 0
     raw_fact_rows_deleted = 0
@@ -456,6 +530,7 @@ def delete_ingested_company(
         company_repository = CompanyRepository(connection)
         filing_repository = FilingRepository(connection)
         metric_repository = FinancialMetricRepository(connection)
+        indicator_repository = FinancialIndicatorRepository(connection)
         raw_repository.initialize()
 
         company = (
@@ -479,6 +554,7 @@ def delete_ingested_company(
             for filing in stored_filings
             if filing.local_path is not None
         )
+        indicator_rows_deleted = indicator_repository.delete_by_company_id(company_id)
         metric_rows_deleted = metric_repository.delete_by_company_id(company_id)
         filing_rows_deleted = filing_repository.delete_by_company_id(company_id)
 
@@ -506,6 +582,7 @@ def delete_ingested_company(
         cik=cik,
         company_id=company_id,
         company_found=company_found,
+        indicator_rows_deleted=indicator_rows_deleted,
         metric_rows_deleted=metric_rows_deleted,
         filing_rows_deleted=filing_rows_deleted,
         raw_fact_rows_deleted=raw_fact_rows_deleted,
@@ -706,6 +783,7 @@ def _company_not_found_result(identifier: str, cik: str | None) -> CompanyDeleti
         cik=cik,
         company_id=None,
         company_found=False,
+        indicator_rows_deleted=0,
         metric_rows_deleted=0,
         filing_rows_deleted=0,
         raw_fact_rows_deleted=0,

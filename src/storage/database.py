@@ -145,4 +145,51 @@ def initialize_database(connection: sqlite3.Connection) -> None:
         ON financial_metrics (raw_fact_id)
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS financial_indicators (
+            indicator_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            indicator_name TEXT NOT NULL,
+            formula_name TEXT NOT NULL,
+            formula_version TEXT NOT NULL,
+            value_numeric TEXT,
+            unit TEXT NOT NULL,
+            period_type TEXT NOT NULL,
+            fiscal_year INTEGER,
+            fiscal_period TEXT,
+            start_date TEXT,
+            end_date TEXT,
+            filing_date TEXT,
+            source_metric_ids TEXT NOT NULL,
+            source_raw_fact_ids TEXT NOT NULL,
+            source_accession_numbers TEXT NOT NULL,
+            is_active_window INTEGER NOT NULL DEFAULT 1,
+            calculation_status TEXT NOT NULL,
+            skip_reason TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE (
+                company_id,
+                indicator_name,
+                period_type,
+                fiscal_year,
+                fiscal_period,
+                formula_version
+            ),
+            FOREIGN KEY (company_id) REFERENCES companies(company_id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_financial_indicators_company_active
+        ON financial_indicators (company_id, is_active_window)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_financial_indicators_lookup
+        ON financial_indicators (company_id, indicator_name, fiscal_year, fiscal_period)
+        """
+    )
     connection.commit()

@@ -1,0 +1,73 @@
+Indicators to add later
+
+After the core indicators are stable, add:
+
+ROIC
+three-year and five-year CAGR
+accrual ratio
+stock-based compensation ratio
+dividend and repurchase indicators
+Altman Z-score
+Piotroski F-score
+Beneish M-score
+DuPont decomposition
+margin bridges
+working-capital contribution analysis
+
+
+##################################################################################################
+Sector-specific modules are necessary
+
+A universal indicator set will not work equally well for every industry.
+
+Banks
+
+Use a separate module containing:
+
+net interest margin
+efficiency ratio
+return on average assets
+return on average equity
+loan-to-deposit ratio
+nonperforming loan ratio
+net charge-off ratio
+provision coverage
+CET1 capital ratio
+deposit growth
+loan growth
+
+Current ratio, inventory turnover, and debt-to-EBITDA are generally inappropriate for banks.
+
+Insurance companies
+
+Important indicators include:
+
+premium growth
+loss ratio
+expense ratio
+combined ratio
+investment yield
+reserve development
+return on equity
+REITs
+
+Use:
+
+FFO
+AFFO
+FFO per share
+AFFO payout ratio
+occupancy rate
+same-property NOI growth
+net debt-to-EBITDAre
+SaaS companies
+
+Useful indicators include:
+
+ARR growth
+net revenue retention
+gross retention
+Rule of 40
+sales efficiency
+stock-based compensation to revenue
+FCF margin

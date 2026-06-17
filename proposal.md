@@ -207,7 +207,7 @@ Example distinction:
 
 1. Project scaffold
 
-   * Create `src/`, `data/`, `docs/`, `experiments/`, and configuration-loading structure.
+   * Create `src/`, `tests/`, `data/`, `docs/`, and configuration-loading structure.
    * Add dependency management and local run instructions.
 2. SEC/XBRL ingestion and normalization
 
@@ -253,25 +253,39 @@ Example distinction:
 8. FastAPI backend
 
    * Add ingestion, metrics, indicators, analytics, CSV export, analysis, and Q\&A endpoints.
-9. Manual evaluation
+9. Testing and evaluation
 
-    * Use milestone experiment scripts for human-readable workflow inspection.
-    * Inspect SQLite databases, filing downloads, CSV exports, and generated reports.
+    * Add unit tests for parsing, normalization, formulas, and routing.
+    * Add integration tests for one known ticker.
     * Add sample expected outputs for analysis quality review.
 
-## 8\. Manual Verification Plan
+## 8\. Testing Plan
 
-This project does not maintain an automated `tests/` suite. Verification is
-manual and experiment-driven.
+\*\*Unit tests\*\*:
 
-\*\*Milestone experiments\*\*:
+* Environment configuration loading
+* Gemini model configuration loading
+* Rejection of unsupported chat models
+* Ticker-to-CIK lookup
+* SEC companyfacts parsing
+* XBRL concept normalization
+* Company, filing, and base metric repository behavior
+* Raw XBRL fact to base metric mapping
+* Derived indicator formulas
+* Financial data analysis calculations
+* Chart-ready analytics output shape
+* CSV export formatting
 
-* Run each implemented `experiments/MS*/` script for its milestone.
-* Inspect terminal output for the operational decision path.
-* Inspect generated SQLite rows, filing paths, CSV exports, and Markdown reports.
-* Re-run experiments when local state should exercise already-ingested or refresh behavior.
+\*\*Integration tests\*\*:
 
-\*\*Manual acceptance checks\*\*:
+* Ingest one known ticker from saved SEC fixtures.
+* Store normalized facts, filing metadata, base metrics, and indicators in SQLite.
+* Generate financial data analysis results from stored facts and indicators.
+* Build retrieval chunks using built-in LlamaIndex utilities.
+* Ask one performance question and confirm evidence references are included.
+* Ask one risk question and confirm the answer uses cautious interpretation.
+
+\*\*Manual acceptance tests\*\*:
 
 * Start the FastAPI backend.
 * Ingest one company ticker.
@@ -308,5 +322,3 @@ The first version will not include:
 * Investment recommendations
 * Automatic buy/sell ratings
 * Non-GAAP reconciliation beyond what is clearly available from filings
-
-These can be added after the backend evidence pipeline is reliable.

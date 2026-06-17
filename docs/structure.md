@@ -38,6 +38,8 @@ src/ingestion/company.py
   |     -> select latest 5 annual and latest 12 quarterly active periods
   +-- src/processing/base_metrics.py
   |     -> map clean raw facts into business-friendly base metrics
+  +-- src/indicators/engine.py
+  |     -> calculate deterministic derived indicators from active base metrics
   |
   +-- src/storage/facts_repository.py
   |     -> persist normalized facts in SQLite
@@ -46,7 +48,9 @@ src/ingestion/company.py
   +-- src/storage/filings_repository.py
   |     -> persist filing inventory and active-window state
   +-- src/storage/metrics_repository.py
-        -> persist mapped base financial metrics
+  |     -> persist mapped base financial metrics
+  +-- src/storage/indicators_repository.py
+        -> persist derived financial indicators and skipped calculations
 
 Generated local data:
 
@@ -56,6 +60,7 @@ stock_data.db                SQLite database
   companies                  local company registry
   filings                    ingested filing inventory
   financial_metrics          base metrics mapped from raw XBRL facts
+  financial_indicators       derived indicators with formulas and traceability
 ```
 
 ### Backend Layer Map
@@ -79,8 +84,8 @@ Data and analysis layers
   +-- src/processing/         XBRL normalization, fact cleanup, active-window selection,
   |                            and deterministic base metric mapping
   +-- src/storage/            SQLite persistence and retrieval for raw facts,
-  |                            companies, filings, and base metrics
-  +-- src/indicators/         planned derived financial indicators
+  |                            companies, filings, base metrics, and indicators
+  +-- src/indicators/         deterministic derived financial indicators
   +-- src/analytics/          planned deterministic financial analysis
   +-- src/retrieval/          planned filing chunking and evidence retrieval
   +-- src/analyze/            planned Gemini/RAG answer synthesis
@@ -217,7 +222,8 @@ experiments/
 - `experiments/storage/`: Generated shared experiment storage. Current MS2.5 live runs use `experiments/storage/experiment.db` and `experiments/storage/filings/` so later milestone experiments can inspect the same isolated state without touching `stock_data.db`.
 - `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 Plan 2.5 ingestion manual examination harness. It defines one user-chosen ticker per run, persistent shared isolated experiment storage, setup ingestion, already-ingested session inspection, 10-K and 10-Q update-check evidence, active-window evidence, compact terminal summary output, optional detailed Markdown terminal output, optional saved Markdown report, and full SQLite/CSV evidence artifacts.
 - `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that prints a compact terminal summary by default, separates setup ingestion from the already-ingested session check, reports company-local existence, refresh due status, SEC check behavior, newly ingested filings, and next check dates, prints the detailed Markdown report with `--full-report`, optionally writes `experiments/MS2_5/experiment_report.md` with `--write-report`, preserves `experiments/storage/experiment.db` across runs, writes isolated filing downloads under `experiments/storage/filings/`, and exports supporting CSVs under `data/exports/ms2_5/`.
-- `experiments/MS3/experiment_proposal.md`: Human-inspection proposal for the Milestone 3 indicator engine experiment. It defines formula, skipped-period, and source-metric traceability output.
+- `experiments/MS3/experiment_proposal.md`: Human-inspection proposal for the Milestone 3 indicator engine experiment. It defines active accession-window scope, yearly and quarterly indicator tables for the requested catalog, skipped-period reasons, formulas, and source-metric traceability output.
+- `experiments/MS3/milestone3_indicator_engine.py`: Runnable Milestone 3 experiment script that reads stored `financial_indicators`, prints active accession-window scope, yearly and quarterly indicator tables for the requested ticker or tickers, skipped reasons, formulas, and source traceability.
 - `experiments/MS4/experiment_proposal.md`: Human-inspection proposal for the Milestone 4 deterministic financial analytics experiment. It defines trend, comparison, gap, outlier, and chart-ready output.
 - `experiments/MS5/experiment_proposal.md`: Human-inspection proposal for the Milestone 5 retrieval pipeline experiment. It defines chunking, retrieval metadata, score, source-path, and preview output.
 - `experiments/MS6/experiment_proposal.md`: Human-inspection proposal for the Milestone 6 Gemini integration experiment. It defines model, prompt-source, prompt-preview, and call-metadata output.
@@ -355,6 +361,7 @@ Current files:
 - `company_repository.py`: `CompanyRepository` and `CompanyRecord` for company identity and refresh state.
 - `filings_repository.py`: `FilingRepository` and `FilingRecord` for ingested filing metadata and active-window state.
 - `metrics_repository.py`: `FinancialMetricRepository` and `FinancialMetric` for mapped base financial metrics.
+- `indicators_repository.py`: `FinancialIndicatorRepository` for persisted derived indicator rows.
 - `__init__.py`: Public exports for storage APIs.
 
 Key responsibilities:
@@ -363,12 +370,13 @@ Key responsibilities:
 - Persist normalized raw XBRL facts.
 - Upsert facts using a stable uniqueness key.
 - Retrieve stored facts by CIK and optional concept filters.
-- Delete company-scoped raw facts, filing metadata, base metrics, and registry rows when reset orchestration requests it.
+- Delete company-scoped raw facts, filing metadata, base metrics, derived indicators, and registry rows when reset orchestration requests it.
 - Persist company registry records.
 - Persist ingested filing metadata.
 - Persist business-friendly base financial metrics mapped from raw XBRL facts.
+- Persist derived financial indicators with formula versions, skipped reasons, source metric IDs, raw fact IDs, accession numbers, and active-window state.
 - Track latest ingested filing dates and next-check dates for 10-K and 10-Q updates.
-- Mark filings and base metrics as active or inactive for the default inspection scope.
+- Mark filings, base metrics, and derived indicators as active or inactive for the default inspection scope.
 - Keep `raw_xbrl_facts` as the source-of-truth archive while active-window filters constrain normal metric retrieval.
 
 Boundary rule:
@@ -381,17 +389,23 @@ Derived financial indicator layer.
 
 Current files:
 
-- `__init__.py`: Package marker.
+- `__init__.py`: Public exports for the indicator engine.
+- `engine.py`: Calculates the requested deterministic indicator catalog from base metrics and returns calculated or skipped indicator results.
+- `formulas.py`: Formula registry with indicator names, formula text, formula version, required metrics, period type, and output unit.
+- `models.py`: Indicator dataclasses and calculation status constants.
 
 Current status:
 
-- Folder exists as a placeholder.
-- Indicator formulas are not implemented yet.
+- Indicator formula registry and deterministic engine are implemented.
+- The engine calculates from `financial_metrics` inputs only and does not read or write SQLite.
+- Results are persisted through `src/storage/indicators_repository.py`.
 
-Planned responsibilities:
+Responsibilities:
 
-- Calculate derived indicators such as revenue growth, margins, debt ratio, current ratio, free cash flow, and cash conversion.
-- Preserve formula definitions and source fact references.
+- Calculate the current requested indicator catalog, including growth, margin, return, cash generation, liquidity, leverage, operating-efficiency, and shareholder-impact indicators.
+- Treat `free_cash_flow` as a derived indicator from operating cash flow and capital expenditure, not as a raw fact or base metric.
+- Preserve formula definitions, formula versions, source metric IDs, source raw fact IDs, and source accession numbers.
+- Return skipped indicator rows with explicit reasons when inputs are missing, denominators are zero, units mismatch, prior comparable periods are missing, EBITDA is non-positive, or debt mapping is unsupported.
 
 ### `src/analytics/`
 
