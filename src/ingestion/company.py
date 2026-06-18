@@ -17,6 +17,7 @@ from src.ingestion.refresh_policy import next_business_day, next_check_date_for_
 from src.ingestion.sec_client import SecClient
 from src.ingestion.submissions import get_company_submissions
 from src.ingestion.tickers import load_ticker_mapping, resolve_ticker_to_cik
+from src.processing.company_industry_labels import industry_label_assignments_for_company
 from src.processing import (
     BaseMetricRecord,
     NormalizedFact,
@@ -244,6 +245,13 @@ def _ingest_company_from_sec(
         base_metrics = map_raw_facts_to_base_metrics(
             ((record.raw_fact_id, record.fact) for record in stored_fact_records),
             active_keys,
+            _industry_labels_for_mapping(
+                ticker=normalized_ticker,
+                cik=cik,
+                sic=company.sic,
+                sic_description=company.sic_description,
+                stored_facts=stored_facts,
+            ),
         )
         financial_metrics = _build_financial_metrics(
             company_id=company.company_id,
@@ -308,6 +316,10 @@ def _date_is_due(next_check_date: date | None, today: date) -> bool:
 def _refresh_company_metrics_from_stored_facts(
     *,
     company_id: int,
+    ticker: str | None,
+    cik: str,
+    sic: str | None,
+    sic_description: str | None,
     stored_fact_records: list,
     stored_filings: list[FilingRecord],
     metric_repository: FinancialMetricRepository,
@@ -324,6 +336,13 @@ def _refresh_company_metrics_from_stored_facts(
     base_metrics = map_raw_facts_to_base_metrics(
         ((record.raw_fact_id, record.fact) for record in stored_fact_records),
         active_keys,
+        _industry_labels_for_mapping(
+            ticker=ticker,
+            cik=cik,
+            sic=sic,
+            sic_description=sic_description,
+            stored_facts=stored_facts,
+        ),
     )
     financial_metrics = _build_financial_metrics(
         company_id=company_id,
@@ -369,6 +388,10 @@ def _build_local_ingestion_result(
         stored_filings = filing_repository.list_filings(company.company_id)
         _refresh_company_metrics_from_stored_facts(
             company_id=company.company_id,
+            ticker=company.ticker,
+            cik=company.cik,
+            sic=company.sic,
+            sic_description=company.sic_description,
             stored_fact_records=stored_fact_records,
             stored_filings=stored_filings,
             metric_repository=metric_repository,
@@ -406,6 +429,24 @@ def _build_local_ingestion_result(
         refresh_due_10k=refresh_due_10k,
         refresh_due_10q=refresh_due_10q,
     )
+
+
+def _industry_labels_for_mapping(
+    *,
+    ticker: str | None,
+    cik: str,
+    sic: str | None,
+    sic_description: str | None,
+    stored_facts: list[NormalizedFact],
+) -> tuple[str, ...]:
+    assignment = industry_label_assignments_for_company(
+        ticker,
+        cik,
+        sic=sic,
+        sic_description=sic_description,
+        observed_concepts=(fact.concept for fact in stored_facts),
+    )
+    return assignment.assigned_industry_labels
 
 
 def _select_active_window_filings(

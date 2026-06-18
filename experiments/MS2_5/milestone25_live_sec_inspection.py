@@ -8,8 +8,9 @@ import sqlite3
 import sys
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -24,6 +25,16 @@ from src.ingestion import (
     ingest_company,
 )
 from src.processing.base_metrics import BASE_METRIC_MAPPINGS
+from src.processing.company_industry_labels import (
+    CompanyIndustryLabelAssignment,
+    industry_label_assignments_for_company,
+)
+from src.processing.mapping_catalog import (
+    STATUS_FOUND_MAPPED,
+    STATUS_FOUND_UNMAPPED,
+    STATUS_MISSING_TARGET,
+    target_facts_for_industry_labels,
+)
 from src.storage import CompanyRepository, connect_sqlite, initialize_database
 
 EXPERIMENT_DIR = PROJECT_ROOT / "experiments" / "MS2_5"
@@ -33,6 +44,34 @@ DEFAULT_REPORT_PATH = EXPERIMENT_DIR / "experiment_report.md"
 DEFAULT_FILINGS_DIR = EXPERIMENT_STORAGE_DIR / "filings"
 DEFAULT_EXPORTS_DIR = PROJECT_ROOT / "data" / "exports" / "ms2_5"
 FORMS = ("10-K", "10-Q")
+PRESENTATION_NUMBER_EXCLUDED_HEADERS = {
+    "accession",
+    "accession_number",
+    "cik",
+    "company_id",
+    "end_date",
+    "filed_at",
+    "filing_date",
+    "filing_id",
+    "fiscal_period",
+    "fiscal_year",
+    "frame",
+    "id",
+    "local_path",
+    "metric_id",
+    "next_check_date_10k",
+    "next_check_date_10q",
+    "raw_fact_id",
+    "sic",
+    "source_raw_fact_id",
+    "start_date",
+}
+PRESENTATION_NUMBER_SUFFIXES = (
+    (Decimal("1000000000000"), "T"),
+    (Decimal("1000000000"), "B"),
+    (Decimal("1000000"), "M"),
+    (Decimal("1000"), "K"),
+)
 
 
 @dataclass(frozen=True)
@@ -250,20 +289,34 @@ def _snapshot(database: Path, ticker: str) -> dict[str, Any]:
             [ticker],
         )
         company_id = company.get("company_id") if company else None
+        cik = company.get("cik") if company else None
+        observed_concepts = _observed_raw_concepts(connection, cik)
+        industry_assignment = _company_industry_label_assignment(company, observed_concepts)
+        target_raw_fact_coverage = _target_raw_fact_coverage(
+            connection,
+            company_id=company_id,
+            cik=cik,
+            assignment=industry_assignment,
+        )
         return {
             "company": company,
             "counts": _table_counts(connection),
             "filings": _filing_rows(connection, company_id),
             "filings_by_form": _accessions_by_form(connection, company_id),
             "active_filings_by_form": _active_filing_counts_by_form(connection, company_id),
+            "company_industry_labels": _company_industry_label_rows(company, industry_assignment),
+            "target_raw_fact_coverage": target_raw_fact_coverage,
+            "found_target_facts": _target_rows_with_status(target_raw_fact_coverage, STATUS_FOUND_MAPPED),
+            "missing_target_facts": _target_rows_with_status(target_raw_fact_coverage, STATUS_MISSING_TARGET),
+            "found_unmapped_target_facts": _target_rows_with_status(target_raw_fact_coverage, STATUS_FOUND_UNMAPPED),
             "metric_counts_by_statement": _metric_counts_by_statement(connection, company_id),
             "metric_lineage_summary": _metric_lineage_summary(connection, company_id),
-            "raw_fact_mapping_coverage": _raw_fact_mapping_coverage(connection, company_id, company.get("cik")),
+            "raw_fact_mapping_coverage": _raw_fact_mapping_coverage(connection, company_id, cik),
             "alternate_xbrl_tags": _alternate_xbrl_tags(connection, company_id),
-            "unknown_xbrl_concepts": _unknown_xbrl_concepts(connection, company.get("cik")),
+            "unknown_xbrl_concepts": _unknown_xbrl_concepts(connection, cik),
             "metric_sample": _metric_sample(connection, company_id),
             "traceability_sample": _traceability_sample(connection, company_id),
-            "quality_flags": _quality_flags(connection, company.get("cik") if company else None),
+            "quality_flags": _quality_flags(connection, cik),
         }
 
 
@@ -274,6 +327,11 @@ def _empty_snapshot() -> dict[str, Any]:
         "filings": [],
         "filings_by_form": {form_type: () for form_type in FORMS},
         "active_filings_by_form": {form_type: 0 for form_type in FORMS},
+        "company_industry_labels": [],
+        "target_raw_fact_coverage": [],
+        "found_target_facts": [],
+        "missing_target_facts": [],
+        "found_unmapped_target_facts": [],
         "metric_counts_by_statement": [],
         "metric_lineage_summary": [],
         "raw_fact_mapping_coverage": [],
@@ -386,6 +444,150 @@ def _active_filing_counts_by_form(connection: sqlite3.Connection, company_id: in
     return grouped
 
 
+def _observed_raw_concepts(connection: sqlite3.Connection, cik: str | None) -> tuple[str, ...]:
+    if not cik:
+        return ()
+    rows = _fetch_all(
+        connection,
+        """
+        SELECT DISTINCT concept
+        FROM raw_xbrl_facts
+        WHERE cik = ? AND concept IS NOT NULL
+        ORDER BY concept
+        """,
+        [cik],
+    )
+    return tuple(str(row["concept"]) for row in rows if row.get("concept"))
+
+
+def _company_industry_label_assignment(
+    company: dict[str, Any],
+    observed_concepts: Sequence[str],
+) -> CompanyIndustryLabelAssignment:
+    return industry_label_assignments_for_company(
+        company.get("ticker"),
+        company.get("cik"),
+        sic=company.get("sic"),
+        sic_description=company.get("sic_description"),
+        observed_concepts=observed_concepts,
+    )
+
+
+def _company_industry_label_rows(
+    company: dict[str, Any],
+    assignment: CompanyIndustryLabelAssignment,
+) -> list[dict[str, Any]]:
+    if not company:
+        return []
+    return [
+        {
+            "ticker": assignment.ticker,
+            "cik": assignment.cik,
+            "sic": company.get("sic") or "",
+            "sic_description": company.get("sic_description") or "",
+            "assigned_industry_labels": _join(assignment.assigned_industry_labels),
+            "assignment_source": assignment.assignment_source,
+            "assignment_reason": assignment.assignment_reason,
+            "supporting_evidence": " ; ".join(assignment.supporting_evidence),
+            "label_status": assignment.label_status,
+            "reviewed_at": assignment.reviewed_at,
+            "notes": assignment.notes,
+        }
+    ]
+
+
+def _target_raw_fact_coverage(
+    connection: sqlite3.Connection,
+    *,
+    company_id: int | None,
+    cik: str | None,
+    assignment: CompanyIndustryLabelAssignment,
+) -> list[dict[str, Any]]:
+    if company_id is None or not cik:
+        return []
+    targets = target_facts_for_industry_labels(assignment.assigned_industry_labels)
+    label_review_note = (
+        "industry-specific targets are not included until a source-controlled label is assigned"
+        if assignment.label_status == "needs_label_review"
+        else ""
+    )
+    rows: list[dict[str, Any]] = []
+    for target in targets:
+        observed_rows = _count(
+            connection,
+            """
+            SELECT COUNT(*) AS count
+            FROM raw_xbrl_facts
+            WHERE cik = ? AND taxonomy = ? AND concept = ?
+            """,
+            [cik, target.taxonomy, target.raw_concept],
+        )
+        mapped_rows = _count(
+            connection,
+            """
+            SELECT COUNT(*) AS count
+            FROM financial_metrics AS m
+            LEFT JOIN raw_xbrl_facts AS f
+                ON f.id = m.raw_fact_id
+            WHERE m.company_id = ? AND f.taxonomy = ? AND f.concept = ?
+            """,
+            [company_id, target.taxonomy, target.raw_concept],
+        )
+        latest = _fetch_one(
+            connection,
+            """
+            SELECT
+                MAX(filed_date) AS latest_filing_date,
+                COUNT(DISTINCT unit) AS unit_count,
+                COALESCE(GROUP_CONCAT(DISTINCT form), '') AS forms
+            FROM raw_xbrl_facts
+            WHERE cik = ? AND taxonomy = ? AND concept = ?
+            """,
+            [cik, target.taxonomy, target.raw_concept],
+        )
+        status = _target_coverage_status(observed_rows, mapped_rows)
+        notes = "; ".join(
+            note
+            for note in (
+                target.notes,
+                label_review_note,
+                "observed but did not create financial_metrics rows" if status == STATUS_FOUND_UNMAPPED else "",
+            )
+            if note
+        )
+        rows.append(
+            {
+                "industry_label": target.industry_label,
+                "target_raw_concept": target.raw_concept,
+                "taxonomy": target.taxonomy,
+                "internal_metric_name": target.internal_metric_name,
+                "statement_type": target.statement_type,
+                "required_for_core": _yes_no(target.required_for_core),
+                "required_for_specialized_indicators": _yes_no(target.required_for_specialized_indicators),
+                "status": status,
+                "observed_rows": observed_rows,
+                "mapped_rows": mapped_rows,
+                "unit_count": latest.get("unit_count") or 0,
+                "forms": latest.get("forms") or "",
+                "latest_filing_date": latest.get("latest_filing_date") or "",
+                "notes": notes,
+            }
+        )
+    return rows
+
+
+def _target_coverage_status(observed_rows: int, mapped_rows: int) -> str:
+    if observed_rows <= 0:
+        return STATUS_MISSING_TARGET
+    if mapped_rows > 0:
+        return STATUS_FOUND_MAPPED
+    return STATUS_FOUND_UNMAPPED
+
+
+def _target_rows_with_status(rows: list[dict[str, Any]], status: str) -> list[dict[str, Any]]:
+    return [row for row in rows if row.get("status") == status]
+
+
 def _metric_counts_by_statement(connection: sqlite3.Connection, company_id: int | None) -> list[dict[str, Any]]:
     if company_id is None:
         return []
@@ -489,7 +691,7 @@ def _raw_fact_mapping_coverage(
         {
             "coverage_item": "raw facts with supported concept names",
             "count": raw_facts_with_supported_concepts,
-            "note": "concept exists in BASE_METRIC_MAPPINGS",
+            "note": "concept exists in the approved mapping catalog",
         },
         {
             "coverage_item": "supported-concept raw facts skipped",
@@ -828,48 +1030,45 @@ def format_lineage_report(run: ExperimentRun) -> str:
     lines = [
         "Milestone 2.5 Financial Metric Data Lineage View",
         "",
-        "Human Question:",
-        "  For the company I chose, how did raw SEC/XBRL facts become cleaned",
-        "  financial_metrics rows available to the system?",
-        "",
         "Run Context:",
         f"  ticker: {run.ticker}",
         f"  run timestamp: {run.run_timestamp}",
         f"  database: {run.paths.database}",
         f"  saved report: {run.paths.report}",
-        "",
-        "How To Read This Report:",
-        "  raw_xbrl_facts: SEC concepts exactly as reported.",
-        "  financial_metrics: cleaned internal rows available for calculations.",
-        "  annual table: one row per metric with fiscal years as columns.",
-        "  quarterly table: one row per metric with fiscal quarters as columns.",
-        "  period columns use rows whose end date matches the displayed period",
-        "  when an end date is available.",
-        "  k removes 3 trailing zeros and m removes 6 trailing zeros.",
-        "  each fiscal year or fiscal quarter column uses one consistent suffix",
-        "  when its integer values can be abbreviated cleanly.",
-        "  abbreviations are presentation-only; stored SQLite and CSV values",
-        "  remain unmodified.",
-        "  if multiple distinct values remain for one metric-period cell, they",
-        "  are joined with semicolons.",
     ]
+    lines.extend(["", "Company Industry Labels:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("company_industry_labels") or []))
     lines.extend(["", "Raw Fact Mapping Coverage (Highlighted):"])
     lines.extend(_markdown_table(run.session_after_snapshot.get("raw_fact_mapping_coverage") or []))
+    lines.extend(["", "Target Raw Fact Coverage:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("target_raw_fact_coverage") or []))
+    lines.extend(["", "Found Target Facts:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("found_target_facts") or []))
+    lines.extend(["", "Missing Target Facts:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("missing_target_facts") or []))
+    lines.extend(["", "Found But Unmapped Target Facts:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("found_unmapped_target_facts") or []))
     lines.extend(["", "Alternate SEC/XBRL Tags For Same Business Metric:"])
     lines.extend(_markdown_table(run.session_after_snapshot.get("alternate_xbrl_tags") or []))
-    lines.extend(["", "Unknown SEC/XBRL Concepts Not Mapped To Base Metrics:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("unknown_xbrl_concepts") or []))
     lines.extend(["", "Annual XBRL Financial Metrics:"])
     lines.extend(_markdown_table(annual_rows))
     lines.extend(["", "Quarterly XBRL Financial Metrics:"])
     lines.extend(_markdown_table(quarterly_rows))
+    lines.extend(["", "Unknown SEC/XBRL Concepts Not Mapped To Base Metrics:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("unknown_xbrl_concepts") or []))
     lines.extend(
         [
             "",
-            "Artifacts To Inspect:",
+            "Full Evidence:",
             f"  SQLite database: {run.paths.database}",
             "  database table: raw_xbrl_facts",
             "  database table: financial_metrics",
+            f"  companies CSV: {run.paths.exports_dir / 'companies.csv'}",
+            f"  filings CSV: {run.paths.exports_dir / 'filings.csv'}",
+            f"  raw facts CSV: {run.paths.exports_dir / 'raw_xbrl_facts.csv'}",
+            f"  financial metrics CSV: {run.paths.exports_dir / 'financial_metrics.csv'}",
+            f"  traceability sample CSV: {run.paths.exports_dir / 'metric_traceability_sample.csv'}",
+            f"  filing downloads: {run.paths.filings_dir}",
             f"  saved report with appended lineage section: {run.paths.report}",
             "",
             "Expected Outcome:",
@@ -899,14 +1098,6 @@ def _pivot_metric_rows(rows: list[dict[str, Any]], *, annual: bool) -> list[dict
             values.append(value_text)
 
     ordered_periods = sorted(period_labels, key=_pivot_period_sort_key, reverse=True)
-    period_scales = {
-        period_label: _period_abbreviation_scale(
-            value
-            for period_values in grouped.values()
-            for value in period_values.get(period_label, [])
-        )
-        for period_label in ordered_periods
-    }
     pivot_rows: list[dict[str, Any]] = []
     for metric_name, statement_type in sorted(grouped, key=lambda key: (key[1], key[0])):
         pivot_row: dict[str, Any] = {
@@ -914,10 +1105,7 @@ def _pivot_metric_rows(rows: list[dict[str, Any]], *, annual: bool) -> list[dict
             "statement_type": statement_type,
         }
         for period_label in ordered_periods:
-            pivot_row[period_label] = _pivot_cell(
-                grouped[(metric_name, statement_type)].get(period_label, []),
-                scale=period_scales[period_label],
-            )
+            pivot_row[period_label] = _pivot_cell(grouped[(metric_name, statement_type)].get(period_label, []))
         pivot_rows.append(pivot_row)
     return pivot_rows
 
@@ -1012,43 +1200,8 @@ def _quarter_number(value: str) -> int | None:
     return None
 
 
-def _period_abbreviation_scale(values: Iterable[str]) -> tuple[int, str] | None:
-    integer_values = [_parse_integer_text(value) for value in values]
-    integer_values = [value for value in integer_values if value is not None]
-    if not integer_values:
-        return None
-    for factor, suffix in ((1_000_000, "m"), (1_000, "k")):
-        if all(value % factor == 0 for value in integer_values):
-            return (factor, suffix)
-    return None
-
-
-def _pivot_cell(values: Sequence[str], *, scale: tuple[int, str] | None) -> str:
-    return "; ".join(_abbreviate_value(value, scale=scale) for value in values)
-
-
-def _abbreviate_value(value: str, *, scale: tuple[int, str] | None) -> str:
-    integer_value = _parse_integer_text(value)
-    if scale is None or integer_value is None:
-        return value
-    factor, suffix = scale
-    if integer_value % factor != 0:
-        return value
-    return f"{integer_value // factor}{suffix}"
-
-
-def _parse_integer_text(value: str) -> int | None:
-    text = str(value).strip()
-    if not text:
-        return None
-    if text[0] in {"-", "+"}:
-        sign = text[0]
-        text = text[1:]
-    else:
-        sign = ""
-    if not text.isdigit():
-        return None
-    return int(sign + text)
+def _pivot_cell(values: Sequence[str]) -> str:
+    return "; ".join(_format_presentation_number(value) for value in values)
 
 
 def _as_int(value: Any) -> int | None:
@@ -1116,38 +1269,6 @@ def format_report(run: ExperimentRun, *, report_output: str = "file") -> str:
 
     lines.extend(["", "## Already-Ingested Session Check", ""])
     lines.extend(_session_decision_sections(run))
-
-    lines.extend(
-        [
-            "",
-            "## Full Evidence Artifacts",
-            "",
-        ]
-    )
-    lines.extend(
-        _definition_list(
-            {
-                "SQLite database": run.paths.database,
-                "companies CSV": run.paths.exports_dir / "companies.csv",
-                "filings CSV": run.paths.exports_dir / "filings.csv",
-                "raw facts CSV": run.paths.exports_dir / "raw_xbrl_facts.csv",
-                "financial metrics CSV": run.paths.exports_dir / "financial_metrics.csv",
-                "appended financial metric lineage section": run.paths.report,
-                "traceability sample CSV": run.paths.exports_dir / "metric_traceability_sample.csv",
-            }
-        )
-    )
-    lines.extend(
-        [
-            "",
-            "## Manual Judgment",
-            "",
-            "This report presents evidence only. Review the compact summary,",
-            "appended lineage section, database, and CSVs to decide whether the",
-            "observed behavior matches the Milestone 2.5 design.",
-            "",
-        ]
-    )
     return "\n".join(lines)
 
 
@@ -1166,22 +1287,10 @@ def format_saved_report(run: ExperimentRun, *, full_report: bool = False) -> str
         detailed_lines = format_report(run, report_output="saved compact + detailed report").splitlines()
         if detailed_lines[:2] == ["# Milestone 2.5 Live SEC Experiment Report", ""]:
             detailed_lines = detailed_lines[2:]
-        lines.extend(["", "## Detailed Evidence", ""])
+        lines.extend([""])
         lines.extend(detailed_lines)
-    else:
-        lines.extend(
-            [
-                "",
-                "## Detailed Evidence",
-                "",
-                "Not included in this run. Use `--full-report` to save detailed",
-                "Markdown sections and compact table samples in this report.",
-            ]
-        )
     lines.extend(
         [
-            "",
-            "## Financial Metric Lineage Report",
             "",
             "```text",
             format_lineage_report(run),
@@ -1216,11 +1325,16 @@ def format_compact_report(run: ExperimentRun, *, full_report: bool = False) -> s
         "Already-Ingested Session Check",
     ]
     lines.extend(_session_decision_lines(run, indent="  "))
+    lines.extend(["", "Company Industry Labels"])
+    lines.extend(_compact_company_industry_labels(run.session_after_snapshot, indent="  "))
+    lines.extend(["", "Stored Rows After Session"])
     lines.extend(_compact_counts(run.session_after_snapshot, indent="  "))
     lines.extend(["", "Active Window After Session"])
     lines.extend(_compact_active_window(run.session_after_snapshot, indent="  "))
     lines.extend(["", "Raw Fact Mapping Coverage"])
     lines.extend(_compact_raw_fact_mapping_coverage(run.session_after_snapshot, indent="  "))
+    lines.extend(["", "Target Raw Fact Coverage"])
+    lines.extend(_compact_target_raw_fact_coverage(run.session_after_snapshot, indent="  "))
     lines.extend(["", "Base Metrics After Session"])
     lines.extend(_compact_metric_counts(run.session_after_snapshot, indent="  "))
 
@@ -1232,17 +1346,6 @@ def format_compact_report(run: ExperimentRun, *, full_report: bool = False) -> s
 
     lines.extend(
         [
-            "",
-            "Full Evidence",
-            f"  SQLite database: {run.paths.database}",
-            f"  appended financial metric lineage section: {run.paths.report}",
-            f"  CSV exports: {run.paths.exports_dir}",
-            f"  filing downloads: {run.paths.filings_dir}",
-            f"  saved report: {run.paths.report}",
-            "",
-            "Manual Judgment",
-            "  Review the compact summary, appended lineage section, SQLite database,",
-            "  and CSVs to decide whether the observed behavior matches the Milestone 2.5 design.",
             "",
             "More Detail",
             (
@@ -1388,15 +1491,15 @@ def _present_report(run: ExperimentRun, *, write_report: bool, full_report: bool
 
 def _compact_counts(snapshot: dict[str, Any], *, indent: str) -> list[str]:
     counts = snapshot.get("counts") or {}
-    return [f"{indent}{table}: {count}" for table, count in counts.items()]
+    return [f"{indent}{table}: {_format_presentation_number(count)}" for table, count in counts.items()]
 
 
 def _compact_active_window(snapshot: dict[str, Any], *, indent: str) -> list[str]:
     active = snapshot.get("active_filings_by_form") or {}
     accessions = snapshot.get("filings_by_form") or {}
     return [
-        f"{indent}{form_type}: {active.get(form_type, 0)} active filings; "
-        f"{len(accessions.get(form_type, ()))} local accessions"
+        f"{indent}{form_type}: {_format_presentation_number(active.get(form_type, 0))} active filings; "
+        f"{_format_presentation_number(len(accessions.get(form_type, ())))} local accessions"
         for form_type in FORMS
     ]
 
@@ -1406,7 +1509,9 @@ def _compact_metric_counts(snapshot: dict[str, Any], *, indent: str) -> list[str
     if not rows:
         return [f"{indent}none"]
     return [
-        f"{indent}{row['statement_type']}: {row['total_metrics']} total, {row['active_metrics']} active"
+        f"{indent}{row['statement_type']}: "
+        f"{_format_presentation_number(row['total_metrics'])} total, "
+        f"{_format_presentation_number(row['active_metrics'])} active"
         for row in rows
     ]
 
@@ -1430,19 +1535,56 @@ def _compact_raw_fact_mapping_coverage(snapshot: dict[str, Any], *, indent: str)
         if row is None:
             continue
         note = f" ({row['note']})" if row.get("note") else ""
-        lines.append(f"{indent}{item}: {row['count']}{note}")
+        lines.append(f"{indent}{item}: {_format_presentation_number(row['count'])}{note}")
     return lines or [f"{indent}none"]
+
+
+def _compact_company_industry_labels(snapshot: dict[str, Any], *, indent: str) -> list[str]:
+    rows = snapshot.get("company_industry_labels") or []
+    if not rows:
+        return [f"{indent}none"]
+    row = rows[0]
+    return [
+        f"{indent}assigned labels: {row.get('assigned_industry_labels') or 'none'}",
+        f"{indent}label status: {row.get('label_status') or 'not available'}",
+        f"{indent}assignment source: {row.get('assignment_source') or 'not available'}",
+        f"{indent}assignment reason: {row.get('assignment_reason') or 'not available'}",
+    ]
+
+
+def _compact_target_raw_fact_coverage(snapshot: dict[str, Any], *, indent: str) -> list[str]:
+    rows = snapshot.get("target_raw_fact_coverage") or []
+    if not rows:
+        return [f"{indent}none"]
+    status_counts: dict[str, int] = {}
+    for row in rows:
+        status = str(row.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+    lines = [f"{indent}target concepts checked: {_format_presentation_number(len(rows))}"]
+    for status, count in sorted(status_counts.items()):
+        lines.append(f"{indent}{status}: {_format_presentation_number(count)}")
+    return lines
 
 
 def _snapshot_sections(snapshot: dict[str, Any]) -> list[str]:
     lines: list[str] = ["", "### Company State", ""]
     lines.extend(_markdown_table([snapshot["company"]] if snapshot["company"] else []))
+    lines.extend(["", "### Company Industry Labels", ""])
+    lines.extend(_markdown_table(snapshot["company_industry_labels"]))
     lines.extend(["", "### Filing Inventory", ""])
     lines.extend(_markdown_table(snapshot["filings"][:8]))
     lines.extend(["", "### Raw Fact And Metric Counts", ""])
     lines.extend(_count_table(snapshot))
     lines.extend(["", "### Raw Fact Mapping Coverage", ""])
     lines.extend(_markdown_table(snapshot["raw_fact_mapping_coverage"]))
+    lines.extend(["", "### Target Raw Fact Coverage", ""])
+    lines.extend(_markdown_table(snapshot["target_raw_fact_coverage"]))
+    lines.extend(["", "### Found Target Facts", ""])
+    lines.extend(_markdown_table(snapshot["found_target_facts"]))
+    lines.extend(["", "### Missing Target Facts", ""])
+    lines.extend(_markdown_table(snapshot["missing_target_facts"]))
+    lines.extend(["", "### Found But Unmapped Target Facts", ""])
+    lines.extend(_markdown_table(snapshot["found_unmapped_target_facts"]))
     lines.extend(["", "### Active Window", ""])
     lines.extend(_active_window_lines(snapshot))
     lines.extend(["", "### Financial Metric Data Lineage View", ""])
@@ -1450,7 +1592,7 @@ def _snapshot_sections(snapshot: dict[str, Any]) -> list[str]:
         [
             "This table summarizes raw XBRL concepts, system mappings, and",
             "financial_metrics availability. Annual and quarterly XBRL metric",
-            "tables are written to the financial metric lineage text report.",
+            "tables are written to the financial metric lineage text section.",
             "",
         ]
     )
@@ -1589,7 +1731,7 @@ def _markdown_table(rows: list[dict[str, Any]]) -> list[str]:
         return ["No rows to display."]
     headers = list(rows[0].keys())
     rendered_rows = [
-        {header: _markdown_cell(row.get(header)) for header in headers}
+        {header: _markdown_cell(header, row.get(header)) for header in headers}
         for row in rows
     ]
     widths = {
@@ -1640,7 +1782,7 @@ def _is_numeric_table_cell(text: str) -> bool:
 def _is_number_text(text: str) -> bool:
     if not text:
         return True
-    if text[-1].lower() in {"k", "m"}:
+    if text[-1].upper() in {"K", "M", "B", "T"}:
         text = text[:-1]
     if text[0] in {"-", "+"}:
         text = text[1:]
@@ -1649,14 +1791,49 @@ def _is_number_text(text: str) -> bool:
     return text.replace(".", "", 1).isdigit()
 
 
-def _markdown_cell(value: Any) -> str:
+def _markdown_cell(header: str, value: Any) -> str:
     if value is None:
         return ""
     text = str(value).replace("\r", " ").replace("\n", " ")
     text = text.replace("|", "/")
+    if _should_format_presentation_number(header):
+        text = "; ".join(_format_presentation_number(part.strip()) for part in text.split(";"))
     if len(text) > 120:
         return text[:117] + "..."
     return text
+
+
+def _should_format_presentation_number(header: str) -> bool:
+    return header.lower() not in PRESENTATION_NUMBER_EXCLUDED_HEADERS
+
+
+def _format_presentation_number(value: Any) -> str:
+    text = str(value).strip()
+    decimal_value = _parse_decimal_text(text)
+    if decimal_value is None:
+        return text
+    absolute_value = abs(decimal_value)
+    for factor, suffix in PRESENTATION_NUMBER_SUFFIXES:
+        if absolute_value >= factor:
+            scaled_value = (decimal_value / factor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            return f"{scaled_value:.2f}{suffix}"
+    if decimal_value != decimal_value.to_integral_value():
+        rounded_value = decimal_value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return f"{rounded_value:.2f}"
+    return text
+
+
+def _parse_decimal_text(value: str) -> Decimal | None:
+    text = str(value).strip().replace(",", "")
+    if not text or text[-1].upper() in {"K", "M", "B", "T"}:
+        return None
+    try:
+        decimal_value = Decimal(text)
+    except InvalidOperation:
+        return None
+    if not decimal_value.is_finite():
+        return None
+    return decimal_value
 
 
 def _join(values: Sequence[str]) -> str:

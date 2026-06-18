@@ -62,6 +62,10 @@ This experiment covers:
 - traceability from `financial_metrics` to `raw_xbrl_facts` and filings
 - raw fact mapping coverage: raw facts downloaded/stored, mapped raw facts,
   unmapped raw facts, unknown raw concepts, and supported mapping catalog size
+- source-controlled hard industry label assignment, including assignment source,
+  reason, supporting evidence, and label review status
+- target raw fact coverage for the assigned hard industry labels, including
+  found, missing, and found-but-unmapped target facts
 - alternate SEC/XBRL tags that map to the same internal business metric
 - unknown SEC/XBRL concepts not currently mapped to base financial metrics
 - saved compact report with appended annual and quarterly XBRL metric evidence,
@@ -187,8 +191,10 @@ experiments/MS2_5/experiment_report.md
 The compact saved report should show the operational decision path first:
 whether the company is local, whether an update check is due this session,
 whether SEC was checked, whether new filing data was ingested, and the next
-10-K/10-Q check dates after the session. The same `experiment_report.md` should
-append the full financial metric lineage content, including raw fact mapping
+10-K/10-Q check dates after the session. It should then show source-controlled
+hard industry label assignment and target raw fact coverage. The same
+`experiment_report.md` should append the full financial metric lineage content,
+including company industry labels, target raw fact coverage, raw fact mapping
 coverage, alternate and unknown SEC/XBRL tag evidence, and two pivoted XBRL
 metric tables: one annual table with fiscal years as columns and one quarterly
 table with fiscal quarters as columns. Other full rows should remain available
@@ -238,18 +244,21 @@ Active Window After Session
   10-K:
   10-Q:
 
+Company Industry Labels
+  assigned labels:
+  label status:
+  assignment source:
+  assignment reason:
+
+Target Raw Fact Coverage
+  target concepts checked:
+  found_mapped:
+  missing_target:
+  found_unmapped:
+
 Base Metrics After Session
 
 Source And Export Warnings
-
-Full Evidence
-  SQLite database:
-  appended financial metric lineage section:
-  CSV exports:
-  filing downloads:
-  saved report:
-
-Manual Judgment
 
 More Detail
 ```
@@ -286,6 +295,9 @@ Evidence to present:
 - raw fact count
 - base metric count
 - raw fact mapping coverage summary
+- company industry label assignment and supporting evidence
+- target raw fact coverage, including found, missing, and found-but-unmapped
+  target concepts
 - alternate SEC/XBRL tags for the same business metric
 - unknown SEC/XBRL concepts not mapped into `financial_metrics`
 - active-window counts for 10-K and 10-Q
@@ -340,13 +352,21 @@ Evidence to present:
 
 ### Raw Fact Mapping Coverage
 
+### Company Industry Labels
+
+### Target Raw Fact Coverage
+
+### Found Target Facts
+
+### Missing Target Facts
+
+### Found But Unmapped Target Facts
+
 ### Active Window
 
 ### Financial Metric Data Lineage View
 
 ### Alternate SEC/XBRL Tags For Same Business Metric
-
-### Unknown SEC/XBRL Concepts Not Mapped To Base Metrics
 
 ### Compact financial_metrics Sample
 
@@ -360,12 +380,6 @@ Evidence to present:
 
 ### Stored Evidence After Session
 
-## Full Evidence Artifacts
-
-## Manual Judgment
-  This report presents evidence only. Review the report, appended lineage
-  section, database, and CSVs to decide whether the behavior matches the
-  Milestone 2.5 design.
 ```
 
 ## Required Report Sections
@@ -378,14 +392,18 @@ Evidence to present:
 6. Filing inventory samples
 7. Raw fact and base metric counts
 8. Raw fact mapping coverage
-9. Active-window counts
-10. Financial metric data lineage view
-11. Alternate SEC/XBRL tags for the same business metric
-12. Unknown SEC/XBRL concepts not mapped to base financial metrics
-13. Compact `financial_metrics` sample
-14. Compact traceability sample
-15. Full evidence artifact paths
-16. Manual judgment note
+9. Company industry labels
+10. Target raw fact coverage
+11. Found, missing, and found-but-unmapped target facts
+12. Active-window counts
+13. Financial metric data lineage view
+14. Alternate SEC/XBRL tags for the same business metric
+15. Compact `financial_metrics` sample
+16. Compact traceability sample
+17. Annual XBRL financial metrics
+18. Quarterly XBRL financial metrics
+19. Unknown SEC/XBRL concepts not mapped to base financial metrics
+20. Full evidence artifact paths
 
 ## Implementation Guidance
 
@@ -393,6 +411,10 @@ Evidence to present:
 - Reuse `src/ingestion/refresh_policy.py` for update-check date logic.
 - Reuse `src/processing/active_window.py` for active-window selection.
 - Reuse `src/processing/base_metrics.py` for base metric mapping.
+- Reuse `src/processing/company_industry_labels.py` for explicit hard industry
+  label assignments. Do not infer labels silently from observed raw facts.
+- Reuse `src/processing/mapping_catalog.py` for approved mapping candidates and
+  target raw fact coverage.
 - Reuse repositories in `src/storage/` for all database reads and writes.
 - Do not calculate derived indicators inside the experiment script.
 - Do not duplicate SEC HTTP logic inside the experiment script.
@@ -429,7 +451,7 @@ The report should also list the generated CSV exports under:
 data/exports/ms2_5/
 ```
 
-The lineage text report should include two pivoted XBRL metric tables:
+The lineage text section should include two pivoted XBRL metric tables:
 
 - Annual XBRL Financial Metrics: `metric_name`, `statement_type`, then one
   column per fiscal year.
@@ -439,17 +461,20 @@ The lineage text report should include two pivoted XBRL metric tables:
 Each table should show the stored financial metric values in period columns.
 Table cells should be padded to the column width so headers and values align in
 the text report.
-Each period column should use one consistent abbreviation suffix when possible:
-`k` removes 3 trailing zeros and `m` removes 6 trailing zeros. Decimal or
-otherwise non-integer values should remain unscaled. This abbreviation is for
-report presentation only; stored SQLite values and CSV exports should remain
-unmodified.
+Numeric report values should use presentation-only abbreviations where useful:
+`K`, `M`, `B`, and `T` represent thousands, millions, billions, and trillions.
+Abbreviated values should use two decimal places when possible, and decimal
+values below `1K` should be rounded to two decimal places. Stored SQLite values
+and CSV exports should remain unmodified.
 When multiple distinct values remain for one metric-period cell, the report
 should keep them visible in the cell instead of silently dropping them.
-The lineage text report should also highlight the raw fact mapping coverage,
-observed alternate SEC/XBRL tags for shared business metrics, and unknown
-SEC/XBRL concept tags that are present in `raw_xbrl_facts` but not mapped into
-`financial_metrics`.
+The lineage text section should also highlight the raw fact mapping coverage,
+source-controlled hard industry labels, target raw fact coverage, observed
+alternate SEC/XBRL tags for shared business metrics, and unknown SEC/XBRL
+concept tags that are present in `raw_xbrl_facts` but not mapped into
+`financial_metrics`. Unknown SEC/XBRL concepts should appear after the quarterly
+XBRL metric table, and the Full Evidence paths should appear after the XBRL
+metric tables.
 
 ## Edge Cases To Present
 
@@ -462,6 +487,7 @@ The experiment should present these conditions when they occur naturally:
 - no recent 10-Q is available
 - update-check date cannot be generated because latest filing date is missing
 - base metrics are unavailable because concepts are missing or quality-flagged
+- a company does not yet have a source-controlled hard industry label assignment
 - a mapped raw concept has no usable `financial_metrics` rows for the active
   window
 - source raw fact ID is missing from a metric row
@@ -484,6 +510,8 @@ inspect:
 - which rows are inside the active analysis window
 - which base metrics were mapped
 - how raw XBRL concepts map into available `financial_metrics`
+- which hard industry labels are assigned and why
+- which target raw facts were expected, found, missing, or found but unmapped
 - which base metrics can be traced back to raw XBRL facts
 - where to inspect annual and quarterly XBRL metric evidence
 - where to open the full SQLite database and CSV exports

@@ -16,7 +16,7 @@ Keep this file updated whenever:
 
 Use `proposal.md` for the product goal, architecture direction, MVP scope, and milestones. Use this file for the most updated structure of the actual system. If `proposal.md` and this file disagree about current folders or module responsibilities, this file should be updated to reflect the actual repository structure.
 
-Use `plan1.txt`, `plan2.txt`, `plan2.5.txt`, and `plan3.txt` as milestone notes. Do not treat old plan files as the current structure source of truth.
+Use `plan1.txt`, `plan2.txt`, `plan2.5.txt`, `plan2.5.1.txt`, and `plan3.txt` as milestone notes. Do not treat old plan files as the current structure source of truth.
 
 ## Visual Overview
 
@@ -133,6 +133,7 @@ The important rule is that each box should remain traceable. Reported facts, cal
   plan1.txt
   plan2.txt
   plan2.5.txt
+  plan2.5.1.txt
   plan3.txt
   proposal.md
   pyproject.toml
@@ -158,6 +159,7 @@ The important rule is that each box should remain traceable. Reported facts, cal
 - `plan1.txt`: Historical Milestone 1 scaffold plan.
 - `plan2.txt`: Historical SEC/XBRL ingestion and normalization milestone plan.
 - `plan2.5.txt`: Company registry, filing inventory, update state, active-window policy, and base metric mapping milestone.
+- `plan2.5.1.txt`: Historical hard-industry-label raw fact mapping and mapping coverage plan.
 - `plan3.txt`: Planned indicator engine milestone for deterministic derived indicators, formula traceability, and indicator storage.
 - `proposal.md`: Current product scope, architecture direction, and MVP roadmap.
 - `pyproject.toml`: Python project metadata and dependencies.
@@ -185,10 +187,12 @@ data_store/
 ```text
 docs/
   experiments.md
+  mapping_policy.md
   structure.md
 ```
 
 - `docs/experiments.md`: Central experiment runbook and index. It defines shared experiment rules, data modes, folder naming, and links to per-milestone proposal files.
+- `docs/mapping_policy.md`: Mapping governance policy for broad raw XBRL ingestion, explicit hard industry label assignment, selective base metric mapping, target raw fact coverage, and unknown concept review.
 - `docs/structure.md`: Current repository and module structure. This file should stay synchronized with the actual code layout.
 
 ## Experiment Proposals
@@ -221,7 +225,7 @@ experiments/
 - `experiments/MS2/milestone2_ingestion_showcase.py`: Runnable Milestone 2 experiment script that prints the SEC/XBRL ingestion and normalization showcase described by the Milestone 2 proposal.
 - `experiments/storage/`: Generated shared experiment storage. Current MS2.5 live runs use `experiments/storage/experiment.db` and `experiments/storage/filings/` so later milestone experiments can inspect the same isolated state without touching `stock_data.db`.
 - `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 Plan 2.5 ingestion manual examination harness. It defines one user-chosen ticker per run, persistent shared isolated experiment storage, setup ingestion, already-ingested session inspection, 10-K and 10-Q update-check evidence, active-window evidence, raw fact mapping coverage, unknown and alternate SEC/XBRL tag evidence, financial metric data lineage output appended to the saved report, saved compact report output, optional detailed Markdown sections in the saved report, and full SQLite/CSV evidence artifacts.
-- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that saves `experiments/MS2_5/experiment_report.md` by default without printing the report body to the terminal, separates setup ingestion from the already-ingested session check, reports company-local existence, refresh due status, SEC check behavior, newly ingested filings, and next check dates, appends raw fact mapping coverage, unmapped/alternate SEC/XBRL tag evidence, and annual/quarterly pivoted XBRL metric tables with padded columns and presentation-only per-period `k`/`m` suffixes to the saved report, includes detailed Markdown sections in the saved report with `--full-report`, accepts `--write-report` as a compatibility flag, preserves `experiments/storage/experiment.db` across runs, writes isolated filing downloads under `experiments/storage/filings/`, and exports supporting CSVs under `data/exports/ms2_5/`.
+- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that saves `experiments/MS2_5/experiment_report.md` by default without printing the report body to the terminal, separates setup ingestion from the already-ingested session check, reports company-local existence, refresh due status, SEC check behavior, newly ingested filings, next check dates, source-controlled hard industry label assignment, target raw fact coverage, raw fact mapping coverage, unmapped/alternate SEC/XBRL tag evidence, and annual/quarterly pivoted XBRL metric tables with padded columns and presentation-only `K`/`M`/`B`/`T` numeric abbreviations to the saved report, includes detailed Markdown sections in the saved report with `--full-report`, accepts `--write-report` as a compatibility flag, preserves `experiments/storage/experiment.db` across runs, writes isolated filing downloads under `experiments/storage/filings/`, and exports supporting CSVs under `data/exports/ms2_5/`.
 - `experiments/MS3/experiment_proposal.md`: Human-inspection proposal for the Milestone 3 indicator engine experiment. It defines active accession-window scope, yearly and quarterly indicator tables for the requested catalog, skipped-period reasons, formulas, and source-metric traceability output.
 - `experiments/MS3/milestone3_indicator_engine.py`: Runnable Milestone 3 experiment script that reads stored `financial_indicators` and writes a `.txt` report under `experiments/MS3` with active accession-window scope, yearly and quarterly indicator tables for the requested ticker or tickers, skipped reasons, formulas, and source traceability.
 - `experiments/MS4/experiment_proposal.md`: Human-inspection proposal for the Milestone 4 deterministic financial analytics experiment. It defines trend, comparison, gap, outlier, and chart-ready output.
@@ -326,7 +330,9 @@ Current files:
 
 - `xbrl_normalizer.py`: Defines `NormalizedFact`, `normalize_companyfacts`, `normalize_fact_entry`, and duplicate fact marking.
 - `active_window.py`: Selects the active analysis window: latest 5 fiscal years of 10-K data and latest 12 quarters of 10-Q data.
-- `base_metrics.py`: Maps clean supported raw XBRL facts into business-friendly base metric records.
+- `base_metrics.py`: Maps clean supported raw XBRL facts into business-friendly base metric records using catalog-backed approved mapping candidates.
+- `company_industry_labels.py`: Source-controlled hard industry label assignment registry for experiment tickers and review placeholders for unassigned companies.
+- `mapping_catalog.py`: Inspectable common base and hard-industry target raw fact catalog plus approved raw concept to internal metric candidates.
 - `concepts.py`: Supported concepts, taxonomies, and forms.
 - `periods.py`: SEC date parsing and period classification helpers.
 - `quality.py`: Quality flag constants and helpers.
@@ -338,6 +344,8 @@ Key responsibilities:
 - Normalize SEC companyfacts into auditable fact records.
 - Support broad raw-archive normalization across all requested forms, taxonomies, and concepts.
 - Keep the common supported `us-gaap` concept list for selective metric mapping and reporting, not as the raw archive limit.
+- Keep hard industry label assignment source-controlled and auditable; use SIC and observed concepts as supporting evidence, not automatic first-version label inference.
+- Compare hard-industry target raw facts against observed raw facts and mapped financial metrics for experiment report coverage.
 - Preserve raw values separately from parsed numeric values.
 - Normalize CIK, taxonomy, concept, unit, periods, fiscal year/period, form, filing date, accession number, frame, and source metadata.
 - Add quality flags for missing, malformed, unsupported, duplicate, or ambiguous facts.

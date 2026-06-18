@@ -1,0 +1,973 @@
+Plan 2.5.1 - Hard Industry Label Raw Fact Mapping
+
+Problem Summary
+
+The problem is that different industries need different financial metrics, and
+those metrics may come from different SEC/XBRL raw facts. Even when two
+companies are talking about the same business idea, their filings may use
+different XBRL concepts, different wording, or industry-specific tags.
+
+A single global concept-to-metric mapping is not enough long term. But mapping
+every unknown XBRL concept into financial_metrics is also wrong, because many
+SEC companyfacts concepts are disclosures, rollforwards, notes, tax details,
+registration facts, segment facts, or company-specific tags that should remain
+raw evidence.
+
+The system needs a way to:
+
+- keep the raw XBRL archive broad
+- define target raw facts for each hard industry label
+- use the union of target raw facts when a company has multiple hard industry labels
+- map only approved, business-meaningful concepts into financial_metrics
+- keep unknown concepts visible for review
+- show the industry-label target facts and mapping coverage in the experiment
+  report
+
+The key rule:
+
+```text
+Hard industry label target facts guide mapping and reporting.
+They do not limit raw XBRL ingestion.
+```
+
+Hard Industry Label Requirement
+
+Plan 2.5.1 must add a hard industry label system.
+
+Every company must be assigned one or more hard industry labels from this fixed
+industry label set:
+
+```text
+Energy
+Materials
+Industrials
+Consumer Discretionary
+Consumer Staples
+Health Care
+Financials
+Information Technology
+Communication Services
+Utilities
+Real Estate
+```
+
+There are no secondary labels in Plan 2.5.1.
+
+If a company has business in multiple industries, the company should receive
+multiple hard industry labels. The target raw fact set for that company is the
+union of the target concepts for all assigned hard industry labels.
+
+Rule:
+
+```text
+company_hard_industry_labels:
+  one or more labels from the fixed 11-label set
+
+target raw fact set:
+  common base facts
+  UNION facts for every assigned hard industry label
+```
+
+The 11-label set is intended to cover all public market companies. If the system
+cannot confidently assign any label, that is a data quality/review state, not a
+new industry label.
+
+Company Industry Label Assignment Requirement
+
+Plan 2.5.1 must make hard industry label assignment explicit and auditable.
+
+For the first implementation, company hard industry labels should come from a
+source-controlled assignment registry, not from automatic inference.
+
+Recommended first file:
+
+```text
+src/processing/company_industry_labels.py
+```
+
+Each assignment should store:
+
+```text
+CompanyIndustryLabelAssignment
+  ticker
+  cik
+  assigned_industry_labels
+  assignment_source
+  assignment_reason
+  supporting_evidence
+  reviewed_at
+  label_status
+  notes
+```
+
+Rules:
+
+- `assigned_industry_labels` must use only the fixed 11-label set.
+- A company can have more than one hard industry label.
+- `assignment_source` should show whether the label came from manual review,
+  SIC support, business description support, or another approved source.
+- SIC code, SIC description, observed XBRL concepts, and business descriptions
+  are supporting evidence. They are not the source of truth in the first
+  implementation.
+- If no label is assigned, the report should mark the company as
+  `needs_label_review` and avoid pretending that industry-specific target facts
+  are complete.
+
+Important:
+
+Do not let observed XBRL concepts alone assign the industry label in the first
+implementation. That creates circular logic:
+
+```text
+observed raw facts
+  -> inferred label
+  -> expected raw facts
+```
+
+Observed XBRL concept patterns can help review an assignment, but they should not
+silently decide the assignment.
+
+Industry Target Concept Catalog Requirement
+
+Plan 2.5.1 must create an inspectable catalog of hard industry labels and their
+target SEC/XBRL concepts.
+
+Important:
+
+This catalog is not a list of every raw XBRL concept in SEC companyfacts. It is
+the list of concepts that we intentionally look for because they may become base
+financial metrics or support industry-specific indicators.
+
+Every hard industry label starts with the common base concepts:
+
+```text
+RevenueFromContractWithCustomerExcludingAssessedTax -> revenue
+Revenues -> revenue
+SalesRevenueNet -> revenue
+CostOfRevenue -> cost_of_revenue
+CostOfGoodsAndServicesSold -> cost_of_revenue
+GrossProfit -> gross_profit
+OperatingIncomeLoss -> operating_income
+NetIncomeLoss -> net_income
+ResearchAndDevelopmentExpense -> research_and_development_expense
+SellingGeneralAndAdministrativeExpense -> selling_general_and_administrative_expense
+InterestExpenseNonOperating -> interest_expense
+EarningsPerShareDiluted -> diluted_eps
+WeightedAverageNumberOfDilutedSharesOutstanding -> weighted_average_diluted_shares
+CashAndCashEquivalentsAtCarryingValue -> cash_and_equivalents
+Assets -> total_assets
+AssetsCurrent -> current_assets
+Liabilities -> total_liabilities
+LiabilitiesCurrent -> current_liabilities
+AccountsReceivableNetCurrent -> accounts_receivable
+AccountsPayableCurrent -> accounts_payable
+DebtCurrent -> debt_current
+DebtNoncurrent -> debt_noncurrent
+LongTermDebtCurrent -> long_term_debt_current
+LongTermDebtNoncurrent -> long_term_debt_noncurrent
+LongTermDebtAndFinanceLeaseObligationsCurrent -> long_term_debt_and_finance_lease_obligations_current
+LongTermDebtAndFinanceLeaseObligationsNoncurrent -> long_term_debt_and_finance_lease_obligations_noncurrent
+ShortTermBorrowings -> short_term_borrowings
+StockholdersEquity -> shareholders_equity
+NetCashProvidedByUsedInOperatingActivities -> operating_cash_flow
+PaymentsToAcquirePropertyPlantAndEquipment -> capital_expenditure
+DepreciationDepletionAndAmortization -> depreciation_and_amortization
+DepreciationDepletionAndAmortizationExpense -> depreciation_and_amortization
+```
+
+Mapping note:
+
+`NetIncomeLoss -> net_income` is intentional. The internal `net_income` metric
+represents bottom-line income or loss for the period. Positive values mean net
+income/profit, and negative values mean net loss. Do not create a separate
+`net_loss` metric unless a later report shows a different SEC concept with a
+different business meaning.
+
+Initial hard-industry target concept bundles:
+
+These bundles contain only additional industry-specific raw facts beyond the
+common base concepts above. Do not repeat common base concepts inside an
+industry bundle. If a common base concept is especially important for an
+industry, record that later as metadata such as `important_for_labels` instead
+of duplicating the raw concept in the industry bundle.
+
+```text
+Energy:
+  InventoryNet -> inventory
+  PropertyPlantAndEquipmentNet -> property_plant_and_equipment
+  AssetRetirementObligation -> asset_retirement_obligation
+
+Materials:
+  InventoryNet -> inventory
+  PropertyPlantAndEquipmentNet -> property_plant_and_equipment
+  AssetRetirementObligation -> asset_retirement_obligation
+  EnvironmentalRemediationExpense -> environmental_remediation_expense
+
+Industrials:
+  InventoryNet -> inventory
+  PropertyPlantAndEquipmentNet -> property_plant_and_equipment
+  ContractAssetCurrent -> contract_assets_current
+  ContractWithCustomerLiabilityCurrent -> contract_liabilities_current
+  Backlog -> backlog
+
+Consumer Discretionary:
+  InventoryNet -> inventory
+  MerchandiseInventory -> inventory
+  OperatingLeaseRightOfUseAsset -> operating_lease_right_of_use_asset
+  OperatingLeaseLiabilityCurrent -> operating_lease_liability_current
+  OperatingLeaseLiabilityNoncurrent -> operating_lease_liability_noncurrent
+  AdvertisingExpense -> advertising_expense
+
+Consumer Staples:
+  InventoryNet -> inventory
+  MerchandiseInventory -> inventory
+  OperatingLeaseRightOfUseAsset -> operating_lease_right_of_use_asset
+  OperatingLeaseLiabilityCurrent -> operating_lease_liability_current
+  OperatingLeaseLiabilityNoncurrent -> operating_lease_liability_noncurrent
+  AdvertisingExpense -> advertising_expense
+
+Health Care:
+  InventoryNet -> inventory
+  PropertyPlantAndEquipmentNet -> property_plant_and_equipment
+  IntangibleAssetsNetExcludingGoodwill -> intangible_assets
+  Goodwill -> goodwill
+
+Financials:
+  InterestIncomeExpenseNet -> net_interest_income
+  InterestIncomeExpenseNonOperatingNet -> net_interest_income
+  LoansAndLeasesReceivableNetReportedAmount -> loans_receivable
+  Deposits -> deposits
+  AllowanceForCreditLosses -> allowance_for_credit_losses
+  PremiumsEarnedNet -> insurance_premiums
+  InsuranceClaimsAndClaimsExpense -> insurance_claims_expense
+  InvestmentIncomeNet -> investment_income
+
+Information Technology:
+  ContractWithCustomerLiabilityCurrent -> deferred_revenue_current
+  ContractWithCustomerLiabilityNoncurrent -> deferred_revenue_noncurrent
+  DeferredRevenueCurrent -> deferred_revenue_current
+  DeferredRevenueNoncurrent -> deferred_revenue_noncurrent
+  SellingAndMarketingExpense -> selling_and_marketing_expense
+  IntangibleAssetsNetExcludingGoodwill -> intangible_assets
+  Goodwill -> goodwill
+
+Communication Services:
+  ContractWithCustomerLiabilityCurrent -> deferred_revenue_current
+  ContractWithCustomerLiabilityNoncurrent -> deferred_revenue_noncurrent
+  SellingAndMarketingExpense -> selling_and_marketing_expense
+  Goodwill -> goodwill
+  IntangibleAssetsNetExcludingGoodwill -> intangible_assets
+
+Utilities:
+  PropertyPlantAndEquipmentNet -> property_plant_and_equipment
+  UtilityPlantNet -> utility_plant
+  RegulatedAndUnregulatedOperatingRevenue -> revenue
+  AssetRetirementObligation -> asset_retirement_obligation
+
+Real Estate:
+  RentalIncome -> rental_income
+  RealEstateInvestmentPropertyNet -> real_estate_investment_property
+  RealEstateAccumulatedDepreciation -> real_estate_accumulated_depreciation
+  OperatingLeaseIncome -> operating_lease_income
+  PropertyPlantAndEquipmentNet -> property_plant_and_equipment
+  MortgageLoansOnRealEstate -> mortgage_loans_on_real_estate
+```
+
+Some concept names in the first catalog may need validation against the actual
+SEC taxonomy and observed company filings before implementation. The plan is to
+store the catalog explicitly, inspect it in the report, and refine it from real
+raw facts.
+
+Current System Facts
+
+The current system already has the right foundation:
+
+- `src/ingestion/company.py` calls `normalize_companyfacts(..., concepts=None,
+  forms=None, taxonomies=None)`, so ingestion keeps a broad raw XBRL archive.
+- `raw_xbrl_facts` is the source-of-truth archive.
+- `src/processing/base_metrics.py` has `BASE_METRIC_MAPPINGS`, which maps a
+  limited set of raw XBRL concepts into canonical base metrics.
+- `financial_metrics` stores mapped base metrics with `raw_fact_id` and
+  accession traceability.
+- `companies` stores `sic` and `sic_description`, which can be used as one
+  optional supporting signal for assigning hard industry labels.
+- The MS2.5 experiment report already shows raw fact mapping coverage, alternate
+  XBRL tags, and unknown XBRL concepts.
+- The MS3 indicator engine calculates from stable internal metric names, not
+  directly from raw XBRL concepts.
+
+Current Limitation
+
+`BASE_METRIC_MAPPINGS` is a flat global dictionary:
+
+```text
+raw XBRL concept -> statement_type + internal metric_name
+```
+
+That is enough for common company metrics, but it does not describe:
+
+- which raw facts are expected for a specific industry
+- which raw facts are essential vs optional
+- which raw facts support core indicators vs specialized indicators
+- which raw concepts are consolidated company-level facts vs segment facts
+- which concept should win when multiple concepts can map to the same metric
+- why a concept was selected, skipped, unknown, or left raw
+
+Plan Goal
+
+Plan 2.5.1 should introduce a hard-industry-label-aware mapping layer between the
+broad raw XBRL archive and the base financial metric layer.
+
+The goal is not to map every raw concept.
+
+The goal is to build an inspectable target mapping catalog and use it to expand
+concept-to-metric mappings selectively, based on evidence from actual filings.
+
+Non-Goals
+
+Plan 2.5.1 should not:
+
+- limit SEC/companyfacts ingestion to a preset concept list
+- map every unknown XBRL concept
+- force a company into only one industry label
+- mix segment-level facts into consolidated company indicators
+- add LLM reasoning to metric mapping
+- calculate derived indicators inside ingestion or base metric mapping
+- replace the MS3 indicator engine
+- change the database schema in the first implementation unless later evidence
+  proves it is necessary
+
+Shared Understanding
+
+The system should use three separate layers:
+
+```text
+raw_xbrl_facts
+  broad archive of reported SEC/XBRL facts
+
+mapping catalog
+  source-controlled target facts and approved concept-to-metric candidates
+
+financial_metrics
+  curated, canonical base metrics used by indicators and analysis
+```
+
+Unknown XBRL concepts should not be treated as failures by default.
+
+They should be treated as a review queue:
+
+```text
+unknown concept
+  -> inspect meaning
+  -> decide whether it is useful for a base metric or industry indicator
+  -> approve mapping if useful
+  -> leave raw if not useful
+```
+
+Design Decision 1 - Keep Raw XBRL Ingestion Broad
+
+Ingestion should continue to download and normalize broad companyfacts data.
+
+Reason:
+
+- We need unknown concepts available for future review.
+- We should not have to re-download SEC data every time the mapping catalog
+  expands.
+- A company can report useful facts outside its assigned hard industry labels.
+
+Rule:
+
+```text
+Do not use industry target raw fact sets as ingestion filters.
+Use them as mapping and report coverage targets.
+```
+
+Design Decision 2 - Add An Inspectable Mapping Catalog
+
+Create a source-controlled mapping catalog that stores hard industry label target
+raw facts and approved mapping candidates.
+
+Recommended first file:
+
+```text
+src/processing/mapping_catalog.py
+```
+
+This file should be inspectable in code review and easy to print in experiment
+reports.
+
+Suggested dataclasses:
+
+```text
+IndustryLabelDefinition
+  industry_label
+  description
+  assignment_notes
+  notes
+
+IndustryFactTarget
+  industry_label
+  raw_concept
+  taxonomy
+  internal_metric_name
+  statement_type
+  required_for_core
+  required_for_specialized_indicators
+  consolidated_or_segment
+  priority
+  notes
+
+MappingDecision
+  raw_concept
+  internal_metric_name
+  status
+  reason
+```
+
+Start with the fixed 11-label catalog. Do not create custom labels for one
+company.
+
+Initial hard industry labels are:
+
+```text
+Energy
+Materials
+Industrials
+Consumer Discretionary
+Consumer Staples
+Health Care
+Financials
+Information Technology
+Communication Services
+Utilities
+Real Estate
+```
+
+Only add target raw concepts to a label when we need them for an experiment, a
+real ticker, or a reviewed indicator need.
+
+Design Decision 3 - Keep Canonical Metric Names Stable
+
+Different raw concepts can map to the same internal metric.
+
+Example:
+
+```text
+RevenueFromContractWithCustomerExcludingAssessedTax -> revenue
+Revenues -> revenue
+SalesRevenueNet -> revenue
+```
+
+The indicator engine should continue to calculate from stable metric names:
+
+```text
+revenue
+gross_profit
+net_income
+total_assets
+inventory
+operating_cash_flow
+capital_expenditure
+```
+
+The mapping layer owns raw concept variation.
+The indicator layer should not need to know every XBRL tag variation.
+
+Design Decision 4 - Use Union Target Sets For Multi-Label Companies
+
+A company may have more than one hard industry label.
+
+In the first implementation, labels should be selected from the source-controlled
+company industry label registry. The following signals can support the registry
+decision and explain it in the report:
+
+- SEC SIC code as supporting evidence
+- SIC description
+- company business description
+- observed XBRL concept patterns
+- manually approved project configuration later if needed
+- future segment evidence
+
+For a multi-label company:
+
+```text
+target_raw_facts =
+  common base target facts
+  UNION target facts for every assigned hard industry label
+```
+
+Important rule:
+
+```text
+Union the target raw fact expectations.
+Do not union numerical values unless the facts are clearly consolidated
+company-level facts.
+```
+
+Segment-level facts should stay separate unless a formula explicitly says it is
+a segment-level indicator.
+
+Design Decision 5 - Add Mapping Priority And Status
+
+The catalog should support priority because multiple concepts can map to the
+same internal metric.
+
+Example statuses:
+
+```text
+found_mapped
+found_alternate
+missing_target
+found_unmapped
+needs_review
+skipped_quality
+segment_only
+not_applicable
+```
+
+This lets the experiment report explain what happened instead of just showing a
+large unknown-concepts table.
+
+Design Decision 6 - Expand Concept-To-Metric Mapping Selectively
+
+Yes, the concept-to-metric mapping should expand.
+
+But it should expand selectively.
+
+The process should be:
+
+```text
+1. Report unknown and alternate concepts.
+2. Compare them against hard industry label target facts.
+3. Decide whether the concept represents a useful financial metric.
+4. Add the approved concept to the mapping catalog.
+5. Preserve the source raw fact traceability.
+6. Leave non-useful concepts in raw_xbrl_facts only.
+```
+
+Do not expand mappings just to reduce the unknown count.
+
+A lower unknown count is not the goal.
+Better mapping quality is the goal.
+
+Plan 2.5.1 Data Flow
+
+```text
+source-controlled company industry label registry
+  -> provide assigned hard industry labels and assignment rationale
+
+SEC companyfacts
+  -> normalize broad raw facts
+  -> store raw_xbrl_facts
+  -> validate assigned hard industry labels
+  -> build union target raw fact set
+  -> compare target facts against observed raw facts
+  -> map approved raw concepts into financial_metrics
+  -> report mapping coverage
+  -> calculate indicators from financial_metrics
+```
+
+Plan 2.5.1 Output In MS2.5 Report
+
+The MS2.5 experiment report should add sections like:
+
+```text
+Company Industry Labels:
+  ticker:
+  cik:
+  sic:
+  sic_description:
+  assigned_industry_labels:
+  assignment_source:
+  assignment_reason:
+  supporting_evidence:
+  label_status:
+  review_notes:
+
+Target Raw Fact Coverage:
+  industry_label
+  target_raw_concept
+  taxonomy
+  internal_metric_name
+  required_for_core
+  status
+  observed_rows
+  mapped_rows
+  latest_filing_date
+  notes
+
+Found Target Facts:
+  target facts observed in raw_xbrl_facts
+
+Missing Target Facts:
+  target facts expected by assigned hard industry labels but not observed
+
+Found But Unmapped Target Facts:
+  target facts observed but not yet mapped because they need approval or quality
+  review
+
+Alternate SEC/XBRL Tags:
+  multiple raw concepts mapping to the same internal metric
+
+Unknown SEC/XBRL Concepts:
+  concepts that are not in the target catalog or mapping catalog
+```
+
+This gives the user an inspectable bridge between:
+
+```text
+hard industry label expectation
+actual SEC/XBRL raw facts
+approved financial_metrics mapping
+indicator readiness
+```
+
+Plan 2.5.1 Implementation Phases
+
+Phase 1 - Document Mapping Policy
+
+Create:
+
+```text
+docs/mapping_policy.md
+```
+
+Purpose:
+
+- explain broad raw ingestion vs selective metric mapping
+- define the fixed hard industry label set
+- define the company hard industry label assignment registry
+- define industry target raw fact sets
+- define union target set behavior for multi-label companies
+- define consolidated vs segment facts
+- define mapping statuses
+- define unknown concepts as review queue, not automatic missing mappings
+
+Verification:
+
+- read the policy against Question 9 in `discussion.txt`
+- confirm it answers why unknown concepts exist
+- confirm it says we should not map every unknown concept
+
+Phase 2 - Add Company Label Registry And Mapping Catalog
+
+Create:
+
+```text
+src/processing/company_industry_labels.py
+src/processing/mapping_catalog.py
+```
+
+Initial content:
+
+- dataclass for company hard industry label assignments
+- source-controlled assignments for experiment tickers
+- dataclasses for hard industry labels and target facts
+- the fixed 11-label hard industry set
+- common base target facts used for most companies
+- initial target concept bundles for each hard industry label
+- helper functions:
+
+```text
+industry_label_assignments_for_company(ticker, cik)
+industry_label_evidence_for_company(sic, sic_description, observed_concepts)
+target_facts_for_industry_labels(industry_labels)
+mapping_candidates_by_concept()
+```
+
+Keep this source-controlled and human-readable.
+
+No database schema change is required for the first version.
+
+First-version rule:
+
+`industry_label_assignments_for_company(...)` should read the explicit registry
+assignment. `industry_label_evidence_for_company(...)` can collect supporting
+evidence for review, but it should not silently infer labels in the first
+implementation.
+
+Phase 3 - Refactor Base Metric Mapping To Use Catalog
+
+Update:
+
+```text
+src/processing/base_metrics.py
+```
+
+Goal:
+
+- preserve `map_raw_facts_to_base_metrics()` as the public function
+- replace the flat dictionary lookup with catalog-backed mapping candidates
+- keep existing behavior for current supported concepts
+- add priority only where there are multiple candidates
+- keep quality filtering unchanged
+
+Compatibility:
+
+- existing MS2.5 and MS3 workflows should still run
+- `financial_metrics` schema should not change in this phase
+- indicator engine should not change in this phase
+
+Phase 4 - Add Company Industry Labels And Target Coverage To MS2.5
+
+Update:
+
+```text
+experiments/MS2_5/milestone25_live_sec_inspection.py
+experiments/MS2_5/experiment_proposal.md
+```
+
+Report additions:
+
+- company SIC and SIC description as supporting assignment evidence
+- assigned hard industry labels
+- assignment source, assignment reason, and label status
+- supporting evidence used to justify or review the assigned labels
+- target raw fact coverage
+- missing target facts
+- found target facts
+- found but unmapped target facts
+- unknown raw concepts outside current mapping catalog
+
+This is the most important experiment output for Plan 2.5.1.
+
+It should answer:
+
+```text
+For this ticker, what raw XBRL facts did we expect because of its assigned hard industry labels?
+Which ones were present?
+Which ones mapped into financial_metrics?
+Which useful ones are missing from the mapping catalog?
+Which unknown facts are probably irrelevant?
+```
+
+Phase 5 - Selectively Expand Mappings
+
+Use the MS2.5 report to review unknown and missing target concepts.
+
+Expansion workflow:
+
+```text
+1. Pick one ticker and one assigned hard industry label.
+2. Read Target Raw Fact Coverage.
+3. Review missing or found_unmapped concepts.
+4. Decide if the concept is useful for a base metric or industry indicator.
+5. Add it to `mapping_catalog.py`.
+6. Re-run MS2.5.
+7. Confirm mapped rows increased for the intended metric.
+8. Confirm no unrelated indicators changed unexpectedly.
+```
+
+Do not expand mapping just because a concept appears frequently.
+Expand mapping only when the concept has a clear business meaning in the system.
+
+Phase 6 - Prepare Hard-Industry-Label-Aware Indicator Catalogs
+
+This can happen after the base mapping catalog is useful.
+
+Future update:
+
+```text
+src/indicators/formulas.py
+```
+
+Possible shape:
+
+```text
+core indicators:
+  calculated for most companies
+
+industry-label indicators:
+  calculated only when assigned hard industry labels and required metrics support them
+```
+
+Examples:
+
+```text
+core:
+  revenue_growth_yoy
+  gross_margin
+  operating_margin
+  net_margin
+  current_ratio
+  free_cash_flow
+
+Energy:
+  asset_retirement_obligation_to_assets
+  capex_to_operating_cash_flow
+  depreciation_depletion_and_amortization_margin
+
+Materials:
+  inventory_turnover
+  days_inventory_outstanding
+  property_plant_and_equipment_intensity
+
+Industrials:
+  inventory_turnover
+  backlog_to_revenue
+  contract_assets_to_revenue
+
+Consumer Discretionary:
+  inventory_turnover
+  advertising_to_revenue
+  operating_lease_liability_to_assets
+
+Consumer Staples:
+  inventory_turnover
+  gross_margin
+  advertising_to_revenue
+
+Health Care:
+  research_and_development_intensity
+  intangible_assets_to_assets
+  goodwill_to_assets
+
+Financials:
+  net_interest_income_to_assets
+  allowance_for_credit_losses_to_loans
+  deposits_to_liabilities
+
+Information Technology:
+  deferred_revenue_growth
+  research_and_development_intensity
+  selling_and_marketing_to_revenue
+
+Communication Services:
+  deferred_revenue_growth
+  selling_and_marketing_to_revenue
+  goodwill_to_assets
+
+Utilities:
+  utility_plant_to_assets
+  asset_retirement_obligation_to_assets
+  debt_to_assets
+
+Real Estate:
+  real_estate_investment_property_to_assets
+  rental_income_growth
+  mortgage_loans_to_assets
+```
+
+The indicator engine should still calculate from internal metrics, not raw XBRL
+concept names.
+
+Plan 2.5.1 Acceptance Evidence
+
+Plan 2.5.1 is working when the experiment report can show:
+
+- the source-controlled hard industry label assignment
+- the company SIC and SIC description as supporting evidence
+- the assignment source, assignment reason, label status, and review notes
+- the union target raw fact set for the assigned hard industry labels
+- target facts found in `raw_xbrl_facts`
+- target facts missing from `raw_xbrl_facts`
+- found facts mapped into `financial_metrics`
+- found target facts that need mapping review
+- unknown concepts that remain raw-only evidence
+- stable traceability from financial_metrics to raw_fact_id and accession number
+
+Manual verification command:
+
+```text
+uv run python -B experiments/MS2_5/milestone25_live_sec_inspection.py --ticker TSLA
+```
+
+Expected report behavior:
+
+- no report body printed to terminal
+- `experiments/MS2_5/experiment_report.md` is updated
+- Company Industry Labels section is present
+- Target Raw Fact Coverage section is present
+- unknown concept count can still be high
+- useful found_unmapped target facts are visible for mapping review
+
+Risks And Mitigations
+
+Risk:
+  The mapping catalog becomes too large or too subjective.
+
+Mitigation:
+  Add concepts only when a report shows they are useful for a base metric or
+  industry-label-specific indicator.
+
+Risk:
+  Multi-label union sets create noise.
+
+Mitigation:
+  Mark target facts as required, optional, core, or specialized. Do not treat all
+  target facts as mandatory.
+
+Risk:
+  Segment-level facts get mixed into consolidated indicators.
+
+Mitigation:
+  Add `consolidated_or_segment` metadata and skip segment-only facts for
+  company-level metrics.
+
+Risk:
+  Indicator formulas become polluted with raw XBRL tags.
+
+Mitigation:
+  Keep raw concept handling in `src/processing/`. Indicators should use stable
+  internal metric names only.
+
+Risk:
+  Unknown concept count remains high and looks like failure.
+
+Mitigation:
+  Explain in the report that unknown concepts are raw evidence and review
+  candidates, not automatically missing mappings.
+
+Files Likely To Change Later
+
+Documentation:
+
+```text
+docs/mapping_policy.md
+docs/structure.md
+experiments/MS2_5/experiment_proposal.md
+```
+
+Processing:
+
+```text
+src/processing/company_industry_labels.py
+src/processing/mapping_catalog.py
+src/processing/base_metrics.py
+src/processing/__init__.py
+```
+
+Experiment:
+
+```text
+experiments/MS2_5/milestone25_live_sec_inspection.py
+experiments/MS2_5/experiment_report.md
+```
+
+Possible later indicator work:
+
+```text
+src/indicators/formulas.py
+src/indicators/engine.py
+experiments/MS3/milestone3_indicator_engine.py
+experiments/MS3/experiment_proposal.md
+```
+
+Recommended Next Action
+
+Start Plan 2.5.1 with the report-facing version:
+
+```text
+1. Create `docs/mapping_policy.md`.
+2. Create `src/processing/company_industry_labels.py` with explicit assignments
+   for experiment tickers.
+3. Create `src/processing/mapping_catalog.py` with a small initial catalog.
+4. Extend MS2.5 to print Company Industry Labels and Target Raw Fact Coverage.
+5. Use the report to decide which mappings to expand.
+```
+
+Do not start by building a full industry taxonomy system.
+Do not start by mapping every unknown XBRL concept.
+
+Start with an inspectable catalog and let the experiment report reveal the next
+mapping gaps.
