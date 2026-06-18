@@ -24,6 +24,7 @@ company request
       -> full raw_xbrl_facts archive
         -> active 10-K/10-Q filing evidence
           -> active-window financial_metrics
+            -> data lineage view for financial_metrics availability
 ```
 
 The experiment should show whether a chosen ticker can be initialized through
@@ -57,8 +58,14 @@ This experiment covers:
 - active filing evidence for the latest 5 fiscal years of 10-K data and latest
   12 quarters of 10-Q data
 - base financial metric mapping
+- metric-level data lineage summary for `financial_metrics`
 - traceability from `financial_metrics` to `raw_xbrl_facts` and filings
-- compact terminal summary with full rows available in SQLite and CSV exports
+- raw fact mapping coverage: raw facts downloaded/stored, mapped raw facts,
+  unmapped raw facts, unknown raw concepts, and supported mapping catalog size
+- alternate SEC/XBRL tags that map to the same internal business metric
+- unknown SEC/XBRL concepts not currently mapped to base financial metrics
+- saved compact report with appended annual and quarterly XBRL metric evidence,
+  with source rows still available in SQLite and CSV exports
 
 This experiment does not cover derived indicators, deterministic analytics,
 retrieval indexes, Gemini calls, RAG answers, frontend behavior, or pass/fail
@@ -85,13 +92,14 @@ data/exports/
     metric_traceability_sample.csv
 ```
 
-The experiment should print a compact terminal summary by default.
+The experiment should write a compact report to `experiment_report.md` by
+default and should not print the report body to the terminal.
 `experiments/storage/experiment.db` should persist across runs and across
 milestone experiments. The CSV exports should overwrite stable paths on each
 run.
-The detailed Markdown report should be printed only when the user asks for it
-with `--full-report`. `experiment_report.md` should be written only when the
-user asks for the saved Markdown artifact with `--write-report`.
+The detailed Markdown report sections should be added to the saved report only
+when the user asks for them with `--full-report`. `--write-report` is accepted
+only as a compatibility flag because the report is now always saved.
 
 ## Data Mode
 
@@ -125,13 +133,13 @@ Default run:
 uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER
 ```
 
-Saved Markdown report run:
+Compatibility saved report run:
 
 ```text
 uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER --write-report
 ```
 
-Detailed Markdown terminal report run:
+Detailed saved report run:
 
 ```text
 uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER --full-report
@@ -140,9 +148,10 @@ uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR
 Rules:
 
 - exactly one ticker is accepted per run
-- the compact summary is printed to the terminal by default
-- `--full-report` prints the detailed Markdown report to the terminal
-- `--write-report` writes the detailed Markdown report to `experiment_report.md`
+- the compact summary is saved to `experiment_report.md` by default
+- the report body is not printed to the terminal
+- `--full-report` includes the detailed Markdown report in `experiment_report.md`
+- `--write-report` is accepted for compatibility; the report is already saved
 - both 10-K and 10-Q behavior are presented for that ticker
 - normal runs do not delete `experiments/storage/experiment.db`; repeat runs
   should make already-ingested behavior visible
@@ -154,7 +163,7 @@ Rules:
 Main report output:
 
 ```text
-compact terminal stdout
+experiments/MS2_5/experiment_report.md
 ```
 
 Kept SQLite artifact:
@@ -169,22 +178,27 @@ Supporting CSV artifacts:
 data/exports/ms2_5/
 ```
 
-The compact terminal report should show the operational decision path first:
-whether the company is local, whether an update check is due this session,
-whether SEC was checked, whether new filing data was ingested, and the next
-10-K/10-Q check dates after the session. Full rows should remain available in
-`experiments/storage/experiment.db` and CSV exports. If `--full-report` is used,
-the detailed Markdown report should show compact table samples. If
-`--write-report` is used, the same detailed Markdown report should also be
-written to:
+Financial metric lineage section:
 
 ```text
 experiments/MS2_5/experiment_report.md
 ```
 
-## Compact Terminal Report Shape
+The compact saved report should show the operational decision path first:
+whether the company is local, whether an update check is due this session,
+whether SEC was checked, whether new filing data was ingested, and the next
+10-K/10-Q check dates after the session. The same `experiment_report.md` should
+append the full financial metric lineage content, including raw fact mapping
+coverage, alternate and unknown SEC/XBRL tag evidence, and two pivoted XBRL
+metric tables: one annual table with fiscal years as columns and one quarterly
+table with fiscal quarters as columns. Other full rows should remain available
+in `experiments/storage/experiment.db` and CSV exports. If `--full-report` is
+used, the saved report should also include detailed Markdown sections and
+compact table samples.
 
-The default terminal report should fit a quick review:
+## Compact Saved Report Shape
+
+The default saved report should fit a quick review:
 
 ```text
 Milestone 2.5 Plan 2.5 Ingestion Examination
@@ -230,9 +244,10 @@ Source And Export Warnings
 
 Full Evidence
   SQLite database:
+  appended financial metric lineage section:
   CSV exports:
   filing downloads:
-  saved Markdown report:
+  saved report:
 
 Manual Judgment
 
@@ -270,9 +285,15 @@ Evidence to present:
 - `next_check_date_10q`
 - raw fact count
 - base metric count
+- raw fact mapping coverage summary
+- alternate SEC/XBRL tags for the same business metric
+- unknown SEC/XBRL concepts not mapped into `financial_metrics`
 - active-window counts for 10-K and 10-Q
 - compact `financial_metrics` sample
+- metric-level data lineage view showing raw XBRL concepts, system mappings,
+  `financial_metrics` row counts, active-row counts, and inactive context rows
 - compact metric traceability sample
+- appended financial metric lineage section in `experiment_report.md`
 
 ### Already-Ingested Session Check
 
@@ -317,7 +338,15 @@ Evidence to present:
 
 ### Raw Fact And Metric Counts
 
+### Raw Fact Mapping Coverage
+
 ### Active Window
+
+### Financial Metric Data Lineage View
+
+### Alternate SEC/XBRL Tags For Same Business Metric
+
+### Unknown SEC/XBRL Concepts Not Mapped To Base Metrics
 
 ### Compact financial_metrics Sample
 
@@ -334,8 +363,9 @@ Evidence to present:
 ## Full Evidence Artifacts
 
 ## Manual Judgment
-  This report presents evidence only. Review the report, database, and CSVs to
-  decide whether the behavior matches the Milestone 2.5 design.
+  This report presents evidence only. Review the report, appended lineage
+  section, database, and CSVs to decide whether the behavior matches the
+  Milestone 2.5 design.
 ```
 
 ## Required Report Sections
@@ -347,11 +377,15 @@ Evidence to present:
 5. Company registry samples
 6. Filing inventory samples
 7. Raw fact and base metric counts
-8. Active-window counts
-9. Compact `financial_metrics` sample
-10. Compact traceability sample
-11. Full evidence artifact paths
-12. Manual judgment note
+8. Raw fact mapping coverage
+9. Active-window counts
+10. Financial metric data lineage view
+11. Alternate SEC/XBRL tags for the same business metric
+12. Unknown SEC/XBRL concepts not mapped to base financial metrics
+13. Compact `financial_metrics` sample
+14. Compact traceability sample
+15. Full evidence artifact paths
+16. Manual judgment note
 
 ## Implementation Guidance
 
@@ -366,11 +400,15 @@ Evidence to present:
 - Do not write to `stock_data.db`.
 - Do not delete or reset `experiments/storage/experiment.db` at startup.
 - Do not print secrets or the actual `SEC_USER_AGENT` value.
-- Keep the default terminal output short and point to the SQLite database, CSV
-  exports, filing downloads, and optional detailed report.
-- Print compact terminal output by default.
-- Print the detailed Markdown report only when `--full-report` is present.
-- Write `experiment_report.md` only when `--write-report` is present.
+- Keep the default saved report compact and point to the SQLite database, CSV
+  exports, filing downloads, and optional detailed sections.
+- Append the financial metric data lineage view to `experiment_report.md`.
+- Save the compact report to `experiment_report.md` by default without printing
+  the report body to the terminal.
+- Include the detailed Markdown report in `experiment_report.md` only when
+  `--full-report` is present.
+- Accept `--write-report` as a compatibility flag, not as a separate output
+  mode.
 - Store Decimal-compatible numeric text values as they come from the storage
   layer; do not convert report values through SQLite `REAL`.
 
@@ -391,6 +429,28 @@ The report should also list the generated CSV exports under:
 data/exports/ms2_5/
 ```
 
+The lineage text report should include two pivoted XBRL metric tables:
+
+- Annual XBRL Financial Metrics: `metric_name`, `statement_type`, then one
+  column per fiscal year.
+- Quarterly XBRL Financial Metrics: `metric_name`, `statement_type`, then one
+  column per fiscal quarter.
+
+Each table should show the stored financial metric values in period columns.
+Table cells should be padded to the column width so headers and values align in
+the text report.
+Each period column should use one consistent abbreviation suffix when possible:
+`k` removes 3 trailing zeros and `m` removes 6 trailing zeros. Decimal or
+otherwise non-integer values should remain unscaled. This abbreviation is for
+report presentation only; stored SQLite values and CSV exports should remain
+unmodified.
+When multiple distinct values remain for one metric-period cell, the report
+should keep them visible in the cell instead of silently dropping them.
+The lineage text report should also highlight the raw fact mapping coverage,
+observed alternate SEC/XBRL tags for shared business metrics, and unknown
+SEC/XBRL concept tags that are present in `raw_xbrl_facts` but not mapped into
+`financial_metrics`.
+
 ## Edge Cases To Present
 
 The experiment should present these conditions when they occur naturally:
@@ -402,6 +462,8 @@ The experiment should present these conditions when they occur naturally:
 - no recent 10-Q is available
 - update-check date cannot be generated because latest filing date is missing
 - base metrics are unavailable because concepts are missing or quality-flagged
+- a mapped raw concept has no usable `financial_metrics` rows for the active
+  window
 - source raw fact ID is missing from a metric row
 - duplicate or ambiguous facts are visible in raw fact quality flags
 
@@ -421,7 +483,9 @@ inspect:
 - how many rows exist in each relevant table
 - which rows are inside the active analysis window
 - which base metrics were mapped
+- how raw XBRL concepts map into available `financial_metrics`
 - which base metrics can be traced back to raw XBRL facts
+- where to inspect annual and quarterly XBRL metric evidence
 - where to open the full SQLite database and CSV exports
 
 The experiment should stop at presentation. The human reviewer decides whether

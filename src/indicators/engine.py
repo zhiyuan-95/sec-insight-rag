@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from decimal import Decimal
 
@@ -41,6 +41,7 @@ class _MetricValue:
 @dataclass(frozen=True)
 class _MetricLookup:
     metrics: dict[_PeriodKey, dict[str, tuple[FinancialMetric, ...]]]
+    active_periods: frozenset[_PeriodKey]
 
     def metric(self, period: _PeriodKey, metric_name: str) -> tuple[FinancialMetric | None, str | None]:
         candidates = self.metrics.get(period, {}).get(metric_name, ())
@@ -59,18 +60,22 @@ def calculate_indicators(
     *,
     active_only: bool = True,
 ) -> list[IndicatorResult]:
-    """Calculate the full indicator catalog from base metrics."""
+    """Calculate the full indicator catalog from base metrics.
+
+    When active_only is true, only active-window periods are emitted, but
+    out-of-window metrics remain available as prior-period formula context.
+    """
     usable_metrics = [
         metric
         for metric in metrics
         if metric.company_id == company_id
         and metric.fiscal_year is not None
         and metric.fiscal_period is not None
-        and (metric.is_active_window or not active_only)
     ]
     lookup = _build_lookup(usable_metrics)
+    target_periods = lookup.active_periods if active_only else frozenset(lookup.metrics)
     results: list[IndicatorResult] = []
-    for period in sorted(lookup.metrics, key=_period_sort_key):
+    for period in sorted(target_periods, key=_period_sort_key):
         for definition in INDICATOR_DEFINITIONS:
             results.append(_calculate_one(definition, period, lookup))
     return results
@@ -78,6 +83,7 @@ def calculate_indicators(
 
 def _build_lookup(metrics: list[FinancialMetric]) -> _MetricLookup:
     grouped: dict[_PeriodKey, dict[str, list[FinancialMetric]]] = defaultdict(lambda: defaultdict(list))
+    active_periods: set[_PeriodKey] = set()
     for metric in metrics:
         if metric.fiscal_year is None or metric.fiscal_period is None:
             continue
@@ -87,6 +93,8 @@ def _build_lookup(metrics: list[FinancialMetric]) -> _MetricLookup:
             fiscal_period=metric.fiscal_period.strip().upper(),
         )
         grouped[period][metric.metric_name].append(metric)
+        if metric.is_active_window:
+            active_periods.add(period)
     frozen = {
         period: {
             name: tuple(values)
@@ -94,10 +102,19 @@ def _build_lookup(metrics: list[FinancialMetric]) -> _MetricLookup:
         }
         for period, by_name in grouped.items()
     }
-    return _MetricLookup(metrics=frozen)
+    return _MetricLookup(metrics=frozen, active_periods=frozenset(active_periods))
 
 
 def _calculate_one(
+    definition: IndicatorDefinition,
+    period: _PeriodKey,
+    lookup: _MetricLookup,
+) -> IndicatorResult:
+    result = _calculate_one_value(definition, period, lookup)
+    return replace(result, is_active_window=period in lookup.active_periods)
+
+
+def _calculate_one_value(
     definition: IndicatorDefinition,
     period: _PeriodKey,
     lookup: _MetricLookup,

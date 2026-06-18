@@ -220,10 +220,10 @@ experiments/
 - `experiments/MS2/experiment_proposal.md`: Human-inspection proposal for the Milestone 2 SEC/XBRL ingestion and normalization experiment. It defines input cases, intended terminal output, artifacts to inspect, edge cases, and expected outcomes.
 - `experiments/MS2/milestone2_ingestion_showcase.py`: Runnable Milestone 2 experiment script that prints the SEC/XBRL ingestion and normalization showcase described by the Milestone 2 proposal.
 - `experiments/storage/`: Generated shared experiment storage. Current MS2.5 live runs use `experiments/storage/experiment.db` and `experiments/storage/filings/` so later milestone experiments can inspect the same isolated state without touching `stock_data.db`.
-- `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 Plan 2.5 ingestion manual examination harness. It defines one user-chosen ticker per run, persistent shared isolated experiment storage, setup ingestion, already-ingested session inspection, 10-K and 10-Q update-check evidence, active-window evidence, compact terminal summary output, optional detailed Markdown terminal output, optional saved Markdown report, and full SQLite/CSV evidence artifacts.
-- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that prints a compact terminal summary by default, separates setup ingestion from the already-ingested session check, reports company-local existence, refresh due status, SEC check behavior, newly ingested filings, and next check dates, prints the detailed Markdown report with `--full-report`, optionally writes `experiments/MS2_5/experiment_report.md` with `--write-report`, preserves `experiments/storage/experiment.db` across runs, writes isolated filing downloads under `experiments/storage/filings/`, and exports supporting CSVs under `data/exports/ms2_5/`.
+- `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 Plan 2.5 ingestion manual examination harness. It defines one user-chosen ticker per run, persistent shared isolated experiment storage, setup ingestion, already-ingested session inspection, 10-K and 10-Q update-check evidence, active-window evidence, raw fact mapping coverage, unknown and alternate SEC/XBRL tag evidence, financial metric data lineage output appended to the saved report, saved compact report output, optional detailed Markdown sections in the saved report, and full SQLite/CSV evidence artifacts.
+- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that saves `experiments/MS2_5/experiment_report.md` by default without printing the report body to the terminal, separates setup ingestion from the already-ingested session check, reports company-local existence, refresh due status, SEC check behavior, newly ingested filings, and next check dates, appends raw fact mapping coverage, unmapped/alternate SEC/XBRL tag evidence, and annual/quarterly pivoted XBRL metric tables with padded columns and presentation-only per-period `k`/`m` suffixes to the saved report, includes detailed Markdown sections in the saved report with `--full-report`, accepts `--write-report` as a compatibility flag, preserves `experiments/storage/experiment.db` across runs, writes isolated filing downloads under `experiments/storage/filings/`, and exports supporting CSVs under `data/exports/ms2_5/`.
 - `experiments/MS3/experiment_proposal.md`: Human-inspection proposal for the Milestone 3 indicator engine experiment. It defines active accession-window scope, yearly and quarterly indicator tables for the requested catalog, skipped-period reasons, formulas, and source-metric traceability output.
-- `experiments/MS3/milestone3_indicator_engine.py`: Runnable Milestone 3 experiment script that reads stored `financial_indicators`, prints active accession-window scope, yearly and quarterly indicator tables for the requested ticker or tickers, skipped reasons, formulas, and source traceability.
+- `experiments/MS3/milestone3_indicator_engine.py`: Runnable Milestone 3 experiment script that reads stored `financial_indicators` and writes a `.txt` report under `experiments/MS3` with active accession-window scope, yearly and quarterly indicator tables for the requested ticker or tickers, skipped reasons, formulas, and source traceability.
 - `experiments/MS4/experiment_proposal.md`: Human-inspection proposal for the Milestone 4 deterministic financial analytics experiment. It defines trend, comparison, gap, outlier, and chart-ready output.
 - `experiments/MS5/experiment_proposal.md`: Human-inspection proposal for the Milestone 5 retrieval pipeline experiment. It defines chunking, retrieval metadata, score, source-path, and preview output.
 - `experiments/MS6/experiment_proposal.md`: Human-inspection proposal for the Milestone 6 Gemini integration experiment. It defines model, prompt-source, prompt-preview, and call-metadata output.
@@ -390,7 +390,7 @@ Derived financial indicator layer.
 Current files:
 
 - `__init__.py`: Public exports for the indicator engine.
-- `engine.py`: Calculates the requested deterministic indicator catalog from base metrics and returns calculated or skipped indicator results.
+- `engine.py`: Calculates the requested deterministic indicator catalog from base metrics and returns calculated or skipped indicator results. With `active_only=True`, it emits only active-window periods but may use stored out-of-window metrics as prior-period formula context.
 - `formulas.py`: Formula registry with indicator names, formula text, formula version, required metrics, period type, and output unit.
 - `models.py`: Indicator dataclasses and calculation status constants.
 
@@ -403,6 +403,7 @@ Current status:
 Responsibilities:
 
 - Calculate the current requested indicator catalog, including growth, margin, return, cash generation, liquidity, leverage, operating-efficiency, and shareholder-impact indicators.
+- Keep active-window indicator output separate from broader stored metric context needed for prior-period formulas.
 - Treat `free_cash_flow` as a derived indicator from operating cash flow and capital expenditure, not as a raw fact or base metric.
 - Preserve formula definitions, formula versions, source metric IDs, source raw fact IDs, and source accession numbers.
 - Return skipped indicator rows with explicit reasons when inputs are missing, denominators are zero, units mismatch, prior comparable periods are missing, EBITDA is non-positive, or debt mapping is unsupported.
@@ -517,7 +518,8 @@ The following paths may exist locally but should not be treated as source archit
 - downloaded files under `data_store/filings/`
 - generated exports under `data/exports/`
 - generated shared experiment storage under `experiments/storage/`, including `experiment.db` and `filings/`
-- generated Milestone 2.5 report artifact: optional `experiments/MS2_5/experiment_report.md`
+- generated Milestone 2.5 report artifact: `experiments/MS2_5/experiment_report.md`
+- generated Milestone 3 report artifacts: `experiments/MS3/milestone3_indicator_report_*.txt`
 
 ## Update Rule
 

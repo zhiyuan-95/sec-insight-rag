@@ -97,15 +97,15 @@ Each `experiment_proposal.md` should define:
 - recommended script location
 - data modes
 - input cases
-- proposed terminal report
-- required printed sections
+- proposed report output
+- required report sections
 - implementation guidance
 - artifacts to inspect
 - edge cases to show
 - expected outcome
 
 The proposal should be explicit enough that a coding agent can implement the
-runnable experiment without guessing what the terminal output should show.
+runnable experiment without guessing what the report output should show.
 
 ## Milestone Index
 
@@ -113,7 +113,7 @@ runnable experiment without guessing what the terminal output should show.
 | --- | --- | --- |
 | 1 | `experiments/MS1/experiment_proposal.md` | Project scaffold, settings, API health |
 | 2 | `experiments/MS2/experiment_proposal.md` | SEC/XBRL ingestion, filing paths, raw facts |
-| 2.5 | `experiments/MS2_5/experiment_proposal.md` | Existing vs new company behavior, update checks, base metrics |
+| 2.5 | `experiments/MS2_5/experiment_proposal.md` | Existing vs new company behavior, update checks, base metric lineage |
 | 3 | `experiments/MS3/experiment_proposal.md` | Derived indicators, active-window yearly and quarterly tables, formulas, source metric traceability |
 | 4 | `experiments/MS4/experiment_proposal.md` | Deterministic trends, comparisons, chart-ready output |
 | 5 | `experiments/MS5/experiment_proposal.md` | Filing chunking and retrieval evidence |

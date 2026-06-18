@@ -251,11 +251,12 @@ def _ingest_company_from_sec(
             filing_id_by_accession=filing_id_by_accession,
         )
         stored_metric_count = metric_repository.upsert_metrics(financial_metrics)
+        all_metrics = metric_repository.list_metrics(company.company_id, active_only=False)
         active_metrics = metric_repository.list_metrics(company.company_id)
         active_metric_count = len(active_metrics)
         stored_indicator_count, active_indicator_count = _refresh_company_indicators(
             company_id=company.company_id,
-            active_metrics=active_metrics,
+            available_metrics=all_metrics,
             indicator_repository=indicator_repository,
         )
 
@@ -335,11 +336,11 @@ def _refresh_company_metrics_from_stored_facts(
 def _refresh_company_indicators(
     *,
     company_id: int,
-    active_metrics: list[FinancialMetric],
+    available_metrics: list[FinancialMetric],
     indicator_repository: FinancialIndicatorRepository,
 ) -> tuple[int, int]:
     indicator_repository.deactivate_by_company_id(company_id)
-    indicators = calculate_indicators(company_id, active_metrics)
+    indicators = calculate_indicators(company_id, available_metrics)
     stored_indicator_count = indicator_repository.upsert_indicators(indicators)
     active_indicator_count = len(indicator_repository.list_indicators(company_id))
     return stored_indicator_count, active_indicator_count
@@ -377,7 +378,7 @@ def _build_local_ingestion_result(
         active_metrics = metric_repository.list_metrics(company.company_id)
         stored_indicator_count, active_indicator_count = _refresh_company_indicators(
             company_id=company.company_id,
-            active_metrics=active_metrics,
+            available_metrics=all_metrics,
             indicator_repository=indicator_repository,
         )
         all_indicators = indicator_repository.list_indicators(company.company_id, active_only=False)

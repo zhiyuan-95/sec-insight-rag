@@ -9,7 +9,7 @@ import sys
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Iterable, Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -23,6 +23,7 @@ from src.ingestion import (
     TickerNotFoundError,
     ingest_company,
 )
+from src.processing.base_metrics import BASE_METRIC_MAPPINGS
 from src.storage import CompanyRepository, connect_sqlite, initialize_database
 
 EXPERIMENT_DIR = PROJECT_ROOT / "experiments" / "MS2_5"
@@ -90,8 +91,8 @@ class ExperimentRun:
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the Milestone 2.5 experiment and write inspection artifacts."""
     args = _parse_args(argv)
-    paths = _paths_from_args(args)
     ticker = args.ticker.strip().upper()
+    paths = _paths_from_args(args)
 
     try:
         settings = _experiment_settings(args.env_file, paths)
@@ -103,9 +104,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         _present_report(run, write_report=args.write_report, full_report=args.full_report)
         return 1
 
-    export_warnings = _export_csv_artifacts(paths)
-    if export_warnings:
-        run = replace(run, warnings=tuple(dict.fromkeys([*run.warnings, *export_warnings])))
+    artifact_warnings = [
+        *_export_csv_artifacts(
+            paths,
+            company_id=_snapshot_company_id(run.session_after_snapshot),
+        ),
+    ]
+    if artifact_warnings:
+        run = replace(run, warnings=tuple(dict.fromkeys([*run.warnings, *artifact_warnings])))
     _present_report(run, write_report=args.write_report, full_report=args.full_report)
     return 0
 
@@ -180,12 +186,12 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--write-report",
         action="store_true",
-        help="Write the detailed Markdown report to experiment_report.md while still printing the compact summary.",
+        help="Accepted for compatibility; the experiment report is always saved.",
     )
     parser.add_argument(
         "--full-report",
         action="store_true",
-        help="Print the detailed Markdown report with compact table samples instead of the default summary.",
+        help="Include detailed Markdown sections with compact table samples in the saved report.",
     )
     return parser.parse_args(argv)
 
@@ -251,6 +257,10 @@ def _snapshot(database: Path, ticker: str) -> dict[str, Any]:
             "filings_by_form": _accessions_by_form(connection, company_id),
             "active_filings_by_form": _active_filing_counts_by_form(connection, company_id),
             "metric_counts_by_statement": _metric_counts_by_statement(connection, company_id),
+            "metric_lineage_summary": _metric_lineage_summary(connection, company_id),
+            "raw_fact_mapping_coverage": _raw_fact_mapping_coverage(connection, company_id, company.get("cik")),
+            "alternate_xbrl_tags": _alternate_xbrl_tags(connection, company_id),
+            "unknown_xbrl_concepts": _unknown_xbrl_concepts(connection, company.get("cik")),
             "metric_sample": _metric_sample(connection, company_id),
             "traceability_sample": _traceability_sample(connection, company_id),
             "quality_flags": _quality_flags(connection, company.get("cik") if company else None),
@@ -265,10 +275,20 @@ def _empty_snapshot() -> dict[str, Any]:
         "filings_by_form": {form_type: () for form_type in FORMS},
         "active_filings_by_form": {form_type: 0 for form_type in FORMS},
         "metric_counts_by_statement": [],
+        "metric_lineage_summary": [],
+        "raw_fact_mapping_coverage": [],
+        "alternate_xbrl_tags": [],
+        "unknown_xbrl_concepts": [],
         "metric_sample": [],
         "traceability_sample": [],
         "quality_flags": (),
     }
+
+
+def _snapshot_company_id(snapshot: dict[str, Any]) -> int | None:
+    company = snapshot.get("company") or {}
+    company_id = company.get("company_id")
+    return int(company_id) if company_id is not None else None
 
 
 def _table_counts(connection: sqlite3.Connection) -> dict[str, int]:
@@ -385,6 +405,338 @@ def _metric_counts_by_statement(connection: sqlite3.Connection, company_id: int 
     )
 
 
+def _raw_fact_mapping_coverage(
+    connection: sqlite3.Connection,
+    company_id: int | None,
+    cik: str | None,
+) -> list[dict[str, Any]]:
+    if company_id is None or not cik:
+        return []
+    concept_clause = _concept_in_clause()
+    concept_params = _base_metric_concepts()
+    raw_fact_rows = _count(
+        connection,
+        "SELECT COUNT(*) AS count FROM raw_xbrl_facts WHERE cik = ?",
+        [cik],
+    )
+    distinct_raw_concepts = _count(
+        connection,
+        "SELECT COUNT(DISTINCT concept) AS count FROM raw_xbrl_facts WHERE cik = ?",
+        [cik],
+    )
+    raw_facts_with_supported_concepts = _count(
+        connection,
+        f"SELECT COUNT(*) AS count FROM raw_xbrl_facts WHERE cik = ? AND concept IN ({concept_clause})",
+        [cik, *concept_params],
+    )
+    unknown_raw_fact_rows = _count(
+        connection,
+        f"SELECT COUNT(*) AS count FROM raw_xbrl_facts WHERE cik = ? AND concept NOT IN ({concept_clause})",
+        [cik, *concept_params],
+    )
+    unknown_raw_concepts = _count(
+        connection,
+        f"SELECT COUNT(DISTINCT concept) AS count FROM raw_xbrl_facts WHERE cik = ? AND concept NOT IN ({concept_clause})",
+        [cik, *concept_params],
+    )
+    financial_metric_rows = _count(
+        connection,
+        "SELECT COUNT(*) AS count FROM financial_metrics WHERE company_id = ?",
+        [company_id],
+    )
+    mapped_raw_facts = _count(
+        connection,
+        """
+        SELECT COUNT(DISTINCT raw_fact_id) AS count
+        FROM financial_metrics
+        WHERE company_id = ? AND raw_fact_id IS NOT NULL
+        """,
+        [company_id],
+    )
+    mapped_raw_concepts = _count(
+        connection,
+        """
+        SELECT COUNT(DISTINCT f.concept) AS count
+        FROM financial_metrics AS m
+        LEFT JOIN raw_xbrl_facts AS f
+            ON f.id = m.raw_fact_id
+        WHERE m.company_id = ? AND f.concept IS NOT NULL
+        """,
+        [company_id],
+    )
+    supported_but_not_mapped = max(raw_facts_with_supported_concepts - mapped_raw_facts, 0)
+    return [
+        {
+            "coverage_item": "raw XBRL facts downloaded/stored for ticker",
+            "count": raw_fact_rows,
+            "note": "full normalized SEC companyfacts archive",
+        },
+        {
+            "coverage_item": "raw facts mapped into financial_metrics",
+            "count": mapped_raw_facts,
+            "note": _coverage_note(mapped_raw_facts, raw_fact_rows),
+        },
+        {
+            "coverage_item": "financial_metrics rows created",
+            "count": financial_metric_rows,
+            "note": "curated base metrics available to calculations",
+        },
+        {
+            "coverage_item": "raw facts not mapped into financial_metrics",
+            "count": raw_fact_rows - mapped_raw_facts,
+            "note": "unknown concepts or unusable supported facts",
+        },
+        {
+            "coverage_item": "raw facts with supported concept names",
+            "count": raw_facts_with_supported_concepts,
+            "note": "concept exists in BASE_METRIC_MAPPINGS",
+        },
+        {
+            "coverage_item": "supported-concept raw facts skipped",
+            "count": supported_but_not_mapped,
+            "note": "usually quality flags, missing values, or duplicate/ambiguous facts",
+        },
+        {
+            "coverage_item": "unknown raw fact rows",
+            "count": unknown_raw_fact_rows,
+            "note": "concept not in current base metric mapping",
+        },
+        {
+            "coverage_item": "distinct raw XBRL concepts observed",
+            "count": distinct_raw_concepts,
+            "note": "all raw concepts stored for this ticker",
+        },
+        {
+            "coverage_item": "distinct mapped raw concepts",
+            "count": mapped_raw_concepts,
+            "note": "observed raw concepts that became financial_metrics",
+        },
+        {
+            "coverage_item": "distinct unknown raw concepts",
+            "count": unknown_raw_concepts,
+            "note": "candidate tags to review for future mapping",
+        },
+        {
+            "coverage_item": "supported SEC/XBRL tags in mapping catalog",
+            "count": len(BASE_METRIC_MAPPINGS),
+            "note": f"maps into {len({mapping.metric_name for mapping in BASE_METRIC_MAPPINGS.values()})} business metrics",
+        },
+    ]
+
+
+def _alternate_xbrl_tags(connection: sqlite3.Connection, company_id: int | None) -> list[dict[str, Any]]:
+    if company_id is None:
+        return []
+    observed_rows = _fetch_all(
+        connection,
+        """
+        SELECT
+            m.statement_type,
+            m.metric_name,
+            f.concept,
+            COUNT(*) AS mapped_rows,
+            SUM(CASE WHEN m.is_active_window = 1 THEN 1 ELSE 0 END) AS active_rows
+        FROM financial_metrics AS m
+        LEFT JOIN raw_xbrl_facts AS f
+            ON f.id = m.raw_fact_id
+        WHERE m.company_id = ? AND f.concept IS NOT NULL
+        GROUP BY m.statement_type, m.metric_name, f.concept
+        ORDER BY m.statement_type, m.metric_name, f.concept
+        """,
+        [company_id],
+    )
+    observed_by_metric: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in observed_rows:
+        key = (str(row["statement_type"]), str(row["metric_name"]))
+        observed_by_metric.setdefault(key, []).append(row)
+
+    supported_by_metric: dict[tuple[str, str], list[str]] = {}
+    for concept, mapping in BASE_METRIC_MAPPINGS.items():
+        key = (mapping.statement_type, mapping.metric_name)
+        supported_by_metric.setdefault(key, []).append(concept)
+
+    rows = []
+    for key, supported_tags in sorted(supported_by_metric.items()):
+        observed = observed_by_metric.get(key, [])
+        if len(supported_tags) <= 1 and len(observed) <= 1:
+            continue
+        rows.append(
+            {
+                "metric_name": key[1],
+                "statement_type": key[0],
+                "supported_sec_xbrl_tags": _join(sorted(supported_tags)),
+                "observed_tags": _join(
+                    f"{row['concept']} ({row['mapped_rows']} rows)" for row in observed
+                ),
+                "mapped_rows": sum(int(row["mapped_rows"] or 0) for row in observed),
+                "active_rows": sum(int(row["active_rows"] or 0) for row in observed),
+            }
+        )
+    return rows
+
+
+def _unknown_xbrl_concepts(connection: sqlite3.Connection, cik: str | None) -> list[dict[str, Any]]:
+    if not cik:
+        return []
+    concept_clause = _concept_in_clause()
+    return _fetch_all(
+        connection,
+        f"""
+        SELECT
+            concept AS raw_xbrl_concept,
+            COALESCE(MAX(label), '') AS label,
+            taxonomy,
+            COUNT(*) AS raw_fact_rows,
+            COUNT(DISTINCT unit) AS unit_count,
+            COALESCE(GROUP_CONCAT(DISTINCT form), '') AS forms,
+            MAX(end_date) AS latest_end_date,
+            MAX(filed_date) AS latest_filed_date
+        FROM raw_xbrl_facts
+        WHERE cik = ? AND concept NOT IN ({concept_clause})
+        GROUP BY taxonomy, concept
+        ORDER BY raw_fact_rows DESC, raw_xbrl_concept
+        """,
+        [cik, *_base_metric_concepts()],
+    )
+
+
+def _count(connection: sqlite3.Connection, query: str, params: Sequence[Any]) -> int:
+    row = connection.execute(query, list(params)).fetchone()
+    return int(row["count"]) if row is not None else 0
+
+
+def _concept_in_clause() -> str:
+    return ", ".join("?" for _ in BASE_METRIC_MAPPINGS)
+
+
+def _base_metric_concepts() -> tuple[str, ...]:
+    return tuple(sorted(BASE_METRIC_MAPPINGS))
+
+
+def _coverage_note(mapped_count: int, total_count: int) -> str:
+    if total_count <= 0:
+        return "0.0% of raw facts"
+    return f"{(mapped_count / total_count) * 100:.1f}% of raw facts"
+
+
+def _metric_lineage_summary(connection: sqlite3.Connection, company_id: int | None) -> list[dict[str, Any]]:
+    if company_id is None:
+        return []
+    rows = _fetch_all(
+        connection,
+        """
+        SELECT
+            m.statement_type,
+            m.metric_name,
+            m.fiscal_year,
+            m.fiscal_period,
+            m.accession_number,
+            m.is_active_window,
+            f.concept AS raw_concept
+        FROM financial_metrics AS m
+        LEFT JOIN raw_xbrl_facts AS f
+            ON f.id = m.raw_fact_id
+        WHERE m.company_id = ?
+        ORDER BY m.statement_type, m.metric_name, m.fiscal_year DESC, m.fiscal_period DESC
+        """,
+        [company_id],
+    )
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in rows:
+        key = (str(row["statement_type"]), str(row["metric_name"]))
+        entry = grouped.setdefault(
+            key,
+            {
+                "statement_type": key[0],
+                "metric_name": key[1],
+                "raw_concepts": set(),
+                "source_accessions": set(),
+                "total_rows": 0,
+                "active_rows": 0,
+                "inactive_context_rows": 0,
+                "active_annual_periods": set(),
+                "active_quarterly_periods": set(),
+            },
+        )
+        entry["total_rows"] += 1
+        if row.get("raw_concept"):
+            entry["raw_concepts"].add(str(row["raw_concept"]))
+        if row.get("accession_number"):
+            entry["source_accessions"].add(str(row["accession_number"]))
+        fiscal_year = row.get("fiscal_year")
+        fiscal_period = row.get("fiscal_period")
+        if row.get("is_active_window"):
+            entry["active_rows"] += 1
+            if fiscal_year is not None and fiscal_period:
+                period_key = (fiscal_year, str(fiscal_period))
+                if str(fiscal_period).upper() == "FY":
+                    entry["active_annual_periods"].add(period_key)
+                else:
+                    entry["active_quarterly_periods"].add(period_key)
+        else:
+            entry["inactive_context_rows"] += 1
+
+    summary = []
+    for entry in grouped.values():
+        raw_concepts = sorted(entry["raw_concepts"])
+        summary.append(
+            {
+                "statement_type": entry["statement_type"],
+                "metric_name": entry["metric_name"],
+                "raw_xbrl_concepts": ", ".join(raw_concepts) if raw_concepts else "not linked",
+                "system_mapping": f"{', '.join(raw_concepts) if raw_concepts else 'not linked'} -> {entry['metric_name']}",
+                "financial_metric_rows": entry["total_rows"],
+                "active_rows": entry["active_rows"],
+                "inactive_context_rows": entry["inactive_context_rows"],
+                "active_annual_periods": len(entry["active_annual_periods"]),
+                "active_quarterly_periods": len(entry["active_quarterly_periods"]),
+                "source_accessions": len(entry["source_accessions"]),
+            }
+        )
+    return sorted(summary, key=lambda row: (row["statement_type"], row["metric_name"]))
+
+
+def _metric_lineage_rows(connection: sqlite3.Connection, company_id: int | None) -> list[dict[str, Any]]:
+    if company_id is None:
+        return []
+    return _fetch_all(
+        connection,
+        """
+        SELECT
+            c.ticker,
+            c.cik,
+            m.metric_id,
+            m.statement_type,
+            m.metric_name,
+            f.concept AS raw_xbrl_concept,
+            f.label AS raw_xbrl_label,
+            m.fiscal_year,
+            m.fiscal_period,
+            m.start_date,
+            m.end_date,
+            m.value_numeric,
+            m.unit,
+            m.period_type,
+            m.is_active_window,
+            m.accession_number,
+            fi.form_type,
+            fi.filing_date,
+            m.raw_fact_id,
+            f.quality_flags AS raw_quality_flags
+        FROM financial_metrics AS m
+        LEFT JOIN companies AS c
+            ON c.company_id = m.company_id
+        LEFT JOIN raw_xbrl_facts AS f
+            ON f.id = m.raw_fact_id
+        LEFT JOIN filings AS fi
+            ON fi.filing_id = m.filing_id
+        WHERE m.company_id = ?
+        ORDER BY m.statement_type, m.metric_name, m.fiscal_year DESC, m.fiscal_period DESC, m.accession_number
+        """,
+        [company_id],
+    )
+
+
 def _metric_sample(connection: sqlite3.Connection, company_id: int | None) -> list[dict[str, Any]]:
     if company_id is None:
         return []
@@ -463,14 +815,260 @@ def _quality_flags(connection: sqlite3.Connection, cik: str | None) -> tuple[str
     return tuple(sorted(flags))
 
 
-def _write_report(run: ExperimentRun) -> None:
+def _write_report(run: ExperimentRun, *, full_report: bool) -> None:
     run.paths.report.parent.mkdir(parents=True, exist_ok=True)
-    run.paths.report.write_text(format_report(run, report_output="file"), encoding="utf-8")
+    run.paths.report.write_text(format_saved_report(run, full_report=full_report), encoding="utf-8")
 
 
-def format_report(run: ExperimentRun, *, report_output: str = "terminal") -> str:
+def format_lineage_report(run: ExperimentRun) -> str:
+    """Render the financial metric data lineage view as a text report."""
+    rows = _lineage_rows_for_run(run)
+    annual_rows = _pivot_metric_rows(rows, annual=True)
+    quarterly_rows = _pivot_metric_rows(rows, annual=False)
+    lines = [
+        "Milestone 2.5 Financial Metric Data Lineage View",
+        "",
+        "Human Question:",
+        "  For the company I chose, how did raw SEC/XBRL facts become cleaned",
+        "  financial_metrics rows available to the system?",
+        "",
+        "Run Context:",
+        f"  ticker: {run.ticker}",
+        f"  run timestamp: {run.run_timestamp}",
+        f"  database: {run.paths.database}",
+        f"  saved report: {run.paths.report}",
+        "",
+        "How To Read This Report:",
+        "  raw_xbrl_facts: SEC concepts exactly as reported.",
+        "  financial_metrics: cleaned internal rows available for calculations.",
+        "  annual table: one row per metric with fiscal years as columns.",
+        "  quarterly table: one row per metric with fiscal quarters as columns.",
+        "  period columns use rows whose end date matches the displayed period",
+        "  when an end date is available.",
+        "  k removes 3 trailing zeros and m removes 6 trailing zeros.",
+        "  each fiscal year or fiscal quarter column uses one consistent suffix",
+        "  when its integer values can be abbreviated cleanly.",
+        "  abbreviations are presentation-only; stored SQLite and CSV values",
+        "  remain unmodified.",
+        "  if multiple distinct values remain for one metric-period cell, they",
+        "  are joined with semicolons.",
+    ]
+    lines.extend(["", "Raw Fact Mapping Coverage (Highlighted):"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("raw_fact_mapping_coverage") or []))
+    lines.extend(["", "Alternate SEC/XBRL Tags For Same Business Metric:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("alternate_xbrl_tags") or []))
+    lines.extend(["", "Unknown SEC/XBRL Concepts Not Mapped To Base Metrics:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("unknown_xbrl_concepts") or []))
+    lines.extend(["", "Annual XBRL Financial Metrics:"])
+    lines.extend(_markdown_table(annual_rows))
+    lines.extend(["", "Quarterly XBRL Financial Metrics:"])
+    lines.extend(_markdown_table(quarterly_rows))
+    lines.extend(
+        [
+            "",
+            "Artifacts To Inspect:",
+            f"  SQLite database: {run.paths.database}",
+            "  database table: raw_xbrl_facts",
+            "  database table: financial_metrics",
+            f"  saved report with appended lineage section: {run.paths.report}",
+            "",
+            "Expected Outcome:",
+            "  A human can scan annual and quarterly XBRL-derived financial",
+            "  metrics with metrics as rows and periods as columns.",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _pivot_metric_rows(rows: list[dict[str, Any]], *, annual: bool) -> list[dict[str, Any]]:
+    period_labels: set[str] = set()
+    grouped: dict[tuple[str, str], dict[str, list[str]]] = {}
+    for row in rows:
+        period_label = _pivot_period_label(row, annual=annual)
+        if period_label is None:
+            continue
+        metric_name = str(row.get("metric_name") or "unknown_metric")
+        statement_type = str(row.get("statement_type") or "unknown_statement")
+        value = row.get("value_numeric")
+        if value is None:
+            continue
+        period_labels.add(period_label)
+        values = grouped.setdefault((metric_name, statement_type), {}).setdefault(period_label, [])
+        value_text = str(value)
+        if value_text not in values:
+            values.append(value_text)
+
+    ordered_periods = sorted(period_labels, key=_pivot_period_sort_key, reverse=True)
+    period_scales = {
+        period_label: _period_abbreviation_scale(
+            value
+            for period_values in grouped.values()
+            for value in period_values.get(period_label, [])
+        )
+        for period_label in ordered_periods
+    }
+    pivot_rows: list[dict[str, Any]] = []
+    for metric_name, statement_type in sorted(grouped, key=lambda key: (key[1], key[0])):
+        pivot_row: dict[str, Any] = {
+            "metric_name": metric_name,
+            "statement_type": statement_type,
+        }
+        for period_label in ordered_periods:
+            pivot_row[period_label] = _pivot_cell(
+                grouped[(metric_name, statement_type)].get(period_label, []),
+                scale=period_scales[period_label],
+            )
+        pivot_rows.append(pivot_row)
+    return pivot_rows
+
+
+def _pivot_period_label(row: dict[str, Any], *, annual: bool) -> str | None:
+    fiscal_year = _as_int(row.get("fiscal_year"))
+    fiscal_period = str(row.get("fiscal_period") or "").upper()
+    if fiscal_year is None or not fiscal_period:
+        return None
+    if annual:
+        if fiscal_period != "FY":
+            return None
+        if not _end_date_matches_period(row.get("end_date"), fiscal_year, quarter=None):
+            return None
+        if not _duration_matches_period(row, annual=True):
+            return None
+        return str(fiscal_year)
+
+    if fiscal_period == "FY":
+        return None
+    quarter = _quarter_number(fiscal_period)
+    if quarter is None:
+        return None
+    if not _end_date_matches_period(row.get("end_date"), fiscal_year, quarter=quarter):
+        return None
+    if not _duration_matches_period(row, annual=False):
+        return None
+    return f"{fiscal_year} Q{quarter}"
+
+
+def _end_date_matches_period(value: Any, fiscal_year: int, *, quarter: int | None) -> bool:
+    if value is None:
+        return True
+    text = str(value).strip()
+    if not text:
+        return True
+    parts = text.split("-")
+    if len(parts) < 2:
+        return True
+    try:
+        end_year = int(parts[0])
+        end_month = int(parts[1])
+    except ValueError:
+        return True
+    if end_year != fiscal_year:
+        return False
+    if quarter is None:
+        return True
+    return ((end_month - 1) // 3) + 1 == quarter
+
+
+def _duration_matches_period(row: dict[str, Any], *, annual: bool) -> bool:
+    if str(row.get("period_type") or "").lower() != "duration":
+        return True
+    start_date = _parse_date(row.get("start_date"))
+    end_date = _parse_date(row.get("end_date"))
+    if start_date is None or end_date is None:
+        return True
+    days = (end_date - start_date).days + 1
+    if annual:
+        return days >= 300
+    return 60 <= days <= 120
+
+
+def _parse_date(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _pivot_period_sort_key(label: str) -> tuple[int, int]:
+    parts = label.split()
+    year = _as_int(parts[0]) if parts else None
+    if len(parts) == 1:
+        return (year or 0, 0)
+    quarter = _quarter_number(parts[1])
+    return (year or 0, quarter or 0)
+
+
+def _quarter_number(value: str) -> int | None:
+    value = value.strip().upper()
+    if len(value) == 2 and value.startswith("Q") and value[1].isdigit():
+        quarter = int(value[1])
+        if 1 <= quarter <= 4:
+            return quarter
+    return None
+
+
+def _period_abbreviation_scale(values: Iterable[str]) -> tuple[int, str] | None:
+    integer_values = [_parse_integer_text(value) for value in values]
+    integer_values = [value for value in integer_values if value is not None]
+    if not integer_values:
+        return None
+    for factor, suffix in ((1_000_000, "m"), (1_000, "k")):
+        if all(value % factor == 0 for value in integer_values):
+            return (factor, suffix)
+    return None
+
+
+def _pivot_cell(values: Sequence[str], *, scale: tuple[int, str] | None) -> str:
+    return "; ".join(_abbreviate_value(value, scale=scale) for value in values)
+
+
+def _abbreviate_value(value: str, *, scale: tuple[int, str] | None) -> str:
+    integer_value = _parse_integer_text(value)
+    if scale is None or integer_value is None:
+        return value
+    factor, suffix = scale
+    if integer_value % factor != 0:
+        return value
+    return f"{integer_value // factor}{suffix}"
+
+
+def _parse_integer_text(value: str) -> int | None:
+    text = str(value).strip()
+    if not text:
+        return None
+    if text[0] in {"-", "+"}:
+        sign = text[0]
+        text = text[1:]
+    else:
+        sign = ""
+    if not text.isdigit():
+        return None
+    return int(sign + text)
+
+
+def _as_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _lineage_rows_for_run(run: ExperimentRun) -> list[dict[str, Any]]:
+    company_id = _snapshot_company_id(run.session_after_snapshot)
+    if company_id is None or not run.paths.database.exists():
+        return []
+    with connect_sqlite(run.paths.database) as connection:
+        initialize_database(connection)
+        return _metric_lineage_rows(connection, company_id)
+
+
+def format_report(run: ExperimentRun, *, report_output: str = "file") -> str:
     """Render a compact Markdown report for manual inspection."""
-    report_path: object = run.paths.report if report_output == "file" else "not written; terminal output only"
     lines = [
         "# Milestone 2.5 Live SEC Experiment Report",
         "",
@@ -491,7 +1089,7 @@ def format_report(run: ExperimentRun, *, report_output: str = "terminal") -> str
                 "run timestamp": run.run_timestamp,
                 "database": run.paths.database,
                 "report output": report_output,
-                "report": report_path,
+                "report": run.paths.report,
                 "filings directory": run.paths.filings_dir,
                 "csv export directory": run.paths.exports_dir,
                 "SEC_USER_AGENT configured": _yes_no(run.sec_user_agent_configured),
@@ -534,6 +1132,7 @@ def format_report(run: ExperimentRun, *, report_output: str = "terminal") -> str
                 "filings CSV": run.paths.exports_dir / "filings.csv",
                 "raw facts CSV": run.paths.exports_dir / "raw_xbrl_facts.csv",
                 "financial metrics CSV": run.paths.exports_dir / "financial_metrics.csv",
+                "appended financial metric lineage section": run.paths.report,
                 "traceability sample CSV": run.paths.exports_dir / "metric_traceability_sample.csv",
             }
         )
@@ -543,18 +1142,60 @@ def format_report(run: ExperimentRun, *, report_output: str = "terminal") -> str
             "",
             "## Manual Judgment",
             "",
-            "This report presents evidence only. Review the report, database, and CSVs to",
-            "decide whether the observed behavior matches the Milestone 2.5 design.",
+            "This report presents evidence only. Review the compact summary,",
+            "appended lineage section, database, and CSVs to decide whether the",
+            "observed behavior matches the Milestone 2.5 design.",
             "",
         ]
     )
     return "\n".join(lines)
 
 
-def format_compact_report(run: ExperimentRun, *, report_written: bool = False) -> str:
-    """Render a concise terminal report for quick manual inspection."""
+def format_saved_report(run: ExperimentRun, *, full_report: bool = False) -> str:
+    """Render the saved experiment report, including the former terminal summary."""
+    lines = [
+        "# Milestone 2.5 Live SEC Experiment Report",
+        "",
+        "## Compact Summary",
+        "",
+        "```text",
+        format_compact_report(run, full_report=full_report),
+        "```",
+    ]
+    if full_report:
+        detailed_lines = format_report(run, report_output="saved compact + detailed report").splitlines()
+        if detailed_lines[:2] == ["# Milestone 2.5 Live SEC Experiment Report", ""]:
+            detailed_lines = detailed_lines[2:]
+        lines.extend(["", "## Detailed Evidence", ""])
+        lines.extend(detailed_lines)
+    else:
+        lines.extend(
+            [
+                "",
+                "## Detailed Evidence",
+                "",
+                "Not included in this run. Use `--full-report` to save detailed",
+                "Markdown sections and compact table samples in this report.",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## Financial Metric Lineage Report",
+            "",
+            "```text",
+            format_lineage_report(run),
+            "```",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def format_compact_report(run: ExperimentRun, *, full_report: bool = False) -> str:
+    """Render a concise run summary for quick manual inspection."""
     setup_company = run.setup_snapshot.get("company") or {}
     session_after_company = run.session_after_snapshot.get("company") or {}
+    report_output = "saved compact + detailed report" if full_report else "saved compact report"
     lines = [
         "Milestone 2.5 Plan 2.5 Ingestion Examination",
         "",
@@ -563,7 +1204,7 @@ def format_compact_report(run: ExperimentRun, *, report_written: bool = False) -
         f"  run timestamp: {run.run_timestamp}",
         "  mode: live SEC, shared isolated experiment storage",
         f"  SEC_USER_AGENT configured: {_yes_no(run.sec_user_agent_configured)}",
-        f"  report output: {'saved Markdown + compact terminal summary' if report_written else 'compact terminal summary'}",
+        f"  report output: {report_output}",
         "",
         "Initial Setup Ingestion",
         f"  company existed before setup: {_yes_no(run.company_existed_before_setup)}",
@@ -578,6 +1219,8 @@ def format_compact_report(run: ExperimentRun, *, report_written: bool = False) -
     lines.extend(_compact_counts(run.session_after_snapshot, indent="  "))
     lines.extend(["", "Active Window After Session"])
     lines.extend(_compact_active_window(run.session_after_snapshot, indent="  "))
+    lines.extend(["", "Raw Fact Mapping Coverage"])
+    lines.extend(_compact_raw_fact_mapping_coverage(run.session_after_snapshot, indent="  "))
     lines.extend(["", "Base Metrics After Session"])
     lines.extend(_compact_metric_counts(run.session_after_snapshot, indent="  "))
 
@@ -592,17 +1235,21 @@ def format_compact_report(run: ExperimentRun, *, report_written: bool = False) -
             "",
             "Full Evidence",
             f"  SQLite database: {run.paths.database}",
+            f"  appended financial metric lineage section: {run.paths.report}",
             f"  CSV exports: {run.paths.exports_dir}",
             f"  filing downloads: {run.paths.filings_dir}",
-            f"  saved Markdown report: {run.paths.report if report_written else 'not written'}",
+            f"  saved report: {run.paths.report}",
             "",
             "Manual Judgment",
-            "  Review the compact summary, SQLite database, and CSVs to decide whether",
-            "  the observed behavior matches the Milestone 2.5 design.",
+            "  Review the compact summary, appended lineage section, SQLite database,",
+            "  and CSVs to decide whether the observed behavior matches the Milestone 2.5 design.",
             "",
             "More Detail",
-            "  Add --full-report to print compact table samples in Markdown.",
-            "  Add --write-report to save the detailed Markdown report file.",
+            (
+                "  Detailed Markdown sections are included below this compact summary."
+                if full_report
+                else "  Add --full-report to include detailed Markdown sections in this saved report."
+            ),
         ]
     )
     return "\n".join(lines)
@@ -735,12 +1382,8 @@ def _yes_no_unknown(value: bool | None) -> str:
 
 
 def _present_report(run: ExperimentRun, *, write_report: bool, full_report: bool) -> None:
-    if write_report:
-        _write_report(run)
-    if full_report:
-        print(format_report(run))
-        return
-    print(format_compact_report(run, report_written=write_report))
+    del write_report
+    _write_report(run, full_report=full_report)
 
 
 def _compact_counts(snapshot: dict[str, Any], *, indent: str) -> list[str]:
@@ -768,6 +1411,29 @@ def _compact_metric_counts(snapshot: dict[str, Any], *, indent: str) -> list[str
     ]
 
 
+def _compact_raw_fact_mapping_coverage(snapshot: dict[str, Any], *, indent: str) -> list[str]:
+    rows = snapshot.get("raw_fact_mapping_coverage") or []
+    if not rows:
+        return [f"{indent}none"]
+    by_item = {row["coverage_item"]: row for row in rows}
+    selected_items = (
+        "raw XBRL facts downloaded/stored for ticker",
+        "raw facts mapped into financial_metrics",
+        "raw facts not mapped into financial_metrics",
+        "distinct raw XBRL concepts observed",
+        "distinct unknown raw concepts",
+        "supported SEC/XBRL tags in mapping catalog",
+    )
+    lines = []
+    for item in selected_items:
+        row = by_item.get(item)
+        if row is None:
+            continue
+        note = f" ({row['note']})" if row.get("note") else ""
+        lines.append(f"{indent}{item}: {row['count']}{note}")
+    return lines or [f"{indent}none"]
+
+
 def _snapshot_sections(snapshot: dict[str, Any]) -> list[str]:
     lines: list[str] = ["", "### Company State", ""]
     lines.extend(_markdown_table([snapshot["company"]] if snapshot["company"] else []))
@@ -775,8 +1441,24 @@ def _snapshot_sections(snapshot: dict[str, Any]) -> list[str]:
     lines.extend(_markdown_table(snapshot["filings"][:8]))
     lines.extend(["", "### Raw Fact And Metric Counts", ""])
     lines.extend(_count_table(snapshot))
+    lines.extend(["", "### Raw Fact Mapping Coverage", ""])
+    lines.extend(_markdown_table(snapshot["raw_fact_mapping_coverage"]))
     lines.extend(["", "### Active Window", ""])
     lines.extend(_active_window_lines(snapshot))
+    lines.extend(["", "### Financial Metric Data Lineage View", ""])
+    lines.extend(
+        [
+            "This table summarizes raw XBRL concepts, system mappings, and",
+            "financial_metrics availability. Annual and quarterly XBRL metric",
+            "tables are written to the financial metric lineage text report.",
+            "",
+        ]
+    )
+    lines.extend(_markdown_table(snapshot["metric_lineage_summary"]))
+    lines.extend(["", "### Alternate SEC/XBRL Tags For Same Business Metric", ""])
+    lines.extend(_markdown_table(snapshot["alternate_xbrl_tags"]))
+    lines.extend(["", "### Unknown SEC/XBRL Concepts Not Mapped To Base Metrics", ""])
+    lines.extend(_markdown_table(snapshot["unknown_xbrl_concepts"]))
     lines.extend(["", "### Compact financial_metrics Sample", ""])
     lines.extend(_markdown_table(snapshot["metric_sample"]))
     lines.extend(["", "### Compact Traceability Sample", ""])
@@ -823,7 +1505,7 @@ def _before_after_counts(before: dict[str, Any], after: dict[str, Any]) -> list[
     return _markdown_table(rows)
 
 
-def _export_csv_artifacts(paths: ExperimentPaths) -> tuple[str, ...]:
+def _export_csv_artifacts(paths: ExperimentPaths, *, company_id: int | None) -> tuple[str, ...]:
     paths.exports_dir.mkdir(parents=True, exist_ok=True)
     warnings: list[str] = []
     with connect_sqlite(paths.database) as connection:
@@ -861,7 +1543,7 @@ def _export_csv_artifacts(paths: ExperimentPaths) -> tuple[str, ...]:
                 warnings.append(f"CSV export skipped for {label}: {exc}")
         try:
             _export_rows(
-                _traceability_sample(connection, _first_company_id(connection)),
+                _traceability_sample(connection, company_id),
                 paths.exports_dir / "metric_traceability_sample.csv",
             )
         except OSError as exc:
@@ -882,11 +1564,6 @@ def _export_rows(rows: list[dict[str, Any]], path: Path) -> None:
         if headers:
             writer.writeheader()
             writer.writerows(rows)
-
-
-def _first_company_id(connection: sqlite3.Connection) -> int | None:
-    row = connection.execute("SELECT company_id FROM companies ORDER BY company_id LIMIT 1").fetchone()
-    return int(row["company_id"]) if row is not None else None
 
 
 def _fetch_one(connection: sqlite3.Connection, query: str, params: Sequence[Any] = ()) -> dict[str, Any]:
@@ -911,13 +1588,65 @@ def _markdown_table(rows: list[dict[str, Any]]) -> list[str]:
     if not rows:
         return ["No rows to display."]
     headers = list(rows[0].keys())
-    lines = [
-        "| " + " | ".join(headers) + " |",
-        "| " + " | ".join("---" for _ in headers) + " |",
+    rendered_rows = [
+        {header: _markdown_cell(row.get(header)) for header in headers}
+        for row in rows
     ]
-    for row in rows:
-        lines.append("| " + " | ".join(_markdown_cell(row.get(header)) for header in headers) + " |")
+    widths = {
+        header: max(3, len(header), *(len(row[header]) for row in rendered_rows))
+        for header in headers
+    }
+    right_aligned = {
+        header
+        for header in headers
+        if header not in {"metric_name", "statement_type"}
+        and all(_is_numeric_table_cell(row[header]) for row in rendered_rows)
+    }
+    lines = [
+        "| "
+        + " | ".join(_pad_table_cell(header, header, widths, right_aligned) for header in headers)
+        + " |",
+        "| " + " | ".join("-" * widths[header] for header in headers) + " |",
+    ]
+    for row in rendered_rows:
+        lines.append(
+            "| "
+            + " | ".join(
+                _pad_table_cell(header, row[header], widths, right_aligned)
+                for header in headers
+            )
+            + " |"
+        )
     return lines
+
+
+def _pad_table_cell(
+    header: str,
+    text: str,
+    widths: dict[str, int],
+    right_aligned: set[str],
+) -> str:
+    if header in right_aligned:
+        return text.rjust(widths[header])
+    return text.ljust(widths[header])
+
+
+def _is_numeric_table_cell(text: str) -> bool:
+    if not text:
+        return True
+    return all(_is_number_text(part.strip()) for part in text.split(";"))
+
+
+def _is_number_text(text: str) -> bool:
+    if not text:
+        return True
+    if text[-1].lower() in {"k", "m"}:
+        text = text[:-1]
+    if text[0] in {"-", "+"}:
+        text = text[1:]
+    if text.count(".") > 1:
+        return False
+    return text.replace(".", "", 1).isdigit()
 
 
 def _markdown_cell(value: Any) -> str:

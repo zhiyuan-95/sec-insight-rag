@@ -16,6 +16,7 @@ stock_data.db
 /storage/
 data_store/
 experiments/storage/
+experiments/MS3/milestone3_indicator_report_*.txt
 
 # Generated exports
 data/exports/*

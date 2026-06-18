@@ -6,13 +6,14 @@ import argparse
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
 from typing import Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+EXPERIMENT_DIR = Path(__file__).resolve().parent
 
 from src.config import load_settings  # noqa: E402
 from src.indicators import INDICATOR_DEFINITIONS, indicator_names  # noqa: E402
@@ -29,6 +30,46 @@ from src.storage import (  # noqa: E402
 )
 
 PERIOD_ORDER = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "FY": 5}
+PERCENT_INDICATORS = frozenset(
+    {
+        "revenue_growth_yoy",
+        "operating_income_growth_yoy",
+        "diluted_eps_growth_yoy",
+        "free_cash_flow_growth_yoy",
+        "gross_margin",
+        "operating_margin",
+        "net_margin",
+        "rd_intensity",
+        "sga_intensity",
+        "cost_of_revenue_ratio",
+        "return_on_assets",
+        "return_on_equity",
+        "operating_cash_flow_margin",
+        "free_cash_flow_margin",
+        "cash_earnings_conversion",
+        "capex_intensity",
+        "share_dilution_rate",
+    }
+)
+RATIO_INDICATORS = frozenset(
+    {
+        "asset_turnover",
+        "current_ratio",
+        "quick_ratio",
+        "debt_to_equity",
+        "net_debt_to_ebitda",
+        "interest_coverage",
+    }
+)
+DAYS_INDICATORS = frozenset(
+    {
+        "days_sales_outstanding",
+        "days_inventory_outstanding",
+        "days_payable_outstanding",
+        "cash_conversion_cycle",
+    }
+)
+CURRENCY_INDICATORS = frozenset({"free_cash_flow"})
 
 
 @dataclass(frozen=True)
@@ -49,12 +90,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     settings = load_settings(args.env_file)
     database = Path(args.db_path) if args.db_path else settings.stock_sql_db_path
     active_only = not args.include_inactive
+    output_path = _resolve_output_path(args.output_file, tickers)
 
     reports = [
         _load_ticker_report(ticker, database=database, active_only=active_only)
         for ticker in tickers
     ]
-    print(format_report(reports, database=database, active_only=active_only))
+    report_text = format_report(
+        reports,
+        database=database,
+        active_only=active_only,
+        output_path=output_path,
+    )
+    _write_report(output_path, report_text)
     return 0
 
 
@@ -72,6 +120,14 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--env-file", default="config.env", help="Environment file to load settings from.")
     parser.add_argument("--db-path", default=None, help="SQLite database path. Defaults to STOCK_SQL_DB_PATH.")
     parser.add_argument(
+        "--output-file",
+        default=None,
+        help=(
+            "Report .txt path. Relative paths are written under experiments/MS3. "
+            "Defaults to milestone3_indicator_report_<tickers>.txt."
+        ),
+    )
+    parser.add_argument(
         "--include-inactive",
         action="store_true",
         help="Include metrics, filings, and indicators outside the active accession window.",
@@ -86,6 +142,31 @@ def _parse_tickers(raw_values: list[str]) -> tuple[str, ...]:
     if not tickers:
         raise ValueError("At least one ticker is required")
     return tuple(dict.fromkeys(tickers))
+
+
+def _resolve_output_path(raw_output_file: str | None, tickers: tuple[str, ...]) -> Path:
+    if raw_output_file:
+        output_path = Path(raw_output_file)
+        if not output_path.is_absolute():
+            output_path = EXPERIMENT_DIR / output_path
+    else:
+        output_path = EXPERIMENT_DIR / f"milestone3_indicator_report_{_ticker_slug(tickers)}.txt"
+    if output_path.suffix.lower() != ".txt":
+        output_path = output_path.with_suffix(".txt")
+    return output_path
+
+
+def _ticker_slug(tickers: tuple[str, ...]) -> str:
+    parts = []
+    for ticker in tickers:
+        cleaned = "".join(character if character.isalnum() else "-" for character in ticker)
+        parts.append(cleaned or "ticker")
+    return "_".join(parts)
+
+
+def _write_report(output_path: Path, report_text: str) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(f"{report_text}\n", encoding="utf-8")
 
 
 def _load_ticker_report(
@@ -152,6 +233,7 @@ def format_report(
     *,
     database: Path,
     active_only: bool,
+    output_path: Path,
 ) -> str:
     lines = [
         "Milestone 3 Experiment: Indicator Engine",
@@ -165,6 +247,7 @@ def format_report(
         f"  database: {database}",
         f"  active_window_only: {str(active_only).lower()}",
         f"  tickers: {', '.join(report.ticker for report in reports)}",
+        f"  report_file: {output_path}",
         "",
     ]
     warnings = [report.warning for report in reports if report.warning]
@@ -288,6 +371,7 @@ def _indicator_summary_rows(reports: list[TickerReport]) -> list[dict[str, objec
                         "skipped_periods": sum(
                             1 for indicator in indicators if indicator.calculation_status == SKIPPED
                         ),
+                        "skip_reasons": _skip_reason_summary(indicators),
                         "formula_version": indicators[0].formula_version if indicators else "",
                     }
                 )
@@ -300,21 +384,24 @@ def _indicator_table_rows(
     period_kind: str,
 ) -> list[dict[str, object]]:
     names = indicator_names()
+    periods = sorted(
+        {
+            period
+            for report in reports
+            for period in _periods_for_report(report)
+            if _period_kind(period[1]) == period_kind
+        },
+        key=_period_sort_key,
+        reverse=True,
+    )
     rows: list[dict[str, object]] = []
     for report in reports:
         by_period = _indicators_by_period(report.indicators)
-        periods = [
-            period
-            for period in _periods_for_report(report)
-            if _period_kind(period[1]) == period_kind
-        ]
-        for fiscal_year, fiscal_period in sorted(periods, key=_period_sort_key, reverse=True):
-            row: dict[str, object] = {"ticker": report.ticker, "fiscal_year": fiscal_year}
-            if period_kind == "quarterly":
-                row["fiscal_period"] = fiscal_period
-            for name in names:
+        for name in names:
+            row: dict[str, object] = {"ticker": report.ticker, "indicator": name}
+            for fiscal_year, fiscal_period in periods:
                 indicator = by_period.get((fiscal_year, fiscal_period, name))
-                row[name] = _indicator_cell(indicator)
+                row[_indicator_period_column(fiscal_year, fiscal_period)] = _indicator_cell(indicator)
             rows.append(row)
     return rows
 
@@ -347,6 +434,15 @@ def _skipped_rows(reports: list[TickerReport]) -> list[dict[str, object]]:
     return rows
 
 
+def _skip_reason_summary(indicators: list[IndicatorResult]) -> str:
+    counts: dict[str, int] = defaultdict(int)
+    for indicator in indicators:
+        if indicator.calculation_status != SKIPPED:
+            continue
+        counts[indicator.skip_reason or "unknown"] += 1
+    return ", ".join(f"{reason} ({counts[reason]})" for reason in sorted(counts))
+
+
 def _traceability_rows(reports: list[TickerReport]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for report in reports:
@@ -358,7 +454,7 @@ def _traceability_rows(reports: list[TickerReport]) -> list[dict[str, object]]:
                     "ticker": report.ticker,
                     "period": _period_label(indicator.fiscal_year, indicator.fiscal_period),
                     "indicator": indicator.indicator_name,
-                    "value": _format_decimal(indicator.value_numeric),
+                    "value": _format_indicator_value(indicator),
                     "source_metric_ids": _join(indicator.source_metric_ids),
                     "source_raw_fact_ids": _join(indicator.source_raw_fact_ids),
                     "source_accession_numbers": _join(indicator.source_accession_numbers),
@@ -398,7 +494,43 @@ def _indicator_cell(indicator: IndicatorResult | None) -> str:
         return ""
     if indicator.calculation_status == SKIPPED:
         return "skipped"
-    return _format_decimal(indicator.value_numeric)
+    return _format_indicator_value(indicator)
+
+
+def _format_indicator_value(indicator: IndicatorResult) -> str:
+    value = indicator.value_numeric
+    if value is None:
+        return ""
+    name = indicator.indicator_name
+    if name in PERCENT_INDICATORS:
+        return f"{_format_number(value * Decimal('100'), Decimal('0.01'))}%"
+    if name in DAYS_INDICATORS:
+        return f"{_format_number(value, Decimal('0.1'))} days"
+    if name in CURRENCY_INDICATORS:
+        return _format_compact_currency(value)
+    if name in RATIO_INDICATORS:
+        return _format_number(value, Decimal('0.01'))
+    return _format_number(value, Decimal('0.01'))
+
+
+def _format_compact_currency(value: Decimal) -> str:
+    sign = "-" if value < 0 else ""
+    magnitude = abs(value)
+    for threshold, suffix in (
+        (Decimal("1000000000000"), "T"),
+        (Decimal("1000000000"), "B"),
+        (Decimal("1000000"), "M"),
+        (Decimal("1000"), "K"),
+    ):
+        if magnitude >= threshold:
+            return f"{sign}${_format_number(magnitude / threshold, Decimal('0.01'))}{suffix}"
+    return f"{sign}${_format_number(magnitude, Decimal('0.01'))}"
+
+
+def _format_number(value: Decimal, quantum: Decimal) -> str:
+    rounded = value.quantize(quantum, rounding=ROUND_HALF_UP)
+    decimal_places = abs(quantum.as_tuple().exponent)
+    return f"{rounded:,.{decimal_places}f}"
 
 
 def _format_decimal(value: Decimal | None) -> str:
@@ -419,6 +551,12 @@ def _period_label(fiscal_year: int | None, fiscal_period: str | None) -> str:
     if fiscal_year is None:
         return fiscal_period or ""
     if fiscal_period is None:
+        return str(fiscal_year)
+    return f"{fiscal_year} {fiscal_period}"
+
+
+def _indicator_period_column(fiscal_year: int, fiscal_period: str) -> str:
+    if fiscal_period == "FY":
         return str(fiscal_year)
     return f"{fiscal_year} {fiscal_period}"
 
