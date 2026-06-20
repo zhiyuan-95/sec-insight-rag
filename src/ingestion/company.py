@@ -14,24 +14,42 @@ from src.indicators import calculate_indicators
 from src.ingestion.companyfacts import get_companyfacts
 from src.ingestion.errors import SecIngestionError
 from src.ingestion.filings import FilingMetadata, download_filing_document, list_recent_filings
+from src.ingestion.inline_xbrl import get_inline_xbrl_facts
 from src.ingestion.refresh_policy import next_business_day, next_check_date_for_filing
 from src.ingestion.sec_client import SecClient
 from src.ingestion.submissions import get_company_submissions
 from src.ingestion.tickers import load_ticker_mapping, resolve_ticker_to_cik
-from src.processing.company_industry_labels import industry_label_assignments_for_company
+from src.processing.company_industry_labels import (
+    CompanyIndustryLabelAssignment,
+    industry_label_assignments_for_company,
+)
 from src.processing import (
+    INLINE_XBRL_SOURCE,
     BaseMetricRecord,
+    IndustryFactTarget,
+    InlineXbrlExtractionError,
     NormalizedFact,
+    SemanticMappingCandidate,
     active_accessions_for_facts,
     active_period_keys,
     active_period_keys_from_periods,
+    canonical_metric_targets,
+    generate_semantic_mapping_candidates,
+    mapping_candidates_by_key,
     mapping_candidates_by_concept,
     map_raw_facts_to_base_metrics,
+    missing_metric_targets,
     normalize_companyfacts,
 )
 from src.storage import (
+    MAPPING_SCOPE_COMPANY,
+    MAPPING_STATUS_APPROVED,
+    MAPPING_STATUS_CANDIDATE,
     CompanyRecord,
+    CompanyIndustryLabelRepository,
     CompanyRepository,
+    ConceptMappingRecord,
+    ConceptMappingRepository,
     FilingRecord,
     FilingRepository,
     FinancialIndicatorRepository,
@@ -39,6 +57,7 @@ from src.storage import (
     FinancialMetricRepository,
     RawFactRepository,
     RetrievalRepository,
+    StoredCompanyIndustryLabel,
     connect_sqlite,
 )
 
@@ -69,6 +88,10 @@ class CompanyIngestionResult:
     sec_checked: bool = True
     refresh_due_10k: bool | None = None
     refresh_due_10q: bool | None = None
+    inline_xbrl_fact_count: int = 0
+    semantic_mapping_candidate_count: int = 0
+    approved_mapping_count: int = 0
+    industry_label_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -109,7 +132,11 @@ def ingest_company(ticker: str, settings: Settings) -> CompanyIngestionResult:
     existing_company = _get_existing_company(settings, normalized_ticker)
     if existing_company is not None:
         refresh_due_10k, refresh_due_10q = _company_refresh_due(existing_company)
-        if not refresh_due_10k and not refresh_due_10q:
+        mapping_enrichment_due = _company_mapping_enrichment_due(
+            settings,
+            existing_company,
+        )
+        if not refresh_due_10k and not refresh_due_10q and not mapping_enrichment_due:
             return _build_local_ingestion_result(
                 settings=settings,
                 company=existing_company,
@@ -155,6 +182,10 @@ def _ingest_company_from_sec(
     companyfacts = get_companyfacts(client, cik)
     normalized_facts = normalize_companyfacts(companyfacts, concepts=None, forms=None, taxonomies=None)
     warnings = list(_collect_quality_warnings(normalized_facts))
+    inline_xbrl_fact_count = 0
+    semantic_mapping_candidate_count = 0
+    approved_mapping_count = 0
+    industry_label_count = 0
 
     with connect_sqlite(settings.stock_sql_db_path) as connection:
         raw_repository = RawFactRepository(connection)
@@ -162,6 +193,8 @@ def _ingest_company_from_sec(
         filing_repository = FilingRepository(connection)
         metric_repository = FinancialMetricRepository(connection)
         indicator_repository = FinancialIndicatorRepository(connection)
+        industry_label_repository = CompanyIndustryLabelRepository(connection)
+        concept_mapping_repository = ConceptMappingRepository(connection)
 
         raw_repository.initialize()
         existing_company = company_repository.get_by_cik(cik)
@@ -210,6 +243,29 @@ def _ingest_company_from_sec(
         )
         if company.company_id is None:
             raise RuntimeError(f"Stored company record for CIK {cik} did not include a company_id")
+        stored_industry_labels = industry_label_repository.list_labels(
+            company.company_id
+        )
+        if not stored_industry_labels:
+            industry_assignment = industry_label_assignments_for_company(
+                normalized_ticker,
+                cik,
+                sic=company.sic,
+                sic_description=company.sic_description,
+                observed_concepts=(fact.concept for fact in stored_facts),
+            )
+            _persist_industry_labels(
+                industry_label_repository,
+                company.company_id,
+                industry_assignment,
+            )
+            stored_industry_labels = industry_label_repository.list_labels(
+                company.company_id
+            )
+        industry_labels = tuple(
+            label.industry_label for label in stored_industry_labels
+        )
+        industry_label_count = len(industry_labels)
 
         refresh_due_10k, refresh_due_10q = _company_refresh_due(existing_company or company)
         new_accessions = {filing.accession_number for filing in filings} - existing_accessions
@@ -250,16 +306,66 @@ def _ingest_company_from_sec(
             if filing.filing_id is not None
         }
 
+        approved_mapping_rows = concept_mapping_repository.list_for_company(
+            cik,
+            industry_labels,
+            status=MAPPING_STATUS_APPROVED,
+        )
+        approved_mappings = _approved_mapping_targets(approved_mapping_rows)
+        approved_mapping_count = len(approved_mappings)
+        catalog_mappings = mapping_candidates_by_key(industry_labels)
+        mapping_names = {
+            key: target.metric_name
+            for key, target in {**catalog_mappings, **approved_mappings}.items()
+        }
+        targets = canonical_metric_targets(industry_labels)
+        missing_targets = missing_metric_targets(stored_facts, targets, mapping_names)
+        should_extract_inline = bool(missing_targets) and (
+            bool(new_accessions)
+            or not raw_repository.has_source_facts(cik, INLINE_XBRL_SOURCE)
+        )
+        if should_extract_inline:
+            inline_facts = _extract_active_inline_xbrl_facts(
+                filings=stored_filings,
+                company=company,
+                accessions=(new_accessions or active_accessions),
+                sec_user_agent=client.user_agent,
+                warnings=warnings,
+            )
+            inline_xbrl_fact_count = raw_repository.upsert_facts(inline_facts)
+            if inline_facts:
+                stored_fact_records = raw_repository.list_fact_records(cik)
+                stored_facts = [record.fact for record in stored_fact_records]
+
+        if missing_targets:
+            candidate_facts = [
+                fact
+                for fact in stored_facts
+                if fact.accession_number in active_accessions
+            ]
+            candidates = generate_semantic_mapping_candidates(
+                candidate_facts,
+                missing_targets,
+                set(mapping_names),
+                embedding_model_name=settings.retrieval_embedding_model,
+                model_cache_dir=(
+                    settings.knowledge_storage_dir / "model_cache" / "fastembed"
+                ),
+                target_embedding_path=(
+                    settings.knowledge_storage_dir
+                    / "concept_mapping"
+                    / "target_embeddings.json"
+                ),
+            )
+            semantic_mapping_candidate_count = concept_mapping_repository.upsert_mappings(
+                _candidate_mapping_records(cik, candidates)
+            )
+
         base_metrics = map_raw_facts_to_base_metrics(
             ((record.raw_fact_id, record.fact) for record in stored_fact_records),
             active_keys,
-            _industry_labels_for_mapping(
-                ticker=normalized_ticker,
-                cik=cik,
-                sic=company.sic,
-                sic_description=company.sic_description,
-                observed_concepts=(fact.concept for fact in stored_facts),
-            ),
+            industry_labels,
+            approved_mappings,
         )
         financial_metrics = _build_financial_metrics(
             company_id=company.company_id,
@@ -293,6 +399,10 @@ def _ingest_company_from_sec(
         sec_checked=True,
         refresh_due_10k=refresh_due_10k,
         refresh_due_10q=refresh_due_10q,
+        inline_xbrl_fact_count=inline_xbrl_fact_count,
+        semantic_mapping_candidate_count=semantic_mapping_candidate_count,
+        approved_mapping_count=approved_mapping_count,
+        industry_label_count=industry_label_count,
     )
 
 
@@ -316,6 +426,30 @@ def _company_refresh_due(company: CompanyRecord) -> tuple[bool, bool]:
     )
 
 
+def _company_mapping_enrichment_due(
+    settings: Settings,
+    company: CompanyRecord,
+) -> bool:
+    if company.company_id is None or not settings.stock_sql_db_path.exists():
+        return False
+    with connect_sqlite(settings.stock_sql_db_path) as connection:
+        raw_repository = RawFactRepository(connection)
+        filing_repository = FilingRepository(connection)
+        raw_repository.initialize()
+        if raw_repository.has_source_facts(company.cik, INLINE_XBRL_SOURCE):
+            return False
+        active_filings = filing_repository.list_filings(
+            company.company_id,
+            {"10-K", "10-Q"},
+            active_only=True,
+        )
+        return any(
+            filing.local_path is not None
+            and _looks_like_inline_xbrl(filing.local_path)
+            for filing in active_filings
+        )
+
+
 def _date_is_due(next_check_date: date | None, today: date) -> bool:
     return next_check_date is None or today >= next_check_date
 
@@ -327,6 +461,7 @@ def _refresh_company_metrics_from_stored_facts(
     stored_filings: list[FilingRecord],
     active_keys: set[tuple[str, int, str]],
     industry_labels: tuple[str, ...],
+    approved_mappings: dict[tuple[str, str], IndustryFactTarget],
     metric_repository: FinancialMetricRepository,
 ) -> int:
     if not stored_fact_records:
@@ -340,6 +475,7 @@ def _refresh_company_metrics_from_stored_facts(
         ((record.raw_fact_id, record.fact) for record in stored_fact_records),
         active_keys,
         industry_labels,
+        approved_mappings,
     )
     financial_metrics = _build_financial_metrics(
         company_id=company_id,
@@ -380,16 +516,39 @@ def _build_local_ingestion_result(
         filing_repository = FilingRepository(connection)
         metric_repository = FinancialMetricRepository(connection)
         indicator_repository = FinancialIndicatorRepository(connection)
+        industry_label_repository = CompanyIndustryLabelRepository(connection)
+        concept_mapping_repository = ConceptMappingRepository(connection)
         raw_repository.initialize()
         observed_concepts = raw_repository.list_distinct_concepts(company.cik)
-        industry_labels = _industry_labels_for_mapping(
-            ticker=company.ticker,
-            cik=company.cik,
-            sic=company.sic,
-            sic_description=company.sic_description,
-            observed_concepts=observed_concepts,
+        stored_industry_labels = industry_label_repository.list_labels(company.company_id)
+        if not stored_industry_labels:
+            assignment = industry_label_assignments_for_company(
+                company.ticker,
+                company.cik,
+                sic=company.sic,
+                sic_description=company.sic_description,
+                observed_concepts=observed_concepts,
+            )
+            _persist_industry_labels(
+                industry_label_repository,
+                company.company_id,
+                assignment,
+            )
+            stored_industry_labels = industry_label_repository.list_labels(
+                company.company_id
+            )
+        industry_labels = tuple(
+            label.industry_label for label in stored_industry_labels
         )
-        mapped_concepts = set(mapping_candidates_by_concept(industry_labels))
+        approved_mapping_rows = concept_mapping_repository.list_for_company(
+            company.cik,
+            industry_labels,
+            status=MAPPING_STATUS_APPROVED,
+        )
+        approved_mappings = _approved_mapping_targets(approved_mapping_rows)
+        mapped_concepts = set(mapping_candidates_by_concept(industry_labels)) | {
+            row.concept for row in approved_mapping_rows
+        }
         stored_fact_records = raw_repository.list_fact_records(company.cik, mapped_concepts)
         active_keys = active_period_keys_from_periods(raw_repository.list_distinct_periods(company.cik))
         stored_filings = filing_repository.list_filings(company.company_id)
@@ -399,6 +558,7 @@ def _build_local_ingestion_result(
             stored_filings=stored_filings,
             active_keys=active_keys,
             industry_labels=industry_labels,
+            approved_mappings=approved_mappings,
             metric_repository=metric_repository,
         )
         active_filings = filing_repository.list_filings(company.company_id, {"10-K", "10-Q"}, active_only=True)
@@ -431,25 +591,136 @@ def _build_local_ingestion_result(
         sec_checked=sec_checked,
         refresh_due_10k=refresh_due_10k,
         refresh_due_10q=refresh_due_10q,
+        approved_mapping_count=len(approved_mappings),
+        industry_label_count=len(industry_labels),
     )
 
 
-def _industry_labels_for_mapping(
+def _persist_industry_labels(
+    repository: CompanyIndustryLabelRepository,
+    company_id: int,
+    assignment: CompanyIndustryLabelAssignment,
+) -> int:
+    labels = tuple(
+        StoredCompanyIndustryLabel(
+            company_id=company_id,
+            industry_label=industry_label,
+            assignment_source=assignment.assignment_source,
+            assignment_reason=assignment.assignment_reason,
+            status="approved",
+            evidence=assignment.supporting_evidence,
+            classifier_version="source_controlled_registry_v1",
+            reviewed_at=assignment.reviewed_at or None,
+        )
+        for industry_label in assignment.assigned_industry_labels
+    )
+    return repository.replace_labels(company_id, labels)
+
+
+def _extract_active_inline_xbrl_facts(
     *,
-    ticker: str | None,
+    filings: list[FilingRecord],
+    company: CompanyRecord,
+    accessions: set[str],
+    sec_user_agent: str,
+    warnings: list[str],
+) -> list[NormalizedFact]:
+    facts: list[NormalizedFact] = []
+    validation_message_count = 0
+    extracted_filing_count = 0
+    for filing in filings:
+        if not filing.is_active_window or filing.accession_number not in accessions:
+            continue
+        if filing.local_path is None or not _looks_like_inline_xbrl(filing.local_path):
+            continue
+        if not filing.document_url:
+            warnings.append(
+                "Inline XBRL extraction skipped because the filing URL is missing: "
+                f"{filing.accession_number}"
+            )
+            continue
+        try:
+            result = get_inline_xbrl_facts(
+                filing.document_url,
+                cik=company.cik,
+                entity_name=company.name,
+                form=filing.form_type,
+                filing_date=filing.filing_date,
+                accession_number=filing.accession_number,
+                fiscal_year=filing.fiscal_year,
+                fiscal_period=filing.fiscal_period,
+                sec_user_agent=sec_user_agent,
+            )
+        except InlineXbrlExtractionError as exc:
+            warnings.append(str(exc))
+            continue
+        extracted_filing_count += 1
+        validation_message_count += result.model_error_count
+        facts.extend(result.facts)
+    if validation_message_count:
+        warnings.append(
+            "Arelle reported "
+            f"{validation_message_count} validation messages across "
+            f"{extracted_filing_count} Inline XBRL filings; extracted facts were retained "
+            "with source and quality metadata."
+        )
+    return facts
+
+
+def _looks_like_inline_xbrl(path: Path) -> bool:
+    try:
+        with path.open("rb") as filing:
+            prefix = filing.read(262_144).lower()
+    except OSError:
+        return False
+    return b"<ix:" in prefix or b"xmlns:ix=" in prefix
+
+
+def _approved_mapping_targets(
+    rows: Iterable[ConceptMappingRecord],
+) -> dict[tuple[str, str], IndustryFactTarget]:
+    selected: dict[tuple[str, str], IndustryFactTarget] = {}
+    for row in rows:
+        key = (row.taxonomy, row.concept)
+        if key in selected:
+            continue
+        selected[key] = IndustryFactTarget(
+            industry_label=(
+                row.scope_value if row.scope_type != MAPPING_SCOPE_COMPANY else "Company"
+            ),
+            raw_concept=row.concept,
+            taxonomy=row.taxonomy,
+            internal_metric_name=row.metric_name,
+            statement_type=row.statement_type,
+            required_for_core=False,
+            required_for_specialized_indicators=False,
+            consolidated_or_segment="consolidated",
+            priority=-100,
+            notes=f"Approved persisted mapping {row.mapping_id}",
+        )
+    return selected
+
+
+def _candidate_mapping_records(
     cik: str,
-    sic: str | None,
-    sic_description: str | None,
-    observed_concepts: Iterable[str],
-) -> tuple[str, ...]:
-    assignment = industry_label_assignments_for_company(
-        ticker,
-        cik,
-        sic=sic,
-        sic_description=sic_description,
-        observed_concepts=observed_concepts,
+    candidates: Iterable[SemanticMappingCandidate],
+) -> tuple[ConceptMappingRecord, ...]:
+    return tuple(
+        ConceptMappingRecord(
+            taxonomy=candidate.taxonomy,
+            concept=candidate.concept,
+            namespace_uri=candidate.namespace_uri,
+            metric_name=candidate.metric_name,
+            statement_type=candidate.statement_type,
+            scope_type=MAPPING_SCOPE_COMPANY,
+            scope_value=cik,
+            status=MAPPING_STATUS_CANDIDATE,
+            confidence=candidate.confidence,
+            match_method=candidate.match_method,
+            evidence=candidate.evidence,
+        )
+        for candidate in candidates
     )
-    return assignment.assigned_industry_labels
 
 
 def _select_active_window_filings(

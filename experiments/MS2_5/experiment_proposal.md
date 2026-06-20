@@ -51,7 +51,8 @@ This experiment covers:
 - already-ingested session inspection after the current setup or reuse step
 - company registry state
 - filing inventory state
-- full normalized SEC companyfacts archive in `raw_xbrl_facts`
+- normalized SEC companyfacts plus conditionally extracted Inline XBRL extension
+  and dimensional facts in `raw_xbrl_facts`
 - latest ingested 10-K and 10-Q filing dates
 - next-check dates for 10-K and 10-Q refresh checks
 - active analysis window state
@@ -62,12 +63,17 @@ This experiment covers:
 - traceability from `financial_metrics` to `raw_xbrl_facts` and filings
 - raw fact mapping coverage: raw facts downloaded/stored, mapped raw facts,
   unmapped raw facts, unknown raw concepts, and supported mapping catalog size
-- source-controlled hard industry label assignment, including assignment source,
-  reason, supporting evidence, and label review status
+- persisted hard industry label assignment, including assignment source, reason,
+  supporting evidence, classifier version, and label review status
 - target raw fact coverage for the assigned hard industry labels, including
   found, missing, and found-but-unmapped target facts
 - alternate SEC/XBRL tags that map to the same internal business metric
 - unknown SEC/XBRL concepts not currently mapped to base financial metrics
+- Inline XBRL extension and dimensional fact coverage
+- semantic mapping candidates that require review before use
+- approved learned mappings with global, industry, or company scope
+- missing exact target tags whose canonical metric is recovered through an
+  approved alternate concept
 - saved compact report with appended annual and quarterly XBRL metric evidence,
   with source rows still available in SQLite and CSV exports
 
@@ -93,6 +99,8 @@ data/exports/
     filings.csv
     raw_xbrl_facts.csv
     financial_metrics.csv
+    company_industry_labels.csv
+    xbrl_concept_mappings.csv
     metric_traceability_sample.csv
 ```
 
@@ -392,18 +400,21 @@ Evidence to present:
 6. Filing inventory samples
 7. Raw fact and base metric counts
 8. Raw fact mapping coverage
-9. Company industry labels
+9. Persisted company industry labels
 10. Target raw fact coverage
 11. Found, missing, and found-but-unmapped target facts
 12. Active-window counts
 13. Financial metric data lineage view
-14. Alternate SEC/XBRL tags for the same business metric
-15. Compact `financial_metrics` sample
-16. Compact traceability sample
-17. Annual XBRL financial metrics
-18. Quarterly XBRL financial metrics
-19. Unknown SEC/XBRL concepts not mapped to base financial metrics
-20. Full evidence artifact paths
+14. Inline XBRL extension coverage
+15. Semantic mapping candidates awaiting review
+16. Approved learned XBRL mappings
+17. Alternate SEC/XBRL tags for the same business metric
+18. Compact `financial_metrics` sample
+19. Compact traceability sample
+20. Annual XBRL financial metrics
+21. Quarterly XBRL financial metrics
+22. Unknown SEC/XBRL concepts not mapped to base financial metrics
+23. Full evidence artifact paths
 
 ## Implementation Guidance
 
@@ -415,6 +426,11 @@ Evidence to present:
   label assignments. Do not infer labels silently from observed raw facts.
 - Reuse `src/processing/mapping_catalog.py` for approved mapping candidates and
   target raw fact coverage.
+- Reuse `src/ingestion/inline_xbrl.py` and Arelle for active filing extension
+  taxonomy loading; keep normalization in `src/processing/inline_xbrl.py`.
+- Reuse `src/processing/semantic_mapping.py` only to generate review candidates.
+- Read approved learned mappings from `xbrl_concept_mappings`; never treat a
+  semantic candidate as an approved base metric mapping.
 - Reuse repositories in `src/storage/` for all database reads and writes.
 - Do not calculate derived indicators inside the experiment script.
 - Do not duplicate SEC HTTP logic inside the experiment script.
@@ -468,13 +484,12 @@ values below `1K` should be rounded to two decimal places. Stored SQLite values
 and CSV exports should remain unmodified.
 When multiple distinct values remain for one metric-period cell, the report
 should keep them visible in the cell instead of silently dropping them.
-The lineage text section should also highlight the raw fact mapping coverage,
-source-controlled hard industry labels, target raw fact coverage, observed
-alternate SEC/XBRL tags for shared business metrics, and unknown SEC/XBRL
-concept tags that are present in `raw_xbrl_facts` but not mapped into
-`financial_metrics`. Unknown SEC/XBRL concepts should appear after the quarterly
-XBRL metric table, and the Full Evidence paths should appear after the XBRL
-metric tables.
+The lineage text section should also highlight raw fact mapping coverage,
+persisted hard industry labels, target raw fact coverage, Inline XBRL extension
+coverage, semantic candidates, approved learned mappings, observed alternate
+tags, and unknown concepts. Unknown concepts should appear after the quarterly
+XBRL metric table, and Full Evidence paths should appear after the XBRL metric
+tables.
 
 ## Edge Cases To Present
 

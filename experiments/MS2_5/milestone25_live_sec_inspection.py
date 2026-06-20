@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import sqlite3
 import sys
 from dataclasses import dataclass, replace
@@ -33,6 +34,7 @@ from src.processing.mapping_catalog import (
     STATUS_FOUND_MAPPED,
     STATUS_FOUND_UNMAPPED,
     STATUS_MISSING_TARGET,
+    mapping_candidates_by_key,
     target_facts_for_industry_labels,
 )
 from src.storage import CompanyRepository, connect_sqlite, initialize_database
@@ -44,6 +46,7 @@ DEFAULT_REPORT_PATH = EXPERIMENT_DIR / "experiment_report.md"
 DEFAULT_FILINGS_DIR = EXPERIMENT_STORAGE_DIR / "filings"
 DEFAULT_EXPORTS_DIR = PROJECT_ROOT / "data" / "exports" / "ms2_5"
 FORMS = ("10-K", "10-Q")
+STATUS_FOUND_MAPPED_ALTERNATE = "found_mapped_alternate"
 PRESENTATION_NUMBER_EXCLUDED_HEADERS = {
     "accession",
     "accession_number",
@@ -291,7 +294,11 @@ def _snapshot(database: Path, ticker: str) -> dict[str, Any]:
         company_id = company.get("company_id") if company else None
         cik = company.get("cik") if company else None
         observed_concepts = _observed_raw_concepts(connection, cik)
-        industry_assignment = _company_industry_label_assignment(company, observed_concepts)
+        industry_assignment = _company_industry_label_assignment(
+            connection,
+            company,
+            observed_concepts,
+        )
         target_raw_fact_coverage = _target_raw_fact_coverage(
             connection,
             company_id=company_id,
@@ -314,6 +321,17 @@ def _snapshot(database: Path, ticker: str) -> dict[str, Any]:
             "raw_fact_mapping_coverage": _raw_fact_mapping_coverage(connection, company_id, cik),
             "alternate_xbrl_tags": _alternate_xbrl_tags(connection, company_id),
             "unknown_xbrl_concepts": _unknown_xbrl_concepts(connection, cik),
+            "inline_xbrl_coverage": _inline_xbrl_coverage(connection, cik),
+            "semantic_mapping_candidates": _semantic_mapping_rows(
+                connection,
+                cik,
+                status="candidate",
+            ),
+            "approved_learned_mappings": _semantic_mapping_rows(
+                connection,
+                cik,
+                status="approved",
+            ),
             "metric_sample": _metric_sample(connection, company_id),
             "traceability_sample": _traceability_sample(connection, company_id),
             "quality_flags": _quality_flags(connection, cik),
@@ -323,7 +341,14 @@ def _snapshot(database: Path, ticker: str) -> dict[str, Any]:
 def _empty_snapshot() -> dict[str, Any]:
     return {
         "company": {},
-        "counts": {"companies": 0, "filings": 0, "raw_xbrl_facts": 0, "financial_metrics": 0},
+        "counts": {
+            "companies": 0,
+            "company_industry_labels": 0,
+            "filings": 0,
+            "raw_xbrl_facts": 0,
+            "xbrl_concept_mappings": 0,
+            "financial_metrics": 0,
+        },
         "filings": [],
         "filings_by_form": {form_type: () for form_type in FORMS},
         "active_filings_by_form": {form_type: 0 for form_type in FORMS},
@@ -337,6 +362,9 @@ def _empty_snapshot() -> dict[str, Any]:
         "raw_fact_mapping_coverage": [],
         "alternate_xbrl_tags": [],
         "unknown_xbrl_concepts": [],
+        "inline_xbrl_coverage": [],
+        "semantic_mapping_candidates": [],
+        "approved_learned_mappings": [],
         "metric_sample": [],
         "traceability_sample": [],
         "quality_flags": (),
@@ -352,7 +380,14 @@ def _snapshot_company_id(snapshot: dict[str, Any]) -> int | None:
 def _table_counts(connection: sqlite3.Connection) -> dict[str, int]:
     return {
         table: int(connection.execute(f"SELECT COUNT(*) AS count FROM {table}").fetchone()["count"])
-        for table in ("companies", "filings", "raw_xbrl_facts", "financial_metrics")
+        for table in (
+            "companies",
+            "company_industry_labels",
+            "filings",
+            "raw_xbrl_facts",
+            "xbrl_concept_mappings",
+            "financial_metrics",
+        )
     }
 
 
@@ -461,9 +496,50 @@ def _observed_raw_concepts(connection: sqlite3.Connection, cik: str | None) -> t
 
 
 def _company_industry_label_assignment(
+    connection: sqlite3.Connection,
     company: dict[str, Any],
     observed_concepts: Sequence[str],
 ) -> CompanyIndustryLabelAssignment:
+    company_id = company.get("company_id")
+    if company_id is not None:
+        rows = _fetch_all(
+            connection,
+            """
+            SELECT *
+            FROM company_industry_labels
+            WHERE company_id = ? AND status = 'approved'
+            ORDER BY industry_label
+            """,
+            [company_id],
+        )
+        if rows:
+            evidence = tuple(
+                dict.fromkeys(
+                    item
+                    for row in rows
+                    for item in json.loads(row.get("evidence_json") or "[]")
+                )
+            )
+            return CompanyIndustryLabelAssignment(
+                ticker=str(company.get("ticker") or "").upper(),
+                cik=str(company.get("cik") or ""),
+                assigned_industry_labels=tuple(
+                    str(row["industry_label"]) for row in rows
+                ),
+                assignment_source=_join(
+                    sorted({str(row["assignment_source"]) for row in rows})
+                ),
+                assignment_reason=" ; ".join(
+                    dict.fromkeys(str(row["assignment_reason"]) for row in rows)
+                ),
+                supporting_evidence=evidence,
+                reviewed_at=max(
+                    (str(row.get("reviewed_at") or "") for row in rows),
+                    default="",
+                ),
+                label_status="assigned",
+                notes="Persisted reusable company industry labels.",
+            )
     return industry_label_assignments_for_company(
         company.get("ticker"),
         company.get("cik"),
@@ -546,6 +622,31 @@ def _target_raw_fact_coverage(
             [company_id, *target_params],
         )
     }
+    mapped_by_metric = {
+        str(row["metric_name"]): row
+        for row in _fetch_all(
+            connection,
+            """
+            SELECT
+                m.metric_name,
+                COUNT(*) AS mapped_rows,
+                COALESCE(
+                    GROUP_CONCAT(DISTINCT f.taxonomy || ':' || f.concept),
+                    ''
+                ) AS mapped_concepts
+            FROM financial_metrics AS m
+            LEFT JOIN raw_xbrl_facts AS f
+                ON f.id = m.raw_fact_id
+            WHERE m.company_id = ?
+            GROUP BY m.metric_name
+            """,
+            [company_id],
+        )
+    }
+    candidate_metrics = {
+        str(row["metric_name"])
+        for row in _semantic_mapping_rows(connection, cik, status="candidate")
+    }
     label_review_note = (
         "industry-specific targets are not included until a source-controlled label is assigned"
         if assignment.label_status == "needs_label_review"
@@ -558,12 +659,27 @@ def _target_raw_fact_coverage(
         observed_rows = int(observed.get("observed_rows") or 0)
         mapped_rows = mapped_by_key.get(key, 0)
         status = _target_coverage_status(observed_rows, mapped_rows)
+        alternate_mapping = mapped_by_metric.get(target.internal_metric_name, {})
+        alternate_mapped_rows = int(alternate_mapping.get("mapped_rows") or 0)
+        if status == STATUS_MISSING_TARGET and alternate_mapped_rows > 0:
+            status = STATUS_FOUND_MAPPED_ALTERNATE
         notes = "; ".join(
             note
             for note in (
                 target.notes,
                 label_review_note,
                 "observed but did not create financial_metrics rows" if status == STATUS_FOUND_UNMAPPED else "",
+                (
+                    "canonical metric recovered through an approved alternate XBRL concept"
+                    if status == STATUS_FOUND_MAPPED_ALTERNATE
+                    else ""
+                ),
+                (
+                    "semantic mapping candidates are awaiting review"
+                    if status == STATUS_MISSING_TARGET
+                    and target.internal_metric_name in candidate_metrics
+                    else ""
+                ),
             )
             if note
         )
@@ -579,6 +695,8 @@ def _target_raw_fact_coverage(
                 "status": status,
                 "observed_rows": observed_rows,
                 "mapped_rows": mapped_rows,
+                "alternate_mapped_rows": alternate_mapped_rows,
+                "alternate_mapped_concepts": alternate_mapping.get("mapped_concepts") or "",
                 "unit_count": observed.get("unit_count") or 0,
                 "forms": observed.get("forms") or "",
                 "latest_filing_date": observed.get("latest_filing_date") or "",
@@ -597,6 +715,12 @@ def _target_coverage_status(observed_rows: int, mapped_rows: int) -> str:
 
 
 def _target_rows_with_status(rows: list[dict[str, Any]], status: str) -> list[dict[str, Any]]:
+    if status == STATUS_FOUND_MAPPED:
+        return [
+            row
+            for row in rows
+            if row.get("status") in {STATUS_FOUND_MAPPED, STATUS_FOUND_MAPPED_ALTERNATE}
+        ]
     return [row for row in rows if row.get("status") == status]
 
 
@@ -626,24 +750,37 @@ def _raw_fact_mapping_coverage(
 ) -> list[dict[str, Any]]:
     if company_id is None or not cik:
         return []
-    concept_clause = _concept_in_clause()
-    concept_params = _base_metric_concepts()
-    raw_summary = _fetch_one(
+    industry_labels = tuple(
+        str(row["industry_label"])
+        for row in _fetch_all(
+            connection,
+            """
+            SELECT industry_label
+            FROM company_industry_labels
+            WHERE company_id = ? AND status = 'approved'
+            """,
+            [company_id],
+        )
+    )
+    catalog_mappings = mapping_candidates_by_key(industry_labels)
+    approved_mapping_rows = _semantic_mapping_rows(connection, cik, status="approved")
+    approved_keys = {
+        (str(row["taxonomy"]), str(row["observed_raw_concept"]))
+        for row in approved_mapping_rows
+    }
+    supported_keys = set(catalog_mappings) | approved_keys
+    raw_groups = _fetch_all(
         connection,
-        f"""
+        """
         SELECT
-            COUNT(*) AS raw_fact_rows,
-            COUNT(DISTINCT concept) AS distinct_raw_concepts,
-            SUM(CASE WHEN concept IN ({concept_clause}) THEN 1 ELSE 0 END)
-                AS raw_facts_with_supported_concepts,
-            SUM(CASE WHEN concept NOT IN ({concept_clause}) THEN 1 ELSE 0 END)
-                AS unknown_raw_fact_rows,
-            COUNT(DISTINCT CASE WHEN concept NOT IN ({concept_clause}) THEN concept END)
-                AS unknown_raw_concepts
+            taxonomy,
+            concept,
+            COUNT(*) AS raw_fact_rows
         FROM raw_xbrl_facts
         WHERE cik = ?
+        GROUP BY taxonomy, concept
         """,
-        [*concept_params, *concept_params, *concept_params, cik],
+        [cik],
     )
     mapped_summary = _fetch_one(
         connection,
@@ -659,11 +796,19 @@ def _raw_fact_mapping_coverage(
         """,
         [company_id],
     )
-    raw_fact_rows = int(raw_summary.get("raw_fact_rows") or 0)
-    distinct_raw_concepts = int(raw_summary.get("distinct_raw_concepts") or 0)
-    raw_facts_with_supported_concepts = int(raw_summary.get("raw_facts_with_supported_concepts") or 0)
-    unknown_raw_fact_rows = int(raw_summary.get("unknown_raw_fact_rows") or 0)
-    unknown_raw_concepts = int(raw_summary.get("unknown_raw_concepts") or 0)
+    raw_fact_rows = sum(int(row["raw_fact_rows"] or 0) for row in raw_groups)
+    distinct_raw_concepts = len(raw_groups)
+    raw_facts_with_supported_concepts = sum(
+        int(row["raw_fact_rows"] or 0)
+        for row in raw_groups
+        if (str(row["taxonomy"]), str(row["concept"])) in supported_keys
+    )
+    unknown_raw_fact_rows = raw_fact_rows - raw_facts_with_supported_concepts
+    unknown_raw_concepts = sum(
+        1
+        for row in raw_groups
+        if (str(row["taxonomy"]), str(row["concept"])) not in supported_keys
+    )
     financial_metric_rows = int(mapped_summary.get("financial_metric_rows") or 0)
     mapped_raw_facts = int(mapped_summary.get("mapped_raw_facts") or 0)
     mapped_raw_concepts = int(mapped_summary.get("mapped_raw_concepts") or 0)
@@ -672,7 +817,7 @@ def _raw_fact_mapping_coverage(
         {
             "coverage_item": "raw XBRL facts downloaded/stored for ticker",
             "count": raw_fact_rows,
-            "note": "full normalized SEC companyfacts archive",
+            "note": "normalized SEC companyfacts plus Inline XBRL extension archive",
         },
         {
             "coverage_item": "raw facts mapped into financial_metrics",
@@ -721,8 +866,11 @@ def _raw_fact_mapping_coverage(
         },
         {
             "coverage_item": "supported SEC/XBRL tags in mapping catalog",
-            "count": len(BASE_METRIC_MAPPINGS),
-            "note": f"maps into {len({mapping.metric_name for mapping in BASE_METRIC_MAPPINGS.values()})} business metrics",
+            "count": len(supported_keys),
+            "note": (
+                f"maps into {len({mapping.metric_name for mapping in catalog_mappings.values()} | {str(row['metric_name']) for row in approved_mapping_rows})} "
+                "business metrics"
+            ),
         },
     ]
 
@@ -757,6 +905,20 @@ def _alternate_xbrl_tags(connection: sqlite3.Connection, company_id: int | None)
     for concept, mapping in BASE_METRIC_MAPPINGS.items():
         key = (mapping.statement_type, mapping.metric_name)
         supported_by_metric.setdefault(key, []).append(concept)
+    company = _fetch_one(
+        connection,
+        "SELECT cik FROM companies WHERE company_id = ?",
+        [company_id],
+    )
+    for row in _semantic_mapping_rows(
+        connection,
+        company.get("cik"),
+        status="approved",
+    ):
+        key = (str(row["statement_type"]), str(row["metric_name"]))
+        tag = f"{row['taxonomy']}:{row['observed_raw_concept']}"
+        if tag not in supported_by_metric.setdefault(key, []):
+            supported_by_metric[key].append(tag)
 
     rows = []
     for key, supported_tags in sorted(supported_by_metric.items()):
@@ -794,12 +956,107 @@ def _unknown_xbrl_concepts(connection: sqlite3.Connection, cik: str | None) -> l
             COALESCE(GROUP_CONCAT(DISTINCT form), '') AS forms,
             MAX(end_date) AS latest_end_date,
             MAX(filed_date) AS latest_filed_date
-        FROM raw_xbrl_facts
-        WHERE cik = ? AND concept NOT IN ({concept_clause})
-        GROUP BY taxonomy, concept
+        FROM raw_xbrl_facts AS f
+        WHERE f.cik = ?
+          AND f.concept NOT IN ({concept_clause})
+          AND NOT EXISTS (
+              SELECT 1
+              FROM xbrl_concept_mappings AS mapping
+              WHERE mapping.taxonomy = f.taxonomy
+                AND mapping.concept = f.concept
+                AND mapping.status = 'approved'
+                AND (
+                    mapping.scope_type = 'global'
+                    OR (mapping.scope_type = 'company' AND mapping.scope_value = ?)
+                    OR (
+                        mapping.scope_type = 'industry'
+                        AND mapping.scope_value IN (
+                            SELECT industry_label
+                            FROM company_industry_labels
+                            WHERE company_id = (
+                                SELECT company_id FROM companies WHERE cik = ?
+                            )
+                              AND status = 'approved'
+                        )
+                    )
+                )
+          )
+        GROUP BY f.taxonomy, f.concept
         ORDER BY raw_fact_rows DESC, raw_xbrl_concept
         """,
-        [cik, *_base_metric_concepts()],
+        [cik, *_base_metric_concepts(), cik, cik],
+    )
+
+
+def _inline_xbrl_coverage(
+    connection: sqlite3.Connection,
+    cik: str | None,
+) -> list[dict[str, Any]]:
+    if not cik:
+        return []
+    return _fetch_all(
+        connection,
+        """
+        SELECT
+            taxonomy,
+            COALESCE(namespace_uri, '') AS namespace_uri,
+            COUNT(*) AS raw_fact_rows,
+            COUNT(DISTINCT concept) AS concept_count,
+            SUM(CASE WHEN is_consolidated = 1 THEN 1 ELSE 0 END) AS consolidated_rows,
+            SUM(CASE WHEN is_consolidated = 0 THEN 1 ELSE 0 END) AS dimensional_rows,
+            COALESCE(GROUP_CONCAT(DISTINCT form), '') AS forms
+        FROM raw_xbrl_facts
+        WHERE cik = ? AND source = 'sec_inline_xbrl'
+        GROUP BY taxonomy, namespace_uri
+        ORDER BY raw_fact_rows DESC, taxonomy
+        """,
+        [cik],
+    )
+
+
+def _semantic_mapping_rows(
+    connection: sqlite3.Connection,
+    cik: str | None,
+    *,
+    status: str,
+) -> list[dict[str, Any]]:
+    if not cik:
+        return []
+    return _fetch_all(
+        connection,
+        """
+        SELECT
+            mapping_id,
+            metric_name,
+            statement_type,
+            taxonomy,
+            concept AS observed_raw_concept,
+            ROUND(confidence, 4) AS confidence,
+            scope_type,
+            scope_value,
+            status,
+            match_method,
+            COALESCE(reviewed_by, '') AS reviewed_by,
+            COALESCE(reviewed_at, '') AS reviewed_at
+        FROM xbrl_concept_mappings
+        WHERE status = ?
+          AND (
+              scope_type = 'global'
+              OR (scope_type = 'company' AND scope_value = ?)
+              OR (
+                  scope_type = 'industry'
+                  AND scope_value IN (
+                      SELECT labels.industry_label
+                      FROM company_industry_labels AS labels
+                      INNER JOIN companies AS company
+                          ON company.company_id = labels.company_id
+                      WHERE company.cik = ? AND labels.status = 'approved'
+                  )
+              )
+          )
+        ORDER BY metric_name, confidence DESC, taxonomy, concept
+        """,
+        [status, cik, cik],
     )
 
 
@@ -1044,6 +1301,12 @@ def format_lineage_report(run: ExperimentRun) -> str:
     lines.extend(_markdown_table(run.session_after_snapshot.get("missing_target_facts") or []))
     lines.extend(["", "Found But Unmapped Target Facts:"])
     lines.extend(_markdown_table(run.session_after_snapshot.get("found_unmapped_target_facts") or []))
+    lines.extend(["", "Inline XBRL Extension Coverage:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("inline_xbrl_coverage") or []))
+    lines.extend(["", "Semantic Mapping Candidates (Review Required):"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("semantic_mapping_candidates") or []))
+    lines.extend(["", "Approved Learned XBRL Mappings:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("approved_learned_mappings") or []))
     lines.extend(["", "Alternate SEC/XBRL Tags For Same Business Metric:"])
     lines.extend(_markdown_table(run.session_after_snapshot.get("alternate_xbrl_tags") or []))
     lines.extend(["", "Annual XBRL Financial Metrics:"])
@@ -1059,10 +1322,14 @@ def format_lineage_report(run: ExperimentRun) -> str:
             f"  SQLite database: {run.paths.database}",
             "  database table: raw_xbrl_facts",
             "  database table: financial_metrics",
+            "  database table: company_industry_labels",
+            "  database table: xbrl_concept_mappings",
             f"  companies CSV: {run.paths.exports_dir / 'companies.csv'}",
             f"  filings CSV: {run.paths.exports_dir / 'filings.csv'}",
             f"  raw facts CSV: {run.paths.exports_dir / 'raw_xbrl_facts.csv'}",
             f"  financial metrics CSV: {run.paths.exports_dir / 'financial_metrics.csv'}",
+            f"  company industry labels CSV: {run.paths.exports_dir / 'company_industry_labels.csv'}",
+            f"  XBRL concept mappings CSV: {run.paths.exports_dir / 'xbrl_concept_mappings.csv'}",
             f"  traceability sample CSV: {run.paths.exports_dir / 'metric_traceability_sample.csv'}",
             f"  filing downloads: {run.paths.filings_dir}",
             f"  saved report with appended lineage section: {run.paths.report}",
@@ -1363,6 +1630,8 @@ def format_compact_report(run: ExperimentRun, *, full_report: bool = False) -> s
     lines.extend(_compact_raw_fact_mapping_coverage(run.session_after_snapshot, indent="  "))
     lines.extend(["", "Target Raw Fact Coverage"])
     lines.extend(_compact_target_raw_fact_coverage(run.session_after_snapshot, indent="  "))
+    lines.extend(["", "Adaptive XBRL Mapping"])
+    lines.extend(_compact_adaptive_mapping(run.session_after_snapshot, indent="  "))
     lines.extend(["", "Base Metrics After Session"])
     lines.extend(_compact_metric_counts(run.session_after_snapshot, indent="  "))
 
@@ -1594,6 +1863,19 @@ def _compact_target_raw_fact_coverage(snapshot: dict[str, Any], *, indent: str) 
     return lines
 
 
+def _compact_adaptive_mapping(snapshot: dict[str, Any], *, indent: str) -> list[str]:
+    inline_rows = snapshot.get("inline_xbrl_coverage") or []
+    candidates = snapshot.get("semantic_mapping_candidates") or []
+    approved = snapshot.get("approved_learned_mappings") or []
+    return [
+        f"{indent}Inline XBRL facts stored: "
+        f"{_format_presentation_number(sum(int(row.get('raw_fact_rows') or 0) for row in inline_rows))}",
+        f"{indent}semantic candidates awaiting review: "
+        f"{_format_presentation_number(len(candidates))}",
+        f"{indent}approved learned mappings: {_format_presentation_number(len(approved))}",
+    ]
+
+
 def _snapshot_sections(snapshot: dict[str, Any]) -> list[str]:
     lines: list[str] = ["", "### Company State", ""]
     lines.extend(_markdown_table([snapshot["company"]] if snapshot["company"] else []))
@@ -1613,6 +1895,12 @@ def _snapshot_sections(snapshot: dict[str, Any]) -> list[str]:
     lines.extend(_markdown_table(snapshot["missing_target_facts"]))
     lines.extend(["", "### Found But Unmapped Target Facts", ""])
     lines.extend(_markdown_table(snapshot["found_unmapped_target_facts"]))
+    lines.extend(["", "### Inline XBRL Extension Coverage", ""])
+    lines.extend(_markdown_table(snapshot["inline_xbrl_coverage"]))
+    lines.extend(["", "### Semantic Mapping Candidates (Review Required)", ""])
+    lines.extend(_markdown_table(snapshot["semantic_mapping_candidates"]))
+    lines.extend(["", "### Approved Learned XBRL Mappings", ""])
+    lines.extend(_markdown_table(snapshot["approved_learned_mappings"]))
     lines.extend(["", "### Active Window", ""])
     lines.extend(_active_window_lines(snapshot))
     lines.extend(["", "### Financial Metric Data Lineage View", ""])
@@ -1704,6 +1992,20 @@ def _export_csv_artifacts(paths: ExperimentPaths, *, company_id: int | None) -> 
                 ORDER BY statement_type, metric_name, fiscal_year DESC, fiscal_period DESC
                 """,
                 paths.exports_dir / "financial_metrics.csv",
+            ),
+            (
+                "company_industry_labels",
+                "SELECT * FROM company_industry_labels ORDER BY company_id, industry_label",
+                paths.exports_dir / "company_industry_labels.csv",
+            ),
+            (
+                "xbrl_concept_mappings",
+                """
+                SELECT *
+                FROM xbrl_concept_mappings
+                ORDER BY status, scope_type, scope_value, metric_name, confidence DESC
+                """,
+                paths.exports_dir / "xbrl_concept_mappings.csv",
             ),
         ]
         for label, query, path in export_jobs:

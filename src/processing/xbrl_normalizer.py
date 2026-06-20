@@ -47,6 +47,13 @@ class NormalizedFact:
     frame: str | None
     source: str
     quality_flags: tuple[str, ...] = ()
+    namespace_uri: str | None = None
+    context_id: str | None = None
+    dimensions: tuple[tuple[str, str], ...] = ()
+    is_consolidated: bool = True
+    source_document: str | None = None
+    balance: str | None = None
+    is_numeric: bool | None = None
 
 
 def normalize_companyfacts(
@@ -205,6 +212,7 @@ def _duplicate_key(fact: NormalizedFact) -> tuple[object, ...]:
         fact.form,
         fact.accession_number,
         fact.frame,
+        fact.dimensions,
     )
 
 

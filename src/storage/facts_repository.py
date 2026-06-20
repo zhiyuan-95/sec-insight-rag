@@ -59,6 +59,13 @@ class RawFactRepository:
                 filed_date,
                 accession_number,
                 frame,
+                namespace_uri,
+                context_id,
+                dimensions_json,
+                is_consolidated,
+                source_document,
+                balance,
+                is_numeric,
                 source,
                 quality_flags,
                 created_at
@@ -83,6 +90,13 @@ class RawFactRepository:
                 :filed_date,
                 :accession_number,
                 :frame,
+                :namespace_uri,
+                :context_id,
+                :dimensions_json,
+                :is_consolidated,
+                :source_document,
+                :balance,
+                :is_numeric,
                 :source,
                 :quality_flags,
                 :created_at
@@ -95,6 +109,13 @@ class RawFactRepository:
                 value_numeric = excluded.value_numeric,
                 period_type = excluded.period_type,
                 filed_date = excluded.filed_date,
+                namespace_uri = excluded.namespace_uri,
+                context_id = excluded.context_id,
+                dimensions_json = excluded.dimensions_json,
+                is_consolidated = excluded.is_consolidated,
+                source_document = excluded.source_document,
+                balance = excluded.balance,
+                is_numeric = excluded.is_numeric,
                 source = excluded.source,
                 quality_flags = excluded.quality_flags,
                 created_at = excluded.created_at
@@ -140,6 +161,19 @@ class RawFactRepository:
         ).fetchall()
         return [(row["form"], row["fiscal_year"], row["fiscal_period"]) for row in rows]
 
+    def has_source_facts(self, cik: str, source: str) -> bool:
+        """Return whether a source has already contributed facts for a company."""
+        row = self.connection.execute(
+            """
+            SELECT 1
+            FROM raw_xbrl_facts
+            WHERE cik = ? AND source = ?
+            LIMIT 1
+            """,
+            [cik, source],
+        ).fetchone()
+        return row is not None
+
     def delete_by_cik(self, cik: str) -> int:
         """Delete all raw XBRL facts for one CIK and return deleted row count."""
         cursor = self.connection.execute("DELETE FROM raw_xbrl_facts WHERE cik = ?", [cik])
@@ -168,6 +202,13 @@ def _fact_to_row(fact: NormalizedFact, created_at: str) -> dict[str, Any]:
         "filed_date": _date_to_text(fact.filed_date),
         "accession_number": fact.accession_number,
         "frame": fact.frame,
+        "namespace_uri": fact.namespace_uri,
+        "context_id": fact.context_id,
+        "dimensions_json": json.dumps(list(fact.dimensions)),
+        "is_consolidated": int(fact.is_consolidated),
+        "source_document": fact.source_document,
+        "balance": fact.balance,
+        "is_numeric": None if fact.is_numeric is None else int(fact.is_numeric),
         "source": fact.source,
         "quality_flags": json.dumps(list(fact.quality_flags)),
         "created_at": created_at,
@@ -197,6 +238,18 @@ def _row_to_fact(row: sqlite3.Row) -> NormalizedFact:
         frame=row["frame"],
         source=row["source"],
         quality_flags=tuple(json.loads(row["quality_flags"])),
+        namespace_uri=row["namespace_uri"],
+        context_id=row["context_id"],
+        dimensions=tuple(
+            (str(dimension), str(member))
+            for dimension, member in json.loads(row["dimensions_json"] or "[]")
+        ),
+        is_consolidated=bool(row["is_consolidated"]),
+        source_document=row["source_document"],
+        balance=row["balance"],
+        is_numeric=(
+            None if row["is_numeric"] is None else bool(row["is_numeric"])
+        ),
     )
 
 
@@ -213,6 +266,7 @@ def _unique_key(fact: NormalizedFact) -> str:
         fact.form,
         fact.accession_number,
         fact.frame,
+        fact.dimensions,
     ]
     return json.dumps(parts, separators=(",", ":"), default=str)
 

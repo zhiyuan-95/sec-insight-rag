@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
 from src.processing.active_window import ActivePeriodKey, is_fact_in_active_window
-from src.processing.mapping_catalog import IndustryFactTarget, mapping_candidates_by_concept
+from src.processing.mapping_catalog import (
+    IndustryFactTarget,
+    mapping_candidates_by_concept,
+    mapping_candidates_by_key,
+)
 from src.processing.quality import (
     AMBIGUOUS_UNIT,
     DUPLICATE_FACT,
@@ -42,6 +46,7 @@ class BaseMetricRecord:
 
 
 BASE_METRIC_MAPPINGS: dict[str, IndustryFactTarget] = mapping_candidates_by_concept()
+BASE_METRIC_MAPPINGS_BY_KEY: dict[tuple[str, str], IndustryFactTarget] = mapping_candidates_by_key()
 SKIPPED_QUALITY_FLAGS = {
     AMBIGUOUS_UNIT,
     DUPLICATE_FACT,
@@ -57,13 +62,25 @@ def map_raw_facts_to_base_metrics(
     raw_facts: Iterable[tuple[int, NormalizedFact]],
     active_keys: set[ActivePeriodKey],
     industry_labels: Iterable[str] | None = None,
+    additional_mappings: Mapping[tuple[str, str], IndustryFactTarget] | None = None,
 ) -> list[BaseMetricRecord]:
     """Map clean supported raw XBRL facts into base metric records."""
-    mappings = BASE_METRIC_MAPPINGS if industry_labels is None else mapping_candidates_by_concept(industry_labels)
+    mappings = (
+        BASE_METRIC_MAPPINGS_BY_KEY
+        if industry_labels is None
+        else mapping_candidates_by_key(industry_labels)
+    )
+    approved_mappings = additional_mappings or {}
     metrics: list[BaseMetricRecord] = []
     for raw_fact_id, fact in raw_facts:
-        mapping = mappings.get(fact.concept)
-        if mapping is None or not _is_usable_source_fact(fact):
+        mapping = approved_mappings.get((fact.taxonomy, fact.concept)) or mappings.get(
+            (fact.taxonomy, fact.concept)
+        )
+        if (
+            mapping is None
+            or not _is_usable_source_fact(fact)
+            or (not fact.is_consolidated and mapping.consolidated_or_segment == "consolidated")
+        ):
             continue
         metrics.append(
             BaseMetricRecord(

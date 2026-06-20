@@ -32,8 +32,13 @@ src/ingestion/company.py
   +-- src/ingestion/submissions.py    -> fetch SEC submissions
   +-- src/ingestion/companyfacts.py   -> fetch SEC XBRL companyfacts
   +-- src/ingestion/filings.py        -> list and download active-window 10-K and 10-Q filing HTML
+  +-- src/ingestion/inline_xbrl.py    -> load active Inline XBRL and extension taxonomies with Arelle
   +-- src/processing/xbrl_normalizer.py
   |     -> normalize companyfacts into NormalizedFact records
+  +-- src/processing/inline_xbrl.py
+  |     -> normalize issuer-extension and dimensional Arelle facts
+  +-- src/processing/semantic_mapping.py
+  |     -> rank review-only mappings for missing canonical metrics
   +-- src/processing/active_window.py
   |     -> select latest 5 annual and latest 12 quarterly active periods
   +-- src/processing/base_metrics.py
@@ -45,6 +50,10 @@ src/ingestion/company.py
   |     -> persist normalized facts in SQLite
   +-- src/storage/company_repository.py
   |     -> persist company registry and refresh state
+  +-- src/storage/industry_labels_repository.py
+  |     -> persist reusable company hard-industry labels and evidence
+  +-- src/storage/concept_mappings_repository.py
+  |     -> persist candidate, approved, and rejected learned mappings
   +-- src/storage/filings_repository.py
   |     -> persist filing inventory and active-window state
   +-- src/storage/metrics_repository.py
@@ -67,11 +76,13 @@ src/retrieval/service.py
 Generated local data:
 
 data_store/filings/          downloaded SEC filing HTML
-data_store/knowledge/        local embedding cache and versioned retrieval indexes
+data_store/knowledge/        local embedding cache, target vectors, and versioned retrieval indexes
 stock_data.db                SQLite database
-  raw_xbrl_facts             normalized XBRL facts table
+  raw_xbrl_facts             companyfacts plus Inline XBRL facts with context and dimensions
   companies                  local company registry
+  company_industry_labels    reusable hard-industry labels and assignment evidence
   filings                    ingested filing inventory
+  xbrl_concept_mappings      governed learned mapping candidates and decisions
   financial_metrics          base metrics mapped from raw XBRL facts
   financial_indicators       derived indicators with formulas and traceability
   filing_chunks              canonical section-aware filing text chunks
@@ -110,7 +121,7 @@ Data and analysis layers
 ### Evidence Flow Goal
 
 ```text
-SEC companyfacts
+SEC companyfacts + active filing Inline XBRL
   |
   v
 Reported XBRL facts
@@ -247,8 +258,8 @@ experiments/
 - `experiments/MS2/experiment_proposal.md`: Human-inspection proposal for the Milestone 2 SEC/XBRL ingestion and normalization experiment. It defines input cases, intended terminal output, artifacts to inspect, edge cases, and expected outcomes.
 - `experiments/MS2/milestone2_ingestion_showcase.py`: Runnable Milestone 2 experiment script that prints the SEC/XBRL ingestion and normalization showcase described by the Milestone 2 proposal.
 - `experiments/storage/`: Generated shared experiment storage. Current MS2.5 live runs use `experiments/storage/experiment.db` and `experiments/storage/filings/` so later milestone experiments can inspect the same isolated state without touching `stock_data.db`.
-- `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 Plan 2.5 ingestion manual examination harness. It defines one user-chosen ticker per run, persistent shared isolated experiment storage, setup ingestion, already-ingested session inspection, 10-K and 10-Q update-check evidence, active-window evidence, raw fact mapping coverage, unknown and alternate SEC/XBRL tag evidence, financial metric data lineage output appended to the saved report, saved compact report output, optional detailed Markdown sections in the saved report, and full SQLite/CSV evidence artifacts.
-- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that saves `experiments/MS2_5/experiment_report.md` by default without printing the report body to the terminal, separates setup ingestion from the already-ingested session check, reports company-local existence, refresh due status, SEC check behavior, newly ingested filings, next check dates, source-controlled hard industry label assignment, target raw fact coverage, raw fact mapping coverage, unmapped/alternate SEC/XBRL tag evidence, and annual/quarterly pivoted XBRL metric tables with padded columns and presentation-only `K`/`M`/`B`/`T` numeric abbreviations to the saved report, includes detailed Markdown sections in the saved report with `--full-report`, accepts `--write-report` as a compatibility flag, preserves `experiments/storage/experiment.db` across runs, writes isolated filing downloads under `experiments/storage/filings/`, and exports supporting CSVs under `data/exports/ms2_5/`.
+- `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 ingestion and mapping examination harness. It covers persistent isolated storage, update checks, active-window evidence, persisted industry labels, target and raw-fact coverage, Inline XBRL extensions, semantic mapping candidates, approved learned mappings, unknown/alternate tags, financial metric lineage, saved reports, and SQLite/CSV evidence.
+- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that saves `experiments/MS2_5/experiment_report.md` without printing the report body, reports update and active-window evidence, persisted hard-industry labels, companyfacts and Inline XBRL coverage, review-only semantic candidates, approved learned mappings, target recovery through alternate tags, unknown/alternate tag evidence, and annual/quarterly pivoted metric tables. It preserves `experiments/storage/experiment.db`, writes filing downloads under `experiments/storage/filings/`, and exports supporting CSVs under `data/exports/ms2_5/`.
 - `experiments/MS3/experiment_proposal.md`: Human-inspection proposal for the Milestone 3 indicator engine experiment. It defines active accession-window scope, yearly and quarterly indicator tables for the requested catalog, skipped-period reasons, formulas, and source-metric traceability output.
 - `experiments/MS3/milestone3_indicator_engine.py`: Runnable Milestone 3 experiment script that reads stored `financial_indicators` and writes a `.txt` report under `experiments/MS3` with active accession-window scope, yearly and quarterly indicator tables for the requested ticker or tickers, skipped reasons, formulas, and source traceability.
 - `experiments/MS4/experiment_proposal.md`: Human-inspection proposal for the Milestone 4 deterministic financial analytics experiment. It defines trend, comparison, gap, outlier, and chart-ready output.
@@ -318,6 +329,7 @@ Current files:
 - `tickers.py`: SEC ticker mapping and ticker-to-CIK resolution.
 - `submissions.py`: SEC submissions URL building and retrieval.
 - `companyfacts.py`: SEC companyfacts URL building and retrieval.
+- `inline_xbrl.py`: Arelle-backed loading of active SEC Inline XBRL documents and extension taxonomy dependencies.
 - `filings.py`: Filing metadata listing, latest-form selection helpers, and filing document download.
 - `refresh_policy.py`: Next-check date heuristics for 10-K and 10-Q refresh checks, plus business-day helpers.
 - `company.py`: Refresh-aware `ingest_company` orchestration and `CompanyIngestionResult`.
@@ -329,6 +341,8 @@ Key responsibilities:
 
 - Resolve ticker symbols to CIKs.
 - Retrieve SEC submissions and companyfacts JSON.
+- Load active Inline XBRL filings when deterministic target coverage remains incomplete.
+- Backfill Inline XBRL enrichment once for previously ingested companies whose active local filing artifacts predate the adaptive mapping layer.
 - Check local company registry state before live SEC ingestion.
 - Reuse local company data when refresh is not due.
 - Check SEC submissions when refresh is due and preserve local data if the refresh fails.
@@ -348,11 +362,14 @@ Boundary rule:
 
 ### `src/processing/`
 
-XBRL/companyfacts normalization, active-window selection, and deterministic base metric mapping.
+Companyfacts and Inline XBRL normalization, active-window selection, governed
+semantic candidate generation, and deterministic base metric mapping.
 
 Current files:
 
 - `xbrl_normalizer.py`: Defines `NormalizedFact`, `normalize_companyfacts`, `normalize_fact_entry`, and duplicate fact marking.
+- `inline_xbrl.py`: Converts Arelle filing models into normalized issuer-extension and dimensional raw facts without fetching SEC data or writing storage.
+- `semantic_mapping.py`: Builds canonical target definitions, caches their embeddings, and ranks review-only candidates for missing metrics.
 - `active_window.py`: Selects the active analysis window: latest 5 fiscal years of 10-K data and latest 12 quarters of 10-Q data.
 - `base_metrics.py`: Maps clean supported raw XBRL facts into business-friendly base metric records using catalog-backed approved mapping candidates.
 - `company_industry_labels.py`: Source-controlled hard industry label assignment registry for experiment tickers and review placeholders for unassigned companies.
@@ -366,12 +383,15 @@ Current files:
 Key responsibilities:
 
 - Normalize SEC companyfacts into auditable fact records.
+- Normalize Inline XBRL issuer-extension and dimensional facts supplied by the ingestion layer.
 - Support broad raw-archive normalization across all requested forms, taxonomies, and concepts.
 - Keep the common supported `us-gaap` concept list for selective metric mapping and reporting, not as the raw archive limit.
 - Keep hard industry label assignment source-controlled and auditable; use SIC and observed concepts as supporting evidence, not automatic first-version label inference.
 - Compare hard-industry target raw facts against observed raw facts and mapped financial metrics for experiment report coverage.
 - Preserve raw values separately from parsed numeric values.
 - Normalize CIK, taxonomy, concept, unit, periods, fiscal year/period, form, filing date, accession number, frame, and source metadata.
+- Preserve namespace URI, context ID, dimensions, consolidation state, concept balance, numeric type, and source document for Inline XBRL facts.
+- Generate semantic mapping candidates without promoting them into base metrics.
 - Add quality flags for missing, malformed, unsupported, duplicate, or ambiguous facts.
 - Select the default active analysis window without deleting the raw XBRL archive.
 - Map clean supported base metric concepts such as revenue, total assets, net income, and operating cash flow into base metric records.
@@ -390,6 +410,8 @@ Current files:
 
 - `database.py`: SQLite connection and schema initialization helpers.
 - `facts_repository.py`: `RawFactRepository` for normalized raw XBRL facts.
+- `industry_labels_repository.py`: `CompanyIndustryLabelRepository` for persisted company hard-industry labels and evidence.
+- `concept_mappings_repository.py`: `ConceptMappingRepository` for scoped candidate, approved, and rejected raw-concept mappings.
 - `company_repository.py`: `CompanyRepository` and `CompanyRecord` for company identity and refresh state.
 - `filings_repository.py`: `FilingRepository` and `FilingRecord` for ingested filing metadata and active-window state.
 - `metrics_repository.py`: `FinancialMetricRepository` and `FinancialMetric` for mapped base financial metrics.
@@ -401,6 +423,7 @@ Key responsibilities:
 
 - Own local SQLite schema helpers.
 - Persist normalized raw XBRL facts.
+- Persist reusable company industry labels and governed learned mapping decisions.
 - Upsert facts using a stable uniqueness key.
 - Retrieve stored facts by CIK and optional concept filters.
 - Delete company-scoped raw facts, filing metadata, base metrics, derived indicators, retrieval chunks/state, and registry rows when reset orchestration requests it.

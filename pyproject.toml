@@ -5,6 +5,7 @@ description = "Backend-first SEC Insight RAG system for evidence-grounded financ
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "arelle-release>=2.41,<3.0",
     "fastapi>=0.115,<1.0",
     "fastembed>=0.7,<1.0",
     "llama-index-core>=0.12,<1.0",

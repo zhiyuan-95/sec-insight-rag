@@ -7,3 +7,7 @@ class XbrlProcessingError(Exception):
 
 class XbrlPayloadError(XbrlProcessingError):
     """Raised when a companyfacts payload cannot be normalized."""
+
+
+class InlineXbrlExtractionError(XbrlProcessingError):
+    """Raised when an Inline XBRL filing cannot be loaded or extracted."""

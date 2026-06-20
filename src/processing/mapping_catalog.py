@@ -290,6 +290,16 @@ def mapping_candidates_by_concept(
     return dict(sorted(selected.items()))
 
 
+def mapping_candidates_by_key(
+    industry_labels: Iterable[str] | None = None,
+) -> dict[tuple[str, str], IndustryFactTarget]:
+    """Return mapping candidates keyed by taxonomy and concept."""
+    return {
+        (target.taxonomy, concept): target
+        for concept, target in mapping_candidates_by_concept(industry_labels).items()
+    }
+
+
 def all_target_facts() -> tuple[IndustryFactTarget, ...]:
     """Return every target fact in the catalog."""
     return _merge_duplicate_targets((*COMMON_BASE_TARGETS, *INDUSTRY_TARGETS))

@@ -48,6 +48,29 @@ def initialize_database(connection: sqlite3.Connection) -> None:
     )
     connection.execute("CREATE INDEX IF NOT EXISTS idx_raw_xbrl_facts_cik ON raw_xbrl_facts (cik)")
     connection.execute("CREATE INDEX IF NOT EXISTS idx_raw_xbrl_facts_concept ON raw_xbrl_facts (concept)")
+    _ensure_column(connection, "raw_xbrl_facts", "namespace_uri", "TEXT")
+    _ensure_column(connection, "raw_xbrl_facts", "context_id", "TEXT")
+    _ensure_column(
+        connection,
+        "raw_xbrl_facts",
+        "dimensions_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )
+    _ensure_column(
+        connection,
+        "raw_xbrl_facts",
+        "is_consolidated",
+        "INTEGER NOT NULL DEFAULT 1",
+    )
+    _ensure_column(connection, "raw_xbrl_facts", "source_document", "TEXT")
+    _ensure_column(connection, "raw_xbrl_facts", "balance", "TEXT")
+    _ensure_column(connection, "raw_xbrl_facts", "is_numeric", "INTEGER")
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_raw_xbrl_facts_taxonomy_concept
+        ON raw_xbrl_facts (taxonomy, concept)
+        """
+    )
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS companies (
@@ -68,6 +91,79 @@ def initialize_database(connection: sqlite3.Connection) -> None:
         """
     )
     connection.execute("CREATE INDEX IF NOT EXISTS idx_companies_ticker ON companies (ticker)")
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS company_industry_labels (
+            company_industry_label_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            industry_label TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'approved',
+            assignment_source TEXT NOT NULL,
+            assignment_reason TEXT NOT NULL,
+            confidence REAL,
+            evidence_json TEXT NOT NULL DEFAULT '[]',
+            classifier_version TEXT,
+            reviewed_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (company_id, industry_label),
+            FOREIGN KEY (company_id) REFERENCES companies(company_id) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_company_industry_labels_company
+        ON company_industry_labels (company_id)
+        """
+    )
+    _ensure_column(
+        connection,
+        "company_industry_labels",
+        "status",
+        "TEXT NOT NULL DEFAULT 'approved'",
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS xbrl_concept_mappings (
+            mapping_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            taxonomy TEXT NOT NULL,
+            concept TEXT NOT NULL,
+            namespace_uri TEXT,
+            metric_name TEXT NOT NULL,
+            statement_type TEXT NOT NULL,
+            scope_type TEXT NOT NULL,
+            scope_value TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL,
+            confidence REAL,
+            match_method TEXT NOT NULL,
+            evidence_json TEXT NOT NULL DEFAULT '{}',
+            reviewed_by TEXT,
+            reviewed_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (
+                taxonomy,
+                concept,
+                metric_name,
+                scope_type,
+                scope_value
+            )
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_xbrl_concept_mappings_lookup
+        ON xbrl_concept_mappings (taxonomy, concept, status)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_xbrl_concept_mappings_scope
+        ON xbrl_concept_mappings (scope_type, scope_value, status)
+        """
+    )
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS filings (
@@ -262,3 +358,19 @@ def initialize_database(connection: sqlite3.Connection) -> None:
         """
     )
     connection.commit()
+
+
+def _ensure_column(
+    connection: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+    definition: str,
+) -> None:
+    columns = {
+        str(row[1])
+        for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+    if column_name not in columns:
+        connection.execute(
+            f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"
+        )

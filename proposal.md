@@ -32,16 +32,19 @@ src/
    * Resolve ticker symbols to SEC CIK identifiers.
    * Retrieve SEC company submissions and XBRL company facts.
    * Download relevant 10-K and 10-Q filing documents.
+   * Conditionally load active Inline XBRL and issuer-extension taxonomies when deterministic target coverage is incomplete.
    * Respect SEC fair-access rules with a configured `SEC_USER_AGENT`, throttling, and retry logic.
 2. Financial data processing
 
    * Normalize XBRL facts by concept, period, unit, form type, and fiscal year/quarter.
+   * Preserve Inline XBRL namespace, context, dimensions, consolidation state, and source-document lineage.
    * Store raw SEC facts without modifying the original values.
    * Flag missing, duplicated, or ambiguous concepts instead of silently guessing.
 3. Company inspection and base metric mapping
 
    * Store local company metadata, filing metadata, and update-check state.
    * Map selected raw XBRL facts into business-friendly base metrics grouped by financial statement type.
+   * Rank unknown concepts against missing canonical metrics, store review-only candidates, and reuse only approved global, industry, or company-scoped mappings.
    * Preserve traceability from each base metric back to the source raw XBRL fact and filing.
 4. Derived indicator calculation
 
@@ -222,6 +225,9 @@ Example distinction:
    * Add local company metadata, filing metadata, and update-check state.
    * Track latest ingested 10-K and 10-Q filing dates and next-check dates.
    * Keep `raw_xbrl_facts` as the source-of-truth table for normalized SEC/XBRL facts.
+   * Supplement entity-wide companyfacts with issuer-extension and dimensional facts from active Inline XBRL filings.
+   * Persist reusable company hard-industry labels and their assignment evidence.
+   * Store semantic mapping candidates separately from approved mapping decisions; candidates must not create base metrics.
    * Map selected raw XBRL facts into business-friendly base metrics by statement type.
    * Preserve links from each base metric back to the source filing and raw XBRL fact.
    * Do not calculate derived indicators in this milestone.
@@ -268,8 +274,10 @@ Example distinction:
 * Rejection of unsupported chat models
 * Ticker-to-CIK lookup
 * SEC companyfacts parsing
+* Arelle-backed Inline XBRL extension extraction
 * XBRL concept normalization
 * Hard industry label assignment and target concept selection
+* Semantic mapping candidate ranking and reviewed mapping promotion
 * Company, filing, and base metric repository behavior
 * Raw XBRL fact to base metric mapping
 * Derived indicator formulas, skipped reasons, source lineage, and persistence
