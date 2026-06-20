@@ -275,15 +275,18 @@ If the task is small and unambiguous, proceed without unnecessary questions.
 
 ## Verification
 
-This project does not maintain an automated `tests/` suite.
+Automated tests and milestone experiments serve different verification needs.
 
-- Do not add pytest files or test-only dependencies unless the user explicitly
-  changes the project testing policy.
+- Add focused automated tests for deterministic logic, repository behavior,
+  public interfaces, regressions, and important failure paths when implementing
+  or changing those behaviors.
+- Keep milestone experiments for human-readable workflow inspection, generated
+  evidence reports, and end-to-end checks against local or live SEC data.
 - Prefer `uv run python ...` for local scripts and experiment runs.
-- Use milestone experiments, terminal reports, generated SQLite databases, CSV
-  exports, and downloaded filing artifacts for manual verification.
-- When behavior is changed, explain what manual verification was performed or
-  why it was not performed.
+- Do not add a new test framework or test-only dependency without confirming
+  the implementation scope and documenting the test command.
+- When behavior is changed, explain which automated and manual verification was
+  performed or why a relevant check was not run.
 
 ## Documentation rules
 

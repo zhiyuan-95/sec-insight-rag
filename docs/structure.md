@@ -50,11 +50,19 @@ src/ingestion/company.py
   +-- src/storage/metrics_repository.py
   |     -> persist mapped base financial metrics
   +-- src/storage/indicators_repository.py
-  |     -> persist derived financial indicators and skipped calculations
-  +-- src/retrieval/service.py
-  |     -> build and query local vector and BM25 filing-evidence indexes
+        -> persist derived financial indicators and skipped calculations
+
+experiments/MS5/milestone5_retrieval_pipeline.py
+  |
+  v
+src/retrieval/service.py
+  |
+  +-- src/storage/filings_repository.py
+  |     -> load active-window filing records and source paths
+  +-- src/retrieval/parser.py
+  |     -> extract visible, form-aware filing sections
   +-- src/storage/retrieval_repository.py
-        -> persist canonical filing chunks and current index generation state
+        -> persist canonical chunks and current index generation state
 
 Generated local data:
 
@@ -102,7 +110,7 @@ Data and analysis layers
 ### Evidence Flow Goal
 
 ```text
-SEC filings and companyfacts
+SEC companyfacts
   |
   v
 Reported XBRL facts
@@ -114,15 +122,16 @@ Base financial metrics
 Derived indicators
   |
   v
-Deterministic financial analysis
-  |
-  +------------------------------+
-  |                              v
-  |                      Semantic filing evidence
-  |                              |
-  +--------------+---------------+
-                 v
-        Grounded LLM explanation
+Deterministic financial analysis --------+
+                                          |
+SEC filing HTML                           |
+  |                                       |
+  v                                       v
+Section-aware chunks -> retrieval evidence
+  |                                       |
+  +-------------------+-------------------+
+                      v
+             Grounded LLM explanation
 ```
 
 The important rule is that each box should remain traceable. Reported facts, calculated indicators, deterministic analysis, filing evidence, and LLM interpretations should not be blended together without labels.
@@ -142,6 +151,8 @@ The important rule is that each box should remain traceable. Reported facts, cal
   plan2.5.txt
   plan2.5.1.txt
   plan3.txt
+  plan3.5.txt
+  plan5.txt
   proposal.md
   pyproject.toml
   to_do.txt
@@ -151,7 +162,7 @@ The important rule is that each box should remain traceable. Reported facts, cal
   docs/
   experiments/
   src/
-  stock_data.db
+  tests/
 ```
 
 ## Top-Level Responsibilities
@@ -167,9 +178,12 @@ The important rule is that each box should remain traceable. Reported facts, cal
 - `plan2.txt`: Historical SEC/XBRL ingestion and normalization milestone plan.
 - `plan2.5.txt`: Company registry, filing inventory, update state, active-window policy, and base metric mapping milestone.
 - `plan2.5.1.txt`: Historical hard-industry-label raw fact mapping and mapping coverage plan.
-- `plan3.txt`: Planned indicator engine milestone for deterministic derived indicators, formula traceability, and indicator storage.
+- `plan3.txt`: Historical indicator engine milestone for deterministic derived indicators, formula traceability, and indicator storage.
+- `plan3.5.txt`: Historical notes for future and industry-specific indicator extensions.
+- `plan5.txt`: Historical retrieval pipeline milestone covering filing parsing, chunking, local hybrid indexing, and evidence lineage.
 - `proposal.md`: Current product scope, architecture direction, and MVP roadmap.
 - `pyproject.toml`: Python project metadata and dependencies.
+- `tests/`: Automated pytest coverage for implemented deterministic behavior and important failure paths.
 - `to_do.txt`: Local task notes.
 - `uv.lock`: Locked dependency versions for `uv`.
 - `stock_data.db`: Local generated SQLite database. This is runtime data, not source architecture.
@@ -217,6 +231,7 @@ experiments/
     milestone25_live_sec_inspection.py
   MS3/
     experiment_proposal.md
+    milestone3_indicator_engine.py
   MS4/
     experiment_proposal.md
   MS5/
@@ -518,8 +533,18 @@ When added, it should own thin application workflow orchestration. For example, 
 
 ## Verification
 
-This project does not maintain an automated `tests/` suite. Verification is
-manual and experiment-driven:
+The project uses focused pytest coverage alongside milestone experiments:
+
+- Run the complete automated suite with `uv run python -m pytest -q`.
+- The restored suite currently covers settings, SEC client behavior, ticker and
+  submissions parsing, companyfacts normalization, XBRL periods and quality,
+  hard industry labels and mapping targets, active-window base metric mapping,
+  repositories, ingestion refresh paths, company deletion, indicator formulas
+  and lineage, filing parsing, retrieval generation integrity and rollback,
+  fused evidence lineage, API health, concise CLI reporting, and MS2/MS2.5
+  experiment behavior.
+- Extend automated coverage when changing deterministic logic, repositories,
+  public interfaces, regressions, or important failure paths.
 
 - Use milestone experiment scripts under `experiments/MS*/` for human-readable
   workflow inspection.
@@ -527,7 +552,6 @@ manual and experiment-driven:
   text or Markdown reports; terminal output should remain concise when the
   experiment defines a report artifact.
 - Use `uv run python ...` for local scripts and experiment runs.
-- Do not add pytest files unless the project testing policy changes again.
 
 ## Generated Or Local-Only Files
 
@@ -542,6 +566,7 @@ The following paths may exist locally but should not be treated as source archit
 - generated shared experiment storage under `experiments/storage/`, including `experiment.db` and `filings/`
 - generated Milestone 2.5 report artifact: `experiments/MS2_5/experiment_report.md`
 - generated Milestone 3 report artifacts: `experiments/MS3/milestone3_indicator_report_*.txt`
+- generated Milestone 5 report artifacts: `experiments/MS5/experiment_report_*.txt`
 
 ## Update Rule
 

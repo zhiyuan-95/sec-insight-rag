@@ -1,14 +1,14 @@
 # Proposal: Evidence-Grounded Financial Thesis Engine
 
-## 1\. Project Goal
+## 1. Project Goal
 
 SEC Insight RAG is a backend-first financial research system that helps users understand company performance, risks, and possible drivers using SEC filings and XBRL financial data.
 
 The system will ingest SEC filings and structured XBRL facts, calculate derived financial indicators, run deterministic financial analysis, retrieve relevant filing evidence, and generate retrieval-grounded language-model explanations. The main goal is to make financial analysis evidence-grounded, traceable, and easier to understand.
 
-The first version will support one company ticker at a time and focus on recent 10-K\&10-Q filings and XBRL data extraction and processing.
+The first version will support one company ticker at a time and focus on recent 10-K and 10-Q filings and XBRL data extraction and processing.
 
-## 2\. Core System Design
+## 2. Core System Design
 
 The backend will be organized into these main layers:
 
@@ -32,7 +32,7 @@ src/
    * Resolve ticker symbols to SEC CIK identifiers.
    * Retrieve SEC company submissions and XBRL company facts.
    * Download relevant 10-K and 10-Q filing documents.
-   * Respect SEC fair-access rules with a configured `SEC\\\\\\\_USER\\\\\\\_AGENT`, throttling, and retry logic.
+   * Respect SEC fair-access rules with a configured `SEC_USER_AGENT`, throttling, and retry logic.
 2. Financial data processing
 
    * Normalize XBRL facts by concept, period, unit, form type, and fiscal year/quarter.
@@ -55,7 +55,7 @@ src/
    * Keep the exact analysis library extensible because the most valuable analysis types will be refined through research.
 6. Evidence retrieval
 
-   * Chunk filing text from sections such as MD\&A, Risk Factors, Business, financial statements, and notes.
+   * Chunk filing text from sections such as MD&A, Risk Factors, Business, financial statements, and notes.
    * Store chunk metadata including ticker, CIK, filing form, filing date, accession number, section, and source URL.
    * Use built-in LlamaIndex utilities for non-reasoning retrieval tasks such as document loading, text splitting, indexing, and retrieval when available.
 7. LLM/RAG analysis and reasoning
@@ -74,7 +74,7 @@ src/
    * Keep orchestration thin by calling ingestion, processing, storage, retrieval, analytics, and analysis modules instead of duplicating their logic.
    * Start with `src/workflows/company_ingestion.py` for a single-company ingestion workflow.
 
-## 3\. LLM Usage and LlamaIndex Tooling Policy
+## 3. LLM Usage and LlamaIndex Tooling Policy
 
 For the current system, all LLM-based tasks will use `gemini-2.5-flash`. This keeps model behavior consistent, easier to debug, and easier to evaluate.
 
@@ -86,7 +86,7 @@ For the current system, all LLM-based tasks will use `gemini-2.5-flash`. This ke
    * Identify whether the user is asking about performance, risk, trend, comparison, or a specific financial metric.
 2. Filing-text summarization
 
-   * Summarize retrieved MD\&A, Risk Factors, notes, or other filing sections.
+   * Summarize retrieved MD&A, Risk Factors, notes, or other filing sections.
    * Keep summaries grounded in retrieved text.
 3. Evidence-grounded question answering
 
@@ -112,18 +112,18 @@ All prompt templates for Gemini should live in one dedicated source file, such a
 For the MVP, the model-related configuration should be:
 
 ```env
-PRIMARY\\\\\\\_CHAT\\\\\\\_MODEL=gemini-2.5-flash
-ALLOWED\\\\\\\_CHAT\\\\\\\_MODELS=gemini-2.5-flash
+PRIMARY_CHAT_MODEL=gemini-2.5-flash
+ALLOWED_CHAT_MODELS=gemini-2.5-flash
 ```
 
 Current configured services include:
 
-* `Gemini\\\\\\\_API\\\\\\\_KEY` for all LLM reasoning tasks.
-* `SEC\\\\\\\_USER\\\\\\\_AGENT` for SEC data access.
+* `Gemini_API_KEY` for all LLM reasoning tasks.
+* `SEC_USER_AGENT` for SEC data access.
 * Storage path settings for local databases, filings, and knowledge indexes.
 * Other API keys may remain in the config file for future expansion, but they are not required for the current MVP plan.
 
-## 4\. Data Storage
+## 4. Data Storage
 
 Use local storage for the MVP:
 
@@ -139,10 +139,10 @@ Use local storage for the MVP:
    * Filing chunks
    * Evidence references
    * Analysis outputs
-2. Vector database
+2. Rebuildable retrieval indexes
 
-   * Store retrieval records for filing chunks.
-   * Use LlamaIndex-compatible local retrieval/index storage for the MVP.
+   * Keep canonical filing chunks and source lineage in SQLite.
+   * Use LlamaIndex-compatible local vector and keyword indexes as rebuildable retrieval artifacts for the MVP.
 3. File storage
 
    * Save downloaded filings under the configured filings directory.
@@ -150,14 +150,14 @@ Use local storage for the MVP:
 
 Configured paths should come from `config.env`, including:
 
-* `STOCK\\\\\\\_SQL\\\\\\\_DB\\\\\\\_PATH`
-* `STOCK\\\\\\\_STORAGE\\\\\\\_BASE\\\\\\\_DIR`
-* `STOCK\\\\\\\_FILINGS\\\\\\\_BASE\\\\\\\_DIR`
-* `KNOWLEDGE\\\\\\\_STORAGE\\\\\\\_DIR`
+* `STOCK_SQL_DB_PATH`
+* `STOCK_STORAGE_BASE_DIR`
+* `STOCK_FILINGS_BASE_DIR`
+* `KNOWLEDGE_STORAGE_DIR`
 
 Macro data, glossary data, and graph storage are not part of v1.
 
-## 5\. Backend API Plan
+## 5. Backend API Plan
 
 The MVP should expose these FastAPI routes:
 
@@ -175,7 +175,7 @@ POST /companies/{ticker}/ask
 
 Expected behavior:
 
-* `/ingest` calls the company ingestion workflow, retrieves SEC data, downloads filings, normalizes XBRL facts, stores normalized raw facts, and later can trigger filing chunking and retrieval index updates when the retrieval milestone is implemented.
+* `/ingest` calls the company ingestion workflow, retrieves SEC data, downloads filings, normalizes XBRL facts, and stores normalized raw facts. Retrieval index synchronization remains an explicit separate operation until a later workflow or API integration connects it to ingestion.
 * `/metrics` returns normalized base financial metrics.
 * `/indicators` returns calculated financial indicators and formula references.
 * `/analytics` returns deterministic financial data analysis results and chart-ready datasets.
@@ -184,7 +184,7 @@ Expected behavior:
 * `/analyze` generates a structured company analysis using raw facts, derived indicators, financial data analysis results, and semantic filing evidence.
 * `/ask` answers a user question using RAG over SEC filing text, structured financial data, and financial data analysis results.
 
-## 6\. Evidence and Trust Rules
+## 6. Evidence and Trust Rules
 
 Every generated answer should follow these rules:
 
@@ -201,9 +201,9 @@ Example distinction:
 * Reported fact: Revenue declined from one period to another based on SEC XBRL data.
 * Derived indicator: Revenue growth was negative based on the calculated period-over-period formula.
 * Financial data analysis result: Revenue growth was below the selected benchmark or historical average if a reliable comparison dataset is available.
-* Interpretation: The decline may be related to weaker demand if the MD\&A section discusses lower sales volume.
+* Interpretation: The decline may be related to weaker demand if the MD&A section discusses lower sales volume.
 
-## 7\. MVP Milestones
+## 7. MVP Milestones
 
 1. Project scaffold
 
@@ -217,7 +217,6 @@ Example distinction:
    * Extract common GAAP financial concepts.
    * Normalize periods, units, fiscal years, and form types.
    * Store facts in SQLite.
-   * Add `src/workflows/company_ingestion.py` as the orchestration wrapper that calls existing ingestion, processing, and storage functions without duplicating their logic.
 2.5. Company registry, filing inventory, and base metric mapping
 
    * Add local company metadata, filing metadata, and update-check state.
@@ -244,7 +243,7 @@ Example distinction:
 6. Gemini model integration
 
    * Load `gemini-2.5-flash` from configuration.
-   * Use `gemini-2.5-flash` for all current LLM reasoning, summarization, Q\&A, and thesis generation tasks.
+   * Use `gemini-2.5-flash` for all current LLM reasoning, summarization, Q&A, and thesis generation tasks.
    * Track model, provider, task type, latency, and token usage for each call.
 7. RAG analysis
 
@@ -252,16 +251,17 @@ Example distinction:
    * Generate grounded answers and company thesis summaries.
 8. FastAPI backend
 
-   * Add ingestion, metrics, indicators, analytics, CSV export, analysis, and Q\&A endpoints.
+   * Add `src/workflows/company_ingestion.py` as a thin orchestration wrapper over the existing ingestion, processing, and storage functions.
+   * Add ingestion, metrics, indicators, analytics, CSV export, analysis, and Q&A endpoints.
 9. Testing and evaluation
 
-    * Add unit tests for parsing, normalization, formulas, and routing.
-    * Add integration tests for one known ticker.
+    * Maintain focused automated tests for implemented deterministic behavior, repositories, public interfaces, regressions, and important failure paths.
+    * Expand integration coverage as analytics, Gemini/RAG, workflows, and API routes are implemented.
     * Add sample expected outputs for analysis quality review.
 
-## 8\. Testing Plan
+## 8. Testing Plan
 
-\*\*Unit tests\*\*:
+**Unit tests**:
 
 * Environment configuration loading
 * Gemini model configuration loading
@@ -269,23 +269,28 @@ Example distinction:
 * Ticker-to-CIK lookup
 * SEC companyfacts parsing
 * XBRL concept normalization
+* Hard industry label assignment and target concept selection
 * Company, filing, and base metric repository behavior
 * Raw XBRL fact to base metric mapping
-* Derived indicator formulas
+* Derived indicator formulas, skipped reasons, source lineage, and persistence
 * Financial data analysis calculations
 * Chart-ready analytics output shape
+* Filing HTML visibility cleanup and form-aware section detection
+* Stable retrieval chunk identity and reciprocal-rank fusion
+* Retrieval query validation, generation integrity, and evidence lineage
 * CSV export formatting
 
-\*\*Integration tests\*\*:
+**Integration tests**:
 
 * Ingest one known ticker from saved SEC fixtures.
 * Store normalized facts, filing metadata, base metrics, and indicators in SQLite.
 * Generate financial data analysis results from stored facts and indicators.
-* Build retrieval chunks using built-in LlamaIndex utilities.
+* Build, reuse, and safely replace retrieval generations while preserving the last complete generation after failures.
+* Retrieve fused vector and BM25 evidence whose chunk IDs and lineage match canonical SQLite rows.
 * Ask one performance question and confirm evidence references are included.
 * Ask one risk question and confirm the answer uses cautious interpretation.
 
-\*\*Manual acceptance tests\*\*:
+**Manual acceptance tests**:
 
 * Start the FastAPI backend.
 * Ingest one company ticker.
@@ -294,7 +299,24 @@ Example distinction:
 * Ask: "Why did revenue change?"
 * Confirm the answer includes SEC evidence, calculated indicators, and no unsupported causal claims.
 
-## 9\. Success Criteria
+## 9. Local MVP Performance Expectations
+
+Use these as initial review budgets on the current Windows development machine.
+Experiments should record the measurements and supporting corpus size without
+turning the report into an automatic pass/fail verdict.
+
+* Reusing an ingested company when no SEC refresh is due: at most 10 seconds and no unnecessary SEC or filing download request.
+* Reusing an unchanged retrieval generation for approximately 17 filings and 2,655 chunks: at most 2 seconds.
+* Building the same retrieval corpus from scratch after the embedding model is cached: at most 120 seconds.
+* First retrieval query in a new process: at most 15 seconds.
+* Additional retrieval queries in the same process: at most 1 second each.
+* Complete automated test suite: at most 60 seconds on the current repository baseline.
+
+Investigate a budget when comparable local runs exceed it by more than 20% twice
+in succession. Recalibrate deliberately when hardware, models, chunk settings,
+or active-window corpus size changes.
+
+## 10. Success Criteria
 
 The MVP is successful if it can:
 
@@ -310,7 +332,7 @@ The MVP is successful if it can:
 10. Avoid unsupported causal claims.
 11. Provide enough source references for users to verify the analysis.
 
-## 10\. Out of Scope for MVP
+## 11. Out of Scope for MVP
 
 The first version will not include:
 
@@ -322,3 +344,17 @@ The first version will not include:
 * Investment recommendations
 * Automatic buy/sell ratings
 * Non-GAAP reconciliation beyond what is clearly available from filings
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope and strategy | 0 | Not run | Not required for this architecture-alignment review |
+| Codex Review | `/codex review` | Independent second opinion | 1 | Unavailable | Timed out after five minutes without returning findings |
+| Eng Review | `/plan-eng-review` | Architecture and tests (required) | 1 | CLEAR | 11 issues resolved, 0 critical gaps |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | Not applicable | Backend and documentation scope only |
+| DX Review | `/plan-devex-review` | Developer experience gaps | 1 | Concerns | Score 5/10 on commit `d8d20df`; one commit before this review |
+
+**VERDICT:** ENG CLEARED - proposal and live structure are aligned for the reviewed scope.
+
+NO UNRESOLVED DECISIONS
