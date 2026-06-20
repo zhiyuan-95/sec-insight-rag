@@ -1,8 +1,4 @@
-<<<<<<< HEAD
 # SEC Insight RAG
-=======
-# SEC-insight-rag
->>>>>>> ed736738427f1a2d7b78ecb406a35c24b8492ff6
 
 Backend-first SEC Insight RAG system for evidence-grounded analysis of SEC filings and XBRL financial data.
 
@@ -58,12 +54,13 @@ Implemented so far:
 - Latest 10-K/10-Q filing selection and primary document download helpers
 - XBRL companyfacts normalization into raw fact records
 - SQLite storage for normalized raw XBRL facts
-
 - `ingest_company(...)` exported from `src.ingestion` to orchestrate ticker resolution, SEC retrieval, filing downloads, XBRL normalization, and SQLite persistence
+- Active-window base financial metric mapping
+- Deterministic derived indicator calculation and SQLite persistence
+- Milestone 2.5 and Milestone 3 experiment reports
 
 Not implemented yet:
 
-- Derived indicators
 - Deterministic analytics
 - LlamaIndex retrieval
 - Gemini model calls

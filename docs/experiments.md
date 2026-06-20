@@ -18,13 +18,13 @@ Manual review is the verification path.
 ```
 
 An experiment is a runnable, human-readable showcase of one milestone's main
-functionality. It should mimic the way the project owner would naturally inspect
-that stage from the terminal:
+functionality. It should mimic the way the project owner naturally inspects that
+stage through a saved report and a concise terminal summary:
 
 ```text
 I try the important user action.
-I print what the system found or created.
-I inspect counts, paths, dates, table names, and sample rows.
+I save what the system found or created in a human-readable report.
+I inspect counts, paths, dates, table names, and sample rows in that report.
 I try alternate cases when the milestone has branch behavior.
 I decide whether the behavior looks right.
 ```
@@ -48,6 +48,7 @@ experiments/
     experiment_proposal.md
   MS5/
     experiment_proposal.md
+    milestone5_retrieval_pipeline.py
   MS6/
     experiment_proposal.md
   MS7/

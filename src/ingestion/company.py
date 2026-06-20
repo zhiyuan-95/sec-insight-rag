@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import stat
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -23,6 +24,8 @@ from src.processing import (
     NormalizedFact,
     active_accessions_for_facts,
     active_period_keys,
+    active_period_keys_from_periods,
+    mapping_candidates_by_concept,
     map_raw_facts_to_base_metrics,
     normalize_companyfacts,
 )
@@ -35,6 +38,7 @@ from src.storage import (
     FinancialMetric,
     FinancialMetricRepository,
     RawFactRepository,
+    RetrievalRepository,
     connect_sqlite,
 )
 
@@ -83,6 +87,10 @@ class CompanyDeletionResult:
     filing_paths_deleted: tuple[Path, ...] = ()
     filing_paths_skipped: tuple[Path, ...] = ()
     message: str | None = None
+    retrieval_chunk_rows_deleted: int = 0
+    retrieval_state_rows_deleted: int = 0
+    retrieval_paths_deleted: tuple[Path, ...] = ()
+    retrieval_paths_skipped: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -250,7 +258,7 @@ def _ingest_company_from_sec(
                 cik=cik,
                 sic=company.sic,
                 sic_description=company.sic_description,
-                stored_facts=stored_facts,
+                observed_concepts=(fact.concept for fact in stored_facts),
             ),
         )
         financial_metrics = _build_financial_metrics(
@@ -260,8 +268,7 @@ def _ingest_company_from_sec(
         )
         stored_metric_count = metric_repository.upsert_metrics(financial_metrics)
         all_metrics = metric_repository.list_metrics(company.company_id, active_only=False)
-        active_metrics = metric_repository.list_metrics(company.company_id)
-        active_metric_count = len(active_metrics)
+        active_metric_count = sum(metric.is_active_window for metric in all_metrics)
         stored_indicator_count, active_indicator_count = _refresh_company_indicators(
             company_id=company.company_id,
             available_metrics=all_metrics,
@@ -316,18 +323,14 @@ def _date_is_due(next_check_date: date | None, today: date) -> bool:
 def _refresh_company_metrics_from_stored_facts(
     *,
     company_id: int,
-    ticker: str | None,
-    cik: str,
-    sic: str | None,
-    sic_description: str | None,
     stored_fact_records: list,
     stored_filings: list[FilingRecord],
+    active_keys: set[tuple[str, int, str]],
+    industry_labels: tuple[str, ...],
     metric_repository: FinancialMetricRepository,
 ) -> int:
-    stored_facts = [record.fact for record in stored_fact_records]
-    if not stored_facts:
+    if not stored_fact_records:
         return 0
-    active_keys = active_period_keys(stored_facts)
     filing_id_by_accession = {
         filing.accession_number: filing.filing_id
         for filing in stored_filings
@@ -336,13 +339,7 @@ def _refresh_company_metrics_from_stored_facts(
     base_metrics = map_raw_facts_to_base_metrics(
         ((record.raw_fact_id, record.fact) for record in stored_fact_records),
         active_keys,
-        _industry_labels_for_mapping(
-            ticker=ticker,
-            cik=cik,
-            sic=sic,
-            sic_description=sic_description,
-            stored_facts=stored_facts,
-        ),
+        industry_labels,
     )
     financial_metrics = _build_financial_metrics(
         company_id=company_id,
@@ -361,7 +358,7 @@ def _refresh_company_indicators(
     indicator_repository.deactivate_by_company_id(company_id)
     indicators = calculate_indicators(company_id, available_metrics)
     stored_indicator_count = indicator_repository.upsert_indicators(indicators)
-    active_indicator_count = len(indicator_repository.list_indicators(company_id))
+    active_indicator_count = sum(indicator.is_active_window for indicator in indicators)
     return stored_indicator_count, active_indicator_count
 
 
@@ -384,29 +381,35 @@ def _build_local_ingestion_result(
         metric_repository = FinancialMetricRepository(connection)
         indicator_repository = FinancialIndicatorRepository(connection)
         raw_repository.initialize()
-        stored_fact_records = raw_repository.list_fact_records(company.cik)
-        stored_filings = filing_repository.list_filings(company.company_id)
-        _refresh_company_metrics_from_stored_facts(
-            company_id=company.company_id,
+        observed_concepts = raw_repository.list_distinct_concepts(company.cik)
+        industry_labels = _industry_labels_for_mapping(
             ticker=company.ticker,
             cik=company.cik,
             sic=company.sic,
             sic_description=company.sic_description,
+            observed_concepts=observed_concepts,
+        )
+        mapped_concepts = set(mapping_candidates_by_concept(industry_labels))
+        stored_fact_records = raw_repository.list_fact_records(company.cik, mapped_concepts)
+        active_keys = active_period_keys_from_periods(raw_repository.list_distinct_periods(company.cik))
+        stored_filings = filing_repository.list_filings(company.company_id)
+        _refresh_company_metrics_from_stored_facts(
+            company_id=company.company_id,
             stored_fact_records=stored_fact_records,
             stored_filings=stored_filings,
+            active_keys=active_keys,
+            industry_labels=industry_labels,
             metric_repository=metric_repository,
         )
         active_filings = filing_repository.list_filings(company.company_id, {"10-K", "10-Q"}, active_only=True)
         all_metrics = metric_repository.list_metrics(company.company_id, active_only=False)
-        active_metrics = metric_repository.list_metrics(company.company_id)
+        active_metric_count = sum(metric.is_active_window for metric in all_metrics)
         stored_indicator_count, active_indicator_count = _refresh_company_indicators(
             company_id=company.company_id,
             available_metrics=all_metrics,
             indicator_repository=indicator_repository,
         )
         all_indicators = indicator_repository.list_indicators(company.company_id, active_only=False)
-        active_indicators = indicator_repository.list_indicators(company.company_id)
-        stored_fact_count = len(stored_fact_records)
 
     filings = tuple(_filing_metadata_from_record(filing) for filing in active_filings)
     downloaded_filings = tuple(filing.local_path for filing in active_filings)
@@ -421,9 +424,9 @@ def _build_local_ingestion_result(
         company_id=company.company_id,
         stored_filing_count=len(active_filings),
         stored_metric_count=len(all_metrics),
-        active_metric_count=len(active_metrics),
+        active_metric_count=active_metric_count,
         stored_indicator_count=max(len(all_indicators), stored_indicator_count),
-        active_indicator_count=max(len(active_indicators), active_indicator_count),
+        active_indicator_count=active_indicator_count,
         status=status,
         sec_checked=sec_checked,
         refresh_due_10k=refresh_due_10k,
@@ -437,14 +440,14 @@ def _industry_labels_for_mapping(
     cik: str,
     sic: str | None,
     sic_description: str | None,
-    stored_facts: list[NormalizedFact],
+    observed_concepts: Iterable[str],
 ) -> tuple[str, ...]:
     assignment = industry_label_assignments_for_company(
         ticker,
         cik,
         sic=sic,
         sic_description=sic_description,
-        observed_concepts=(fact.concept for fact in stored_facts),
+        observed_concepts=observed_concepts,
     )
     return assignment.assigned_industry_labels
 
@@ -563,6 +566,8 @@ def delete_ingested_company(
     filing_rows_deleted = 0
     raw_fact_rows_deleted = 0
     company_rows_deleted = 0
+    retrieval_chunk_rows_deleted = 0
+    retrieval_state_rows_deleted = 0
 
     if not settings.stock_sql_db_path.exists():
         return _company_not_found_result(normalized_identifier, cik)
@@ -573,6 +578,7 @@ def delete_ingested_company(
         filing_repository = FilingRepository(connection)
         metric_repository = FinancialMetricRepository(connection)
         indicator_repository = FinancialIndicatorRepository(connection)
+        retrieval_repository = RetrievalRepository(connection)
         raw_repository.initialize()
 
         company = (
@@ -598,6 +604,10 @@ def delete_ingested_company(
         )
         indicator_rows_deleted = indicator_repository.delete_by_company_id(company_id)
         metric_rows_deleted = metric_repository.delete_by_company_id(company_id)
+        (
+            retrieval_chunk_rows_deleted,
+            retrieval_state_rows_deleted,
+        ) = retrieval_repository.delete_by_company_id(company_id)
         filing_rows_deleted = filing_repository.delete_by_company_id(company_id)
 
         if cik is not None:
@@ -607,17 +617,30 @@ def delete_ingested_company(
 
     filing_paths_deleted: tuple[Path, ...] = ()
     filing_paths_skipped: tuple[Path, ...] = ()
+    retrieval_paths_deleted: tuple[Path, ...] = ()
+    retrieval_paths_skipped: tuple[Path, ...] = ()
     if delete_filings and cik is not None:
         filing_paths_deleted, filing_paths_skipped = _delete_company_filing_artifacts(
             base_dir=settings.stock_filings_base_dir,
             cik=cik,
             recorded_paths=recorded_filing_paths,
         )
+    if cik is not None:
+        from src.retrieval import delete_company_retrieval_artifacts
+
+        retrieval_paths_deleted, retrieval_paths_skipped = delete_company_retrieval_artifacts(
+            settings,
+            cik,
+        )
     message = _company_deleted_message(
         identifier=normalized_identifier,
         cik=cik,
         filing_paths_skipped=filing_paths_skipped,
     )
+    if retrieval_paths_skipped:
+        message = (
+            f"{message} Skipped {len(retrieval_paths_skipped)} retrieval artifact path(s)."
+        )
 
     return CompanyDeletionResult(
         identifier=normalized_identifier,
@@ -632,6 +655,10 @@ def delete_ingested_company(
         filing_paths_deleted=filing_paths_deleted,
         filing_paths_skipped=filing_paths_skipped,
         message=message,
+        retrieval_chunk_rows_deleted=retrieval_chunk_rows_deleted,
+        retrieval_state_rows_deleted=retrieval_state_rows_deleted,
+        retrieval_paths_deleted=retrieval_paths_deleted,
+        retrieval_paths_skipped=retrieval_paths_skipped,
     )
 
 

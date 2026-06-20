@@ -1,0 +1,291 @@
+Milestone 5 Experiment: Retrieval Pipeline
+==========================================
+
+Run Context:
+  generated_at: 2026-06-20T00:13:30.434176+00:00
+  mode: local
+  ticker: MSFT
+  cik: 0000789019
+  database: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\stock_data.db
+  knowledge_storage: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\knowledge
+  embedding_model: sentence-transformers/all-MiniLM-L6-v2
+  chunk_size: 512
+  chunk_overlap: 64
+
+Index Summary:
+  status: reused
+  generation_id: 20260620T000808843265Z-d3985846ca0b
+  artifact_path: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\knowledge\0000789019\generations\20260620T000808843265Z-d3985846ca0b
+  active_filings: 17
+  chunks: 2655
+  sync_seconds: 0.409
+
+Filing And Section Coverage:
+  form | filing_date | accession            | chunks | fallback | sections                                                                                                                                                                                                                                                                                                                                                                                                                                      
+  -----+-------------+----------------------+--------+----------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+  10-Q | 2026-04-29  | 0001193125-26-191507 | 134    | no       | financial_statements_and_notes, management_discussion_and_analysis, market_risk, controls_and_procedures, legal_proceedings, risk_factors, unregistered_sales, other_information, exhibits                                                                                                                                                                                                                                                    
+  10-Q | 2026-01-28  | 0001193125-26-027207 | 132    | no       | financial_statements_and_notes, management_discussion_and_analysis, market_risk, controls_and_procedures, legal_proceedings, risk_factors, unregistered_sales, other_information, exhibits                                                                                                                                                                                                                                                    
+  10-Q | 2025-10-29  | 0001193125-25-256321 | 118    | no       | financial_statements_and_notes, management_discussion_and_analysis, market_risk, controls_and_procedures, legal_proceedings, risk_factors, unregistered_sales, other_information, exhibits                                                                                                                                                                                                                                                    
+  10-K | 2025-07-30  | 0000950170-25-100235 | 199    | no       | business, risk_factors, unresolved_staff_comments, cybersecurity, properties, legal_proceedings, market_for_equity, management_discussion_and_analysis, market_risk, financial_statements_and_notes, controls_and_procedures, other_information, directors_and_governance, executive_compensation, security_ownership, relationships_and_independence, principal_accountant_fees, exhibits_and_financial_statement_schedules, form_10k_summary
+  10-Q | 2025-04-30  | 0000950170-25-061046 | 134    | no       | financial_statements_and_notes, management_discussion_and_analysis, market_risk, controls_and_procedures, legal_proceedings, risk_factors, unregistered_sales, other_information, exhibits                                                                                                                                                                                                                                                    
+  10-Q | 2025-01-29  | 0000950170-25-010491 | 135    | no       | financial_statements_and_notes, management_discussion_and_analysis, market_risk, controls_and_procedures, legal_proceedings, risk_factors, unregistered_sales, other_information, exhibits                                                                                                                                                                                                                                                    
+  10-Q | 2024-10-30  | 0000950170-24-118967 | 122    | no       | financial_statements_and_notes, management_discussion_and_analysis, market_risk, controls_and_procedures, legal_proceedings, risk_factors, unregistered_sales, other_information, exhibits                                                                                                                                                                                                                                                    
+  10-K | 2024-07-30  | 0000950170-24-087843 | 222    | no       | business, risk_factors, unresolved_staff_comments, cybersecurity, properties, legal_proceedings, market_for_equity, management_discussion_and_analysis, market_risk, financial_statements_and_notes, controls_and_procedures, other_information, directors_and_governance, executive_compensation, security_ownership, relationships_and_independence, principal_accountant_fees, exhibits_and_financial_statement_schedules, form_10k_summary
+  10-Q | 2024-04-25  | 0000950170-24-048288 | 136    | no       | financial_statements_and_notes, management_discussion_and_analysis, market_risk, controls_and_procedures, legal_proceedings, risk_factors, unregistered_sales, other_information, exhibits                                                                                                                                                                                                                                                    
+  10-Q | 2024-01-30  | 0000950170-24-008814 | 141    | no       | financial_statements_and_notes, management_discussion_and_analysis, market_risk, controls_and_procedures, legal_proceedings, risk_factors, unregistered_sales, other_information, exhibits                                                                                                                                                                                                                                                    
+  10-Q | 2023-10-24  | 0000950170-23-054855 | 112    | no       | financial_statements_and_notes, management_discussion_and_analysis, market_risk, controls_and_procedures, legal_proceedings, risk_factors, unregistered_sales, other_information, exhibits                                                                                                                                                                                                                                                    
+  10-K | 2023-07-27  | 0000950170-23-035122 | 213    | no       | business, risk_factors, unresolved_staff_comments, properties, legal_proceedings, market_for_equity, management_discussion_and_analysis, market_risk, financial_statements_and_notes, controls_and_procedures, other_information, directors_and_governance, executive_compensation, security_ownership, relationships_and_independence, principal_accountant_fees, exhibits_and_financial_statement_schedules, form_10k_summary               
+  10-Q | 2023-04-25  | 0000950170-23-014423 | 135    | no       | financial_statements_and_notes, management_discussion_and_analysis, market_risk, controls_and_procedures, legal_proceedings, risk_factors, unregistered_sales, exhibits                                                                                                                                                                                                                                                                       
+  10-Q | 2023-01-24  | 0001564590-23-000733 | 146    | no       | financial_statements_and_notes, management_discussion_and_analysis, market_risk, controls_and_procedures, legal_proceedings, risk_factors, unregistered_sales, exhibits                                                                                                                                                                                                                                                                       
+  10-Q | 2022-10-25  | 0001564590-22-035087 | 127    | no       | financial_statements_and_notes, management_discussion_and_analysis, market_risk, controls_and_procedures, legal_proceedings, risk_factors, unregistered_sales, exhibits                                                                                                                                                                                                                                                                       
+  10-K | 2022-07-28  | 0001564590-22-026876 | 228    | no       | business, risk_factors, unresolved_staff_comments, properties, legal_proceedings, market_for_equity, management_discussion_and_analysis, market_risk, financial_statements_and_notes, controls_and_procedures, directors_and_governance, executive_compensation, security_ownership, relationships_and_independence, principal_accountant_fees, exhibits_and_financial_statement_schedules, form_10k_summary                                  
+  10-K | 2021-07-29  | 0001564590-21-039151 | 221    | no       | business, risk_factors, unresolved_staff_comments, properties, legal_proceedings, market_for_equity, management_discussion_and_analysis, market_risk, financial_statements_and_notes, controls_and_procedures, directors_and_governance, executive_compensation, security_ownership, relationships_and_independence, principal_accountant_fees, exhibits_and_financial_statement_schedules, form_10k_summary                                  
+
+Warnings:
+  none
+
+Query: revenue growth and drivers
+Retrieval Time: 9.773 seconds
+
+Top Retrieved Evidence:
+  rank | fused    | vector   | bm25     | form | filing_date | section                            | accession           
+  -----+----------+----------+----------+------+-------------+------------------------------------+---------------------
+  1    | 0.030214 | 0.509579 | 2.317714 | 10-Q | 2025-04-30  | management_discussion_and_analysis | 0000950170-25-061046
+  2    | 0.016667 | n/a      | 2.359460 | 10-Q | 2026-04-29  | management_discussion_and_analysis | 0001193125-26-191507
+  3    | 0.016667 | 0.522637 | n/a      | 10-K | 2021-07-29  | business                           | 0001564590-21-039151
+  4    | 0.016393 | n/a      | 2.359460 | 10-Q | 2026-01-28  | management_discussion_and_analysis | 0001193125-26-027207
+  5    | 0.016393 | 0.512893 | n/a      | 10-K | 2021-07-29  | management_discussion_and_analysis | 0001564590-21-039151
+  6    | 0.016129 | n/a      | 2.357555 | 10-Q | 2025-10-29  | management_discussion_and_analysis | 0001193125-25-256321
+  7    | 0.015873 | 0.509244 | n/a      | 10-Q | 2024-01-30  | management_discussion_and_analysis | 0000950170-24-008814
+  8    | 0.015873 | n/a      | 2.343135 | 10-Q | 2025-10-29  | management_discussion_and_analysis | 0001193125-25-256321
+
+Full Evidence:
+  Rank 1
+    chunk_id: df256755e19c9db8589e83e82a1719a940ff5779422d9b6879e9b4ea92d47e12
+    text_sha256: 2fde05da1d8bf1984f29a8ed33688af5a27f1d56af938b9475f97d1968889063
+    section: management_discussion_and_analysis (MANAGEMENT’S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS)
+    form_and_date: 10-Q 2025-04-30
+    accession: 0000950170-25-061046
+    vector_rank_score: 3 / 0.509579
+    bm25_rank_score: 12 / 2.317714
+    fused_score: 0.030214
+    source_path: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\filings\0000789019\0000950170-25-061046\msft-20250331.htm
+    source_url: https://www.sec.gov/Archives/edgar/data/789019/000095017025061046/msft-20250331.htm
+    preview: Enterprise and partner services revenue increased $85 million or 5% driven by growth in Enterprise Support Services, offset in part by a decline in Industry Solutions. Operating income increased $1.6 billion or 17%. Gross margin increased $1.9 billion or 13% driven by growth in Azure. Gross margin percentage decreased driven by the impact of scaling our AI infrastructure. Operating expenses increased $302 million or 6% driven by investments in cloud and AI engineering. More Personal Computing Revenue increased $767 million or 6%. Windows and Devices revenue increased $46 million or 1%. Windows OEM and Devices revenue increased 3% driven by growth in Windows OEM, with inventory levels remaining elevated due to tariff uncertainty. Gaming revenue increased $270 million or 5% driven by growth in Xbox content and services. Xbox content and services revenue increased 8% driven by growth in Xbo
+
+  Rank 2
+    chunk_id: 8a7e15573baa999e78879a4757f8305d3a59b0f562e9b527adf575b4df3b4cea
+    text_sha256: b422e2e90b38efb82509b31b06fd745de4b0c625709804b5f802e079536b8053
+    section: management_discussion_and_analysis (MANAGEMENT’S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS)
+    form_and_date: 10-Q 2026-04-29
+    accession: 0001193125-26-191507
+    vector_rank_score: None / n/a
+    bm25_rank_score: 1 / 2.359460
+    fused_score: 0.016667
+    source_path: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\filings\0000789019\0001193125-26-191507\msft-20260331.htm
+    source_url: https://www.sec.gov/Archives/edgar/data/789019/000119312526191507/msft-20260331.htm
+    preview: The metrics primarily reflect growth across our cloud services. Microsoft 365 Commercial cloud revenue growth | Revenue from Microsoft 365 Commercial subscriptions, comprising Microsoft 365 Commercial, Enterprise Mobility + Security, the cloud portion of Windows Commercial, the per-user portion of Power BI, Exchange, SharePoint, Microsoft Teams, Microsoft 365 Security and Compliance, and Microsoft 365 Copilot Microsoft 365 Commercial cloud revenue growth Revenue from Microsoft 365 Commercial subscriptions, comprising Microsoft 365 Commercial, Enterprise Mobility + Security, the cloud portion of Windows Commercial, the per-user portion of Power BI, Exchange, SharePoint, Microsoft Teams, Microsoft 365 Security and Compliance, and Microsoft 365 Copilot Microsoft 365 Commercial seat growth | The number of Microsoft 365 Commercial seats at end of period where seats are paid users covered by a
+
+  Rank 3
+    chunk_id: e516931a78fd1589be321fd973624d1c6c180f58c7b47a24e3fdff14cd55ee07
+    text_sha256: 5d96b041bc71cac8c1d6c3d578616f2fb265575bded2d57d7828dd34b7bafc60
+    section: business (BUSINESS)
+    form_and_date: 10-K 2021-07-29
+    accession: 0001564590-21-039151
+    vector_rank_score: 1 / 0.522637
+    bm25_rank_score: None / n/a
+    fused_score: 0.016667
+    source_path: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\filings\0000789019\0001564590-21-039151\msft-10k_20210630.htm
+    source_url: https://www.sec.gov/Archives/edgar/data/789019/000156459021039151/msft-10k_20210630.htm
+    preview: Growth depends on our ability to reach new users in new markets such as frontline workers, small and medium businesses, and growth markets, as well as add value to our core product and service offerings to span productivity categories such as communication, collaboration, analytics, security, and compliance. Office Commercial revenue is mainly affected by a combination of continued installed base growth and average revenue per user expansion, as well as the continued shift from Office licensed on-premises to Office 365. Office Consumer Office Consumer is designed to increase personal productivity through a range of products and services. Growth depends on our ability to reach new users, add value to our core product set, and continue to expand our product and service offerings into new markets. Office Consumer revenue is mainly affected by the percentage of customers that buy Office with
+
+  Rank 4
+    chunk_id: 75abbf149032ddfca28ccd83be4662efbcc745f4b60ac077bab2dfdb01129ae4
+    text_sha256: b422e2e90b38efb82509b31b06fd745de4b0c625709804b5f802e079536b8053
+    section: management_discussion_and_analysis (MANAGEMENT’S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS)
+    form_and_date: 10-Q 2026-01-28
+    accession: 0001193125-26-027207
+    vector_rank_score: None / n/a
+    bm25_rank_score: 2 / 2.359460
+    fused_score: 0.016393
+    source_path: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\filings\0000789019\0001193125-26-027207\msft-20251231.htm
+    source_url: https://www.sec.gov/Archives/edgar/data/789019/000119312526027207/msft-20251231.htm
+    preview: The metrics primarily reflect growth across our cloud services. Microsoft 365 Commercial cloud revenue growth | Revenue from Microsoft 365 Commercial subscriptions, comprising Microsoft 365 Commercial, Enterprise Mobility + Security, the cloud portion of Windows Commercial, the per-user portion of Power BI, Exchange, SharePoint, Microsoft Teams, Microsoft 365 Security and Compliance, and Microsoft 365 Copilot Microsoft 365 Commercial cloud revenue growth Revenue from Microsoft 365 Commercial subscriptions, comprising Microsoft 365 Commercial, Enterprise Mobility + Security, the cloud portion of Windows Commercial, the per-user portion of Power BI, Exchange, SharePoint, Microsoft Teams, Microsoft 365 Security and Compliance, and Microsoft 365 Copilot Microsoft 365 Commercial seat growth | The number of Microsoft 365 Commercial seats at end of period where seats are paid users covered by a
+
+  Rank 5
+    chunk_id: ad6abe604391036db0a419c42f1dd8696578a814cb98c47888fdc4c07c4e583b
+    text_sha256: 8e3dea3f213a373eb2b171885c2a51cbbd9be2c88247f49bb4358834636b0e28
+    section: management_discussion_and_analysis (MANAGEMENT’S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS)
+    form_and_date: 10-K 2021-07-29
+    accession: 0001564590-21-039151
+    vector_rank_score: 2 / 0.512893
+    bm25_rank_score: None / n/a
+    fused_score: 0.016393
+    source_path: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\filings\0000789019\0001564590-21-039151\msft-10k_20210630.htm
+    source_url: https://www.sec.gov/Archives/edgar/data/789019/000156459021039151/msft-10k_20210630.htm
+    preview: • | Office Commercial products and cloud services revenue increased $4.0 billion or 13%. Office 365 Commercial revenue grew 22% driven by seat growth of 17% and higher revenue per user. Office Commercial products revenue declined 23% driven by continued customer shift to cloud offerings and transactional weakness. • Office Commercial products and cloud services revenue increased $4.0 billion or 13%. Office 365 Commercial revenue grew 22% driven by seat growth of 17% and higher revenue per user. Office Commercial products revenue declined 23% driven by continued customer shift to cloud offerings and transactional weakness. • | Office Consumer products and cloud services revenue increased $474 million or 10% driven by Microsoft 365 Consumer subscription revenue, on a strong prior year comparable that benefited from transactional strength in Japan. Microsoft 365 Consumer subscribers increas
+
+  Rank 6
+    chunk_id: 03aa8c926e199808d7908efbe5cf86a97fb0e20bbd7f5168d4650c70ab44f6e5
+    text_sha256: 26c5d1066c67305a8a5c45df21f0673b8373afb20e8065e0d76f079ad57a2e4d
+    section: management_discussion_and_analysis (MANAGEMENT’S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS)
+    form_and_date: 10-Q 2025-10-29
+    accession: 0001193125-25-256321
+    vector_rank_score: None / n/a
+    bm25_rank_score: 3 / 2.357555
+    fused_score: 0.016129
+    source_path: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\filings\0000789019\0001193125-25-256321\msft-20250930.htm
+    source_url: https://www.sec.gov/Archives/edgar/data/789019/000119312525256321/msft-20250930.htm
+    preview: The metrics primarily reflect growth across our cloud services. Microsoft 365 Commercial cloud revenue growth | Revenue from Microsoft 365 Commercial subscriptions, comprising Microsoft 365 Commercial, Enterprise Mobility + Security, the cloud portion of Windows Commercial, the per-user portion of Power BI, Exchange, SharePoint, Microsoft Teams, Microsoft 365 Security and Compliance, and Microsoft 365 Copilot Microsoft 365 Commercial cloud revenue growth Revenue from Microsoft 365 Commercial subscriptions, comprising Microsoft 365 Commercial, Enterprise Mobility + Security, the cloud portion of Windows Commercial, the per-user portion of Power BI, Exchange, SharePoint, Microsoft Teams, Microsoft 365 Security and Compliance, and Microsoft 365 Copilot Microsoft 365 Commercial seat growth | The number of Microsoft 365 Commercial seats at end of period where seats are paid users covered by a
+
+  Rank 7
+    chunk_id: 16590e6e3260245d9ee0ea3b27d7eb7a39e0409c4e767a4b8b6aec6b2148015a
+    text_sha256: 5755fc0d4989a9c03a6e54e4cfb6a3fe7c3855efd42b20b13f7a816edbf07450
+    section: management_discussion_and_analysis (MANAGEMENT’S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS)
+    form_and_date: 10-Q 2024-01-30
+    accession: 0000950170-24-008814
+    vector_rank_score: 4 / 0.509244
+    bm25_rank_score: None / n/a
+    fused_score: 0.015873
+    source_path: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\filings\0000789019\0000950170-24-008814\msft-20231231.htm
+    source_url: https://www.sec.gov/Archives/edgar/data/789019/000095017024008814/msft-20231231.htm
+    preview: Six Months Ended December 31, 2023 Compared with Six Months Ended December 31, 2022 Productivity and Business Processes Revenue increased $4.4 billion or 13%. Office Commercial products and cloud services revenue increased $3.1 billion or 15%. Office 365 Commercial revenue grew 18% with seat growth of 9%, driven by small and medium business and frontline worker offerings, as well as growth in revenue per user. Office Commercial products revenue declined 17% driven by continued customer shift to cloud offerings. Office Consumer products and cloud services revenue increased $118 million or 4% with continued growth in Microsoft 365 Consumer subscribers. LinkedIn revenue increased $647 million or 9% driven by growth across all lines of business – Talent Solutions, Premium Subscriptions, Marketing Solutions, and Sales Solutions. Dynamics products and cloud services revenue increased $554 mill
+
+  Rank 8
+    chunk_id: 43ba54d73bd3a7ee01f438ededae6ccbdf09c0b672dfbde50ae4b64a7f604655
+    text_sha256: 30133bab59c079d0500dab2e7d152395cee9e8653ecb70806305c86eb9fe358f
+    section: management_discussion_and_analysis (MANAGEMENT’S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS)
+    form_and_date: 10-Q 2025-10-29
+    accession: 0001193125-25-256321
+    vector_rank_score: None / n/a
+    bm25_rank_score: 4 / 2.343135
+    fused_score: 0.015873
+    source_path: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\filings\0000789019\0001193125-25-256321\msft-20250930.htm
+    source_url: https://www.sec.gov/Archives/edgar/data/789019/000119312525256321/msft-20250930.htm
+    preview: Microsoft 365 Commercial products revenue grew 17% driven by an increase in Office 2024 transactional purchasing as well as growth in the Windows Commercial on-premises components of Microsoft 365 suite sales. Microsoft 365 Consumer products and cloud services revenue increased $477 million or 28%. Microsoft 365 Consumer cloud revenue grew 26% driven by growth in revenue per user and Microsoft 365 Consumer subscriber growth of 7%. LinkedIn revenue increased $422 million or 10% driven by growth in Marketing Solutions. Dynamics products and cloud services revenue increased $287 million or 16% driven by growth in Dynamics 365. Dynamics 365 revenue grew 18% with growth across all workloads. Operating income increased $3.9 billion or 24%. Cost of revenue increased $427 million or 8% driven by growth in Microsoft 365 Commercial cloud. 33 PART I Item 2 Gross margin increased $4.3 billion or 19%
+
+
+Query: cybersecurity risk
+Retrieval Time: 0.224 seconds
+
+Top Retrieved Evidence:
+  rank | fused    | vector   | bm25     | form | filing_date | section       | accession           
+  -----+----------+----------+----------+------+-------------+---------------+---------------------
+  1    | 0.032540 | 0.743371 | 3.849343 | 10-K | 2025-07-30  | cybersecurity | 0000950170-25-100235
+  2    | 0.032522 | 0.743371 | 3.854836 | 10-K | 2024-07-30  | cybersecurity | 0000950170-24-087843
+  3    | 0.030000 | 0.628355 | 3.896263 | 10-K | 2024-07-30  | cybersecurity | 0000950170-24-087843
+  4    | 0.029214 | 0.618465 | 3.889976 | 10-K | 2025-07-30  | cybersecurity | 0000950170-25-100235
+  5    | 0.029206 | 0.708791 | 2.426905 | 10-Q | 2024-10-30  | risk_factors  | 0000950170-24-118967
+  6    | 0.028850 | 0.668348 | 2.429801 | 10-Q | 2026-04-29  | risk_factors  | 0001193125-26-191507
+  7    | 0.016129 | 0.711483 | n/a      | 10-Q | 2025-04-30  | risk_factors  | 0000950170-25-061046
+  8    | 0.015625 | n/a      | 3.715718 | 10-K | 2024-07-30  | cybersecurity | 0000950170-24-087843
+
+Full Evidence:
+  Rank 1
+    chunk_id: dd5c9d29c54c9979ba8089210d96ce5eea0fc3084f2a1797c8b13ea8b092be15
+    text_sha256: 6087bae2d30bf7bace3080ef8b5cba04ca7dc9c84b90f6e18ff025ad72fc6f78
+    section: cybersecurity (CYBERSECURITY)
+    form_and_date: 10-K 2025-07-30
+    accession: 0000950170-25-100235
+    vector_rank_score: 1 / 0.743371
+    bm25_rank_score: 4 / 3.849343
+    fused_score: 0.032540
+    source_path: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\filings\0000789019\0000950170-25-100235\msft-20250630.htm
+    source_url: https://www.sec.gov/Archives/edgar/data/789019/000095017025100235/msft-20250630.htm
+    preview: Incidents are first triaged for severity, and then more deeply assessed to establish a plan of record and activate internal and external notification, disclosure, and communication plans, as applicable. Engineering and development resources are mobilized to resolve or remediate the incident. After the incident is resolved, a comprehensive post-incident review process is conducted. We describe the risks from cybersecurity threats, including previous cybersecurity incidents, in section “Risk Factors” (Part I, Item 1A of this Form 10-K). As of the date of this Form 10-K, we do not believe any risks from cybersecurity threats have materially affected or are reasonably likely to materially affect us, including our results of operations or financial condition. However, the cybersecurity threat environment is increasingly challenging, and we, along with the entire digital ecosystem, are under c
+
+  Rank 2
+    chunk_id: e2558df9cbd56a04a5725f3bf1ed4b5d444776c39157456eab49ba0292373a64
+    text_sha256: 6aff4604e52463f6fcb9233040c85c27c01ba98659f53a76249983ee0f918f59
+    section: cybersecurity (CYBERSECURITY)
+    form_and_date: 10-K 2024-07-30
+    accession: 0000950170-24-087843
+    vector_rank_score: 2 / 0.743371
+    bm25_rank_score: 3 / 3.854836
+    fused_score: 0.032522
+    source_path: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\filings\0000789019\0000950170-24-087843\msft-20240630.htm
+    source_url: https://www.sec.gov/Archives/edgar/data/789019/000095017024087843/msft-20240630.htm
+    preview: Incidents are first triaged for severity, and then more deeply assessed to establish a plan of record and activate internal and external notification, disclosure, and communication plans, as applicable. Engineering and development resources are mobilized to resolve or remediate the incident. After the incident is resolved, a comprehensive post-incident review process is conducted. We describe the risks from cybersecurity threats, including previous cybersecurity incidents, in section “Risk Factors” (Part I, Item 1A of this Form 10-K). As of the date of this Form 10-K, we do not believe any risks from cybersecurity threats have materially affected or are reasonably likely to materially affect us, including our results of operations or financial condition. However, the cybersecurity threat environment is increasingly challenging, and we, along with the entire digital ecosystem, are under c
+
+  Rank 3
+    chunk_id: 10ab00d6d5235795ef6fa04f64c936c3673c4e6cd835bd463600f849079474ea
+    text_sha256: 8cec80aa9dff0bb739eb3062a378e207132f5cc175e0ea5138bf964df51b9343
+    section: cybersecurity (CYBERSECURITY)
+    form_and_date: 10-K 2024-07-30
+    accession: 0000950170-24-087843
+    vector_rank_score: 16 / 0.628355
+    bm25_rank_score: 1 / 3.896263
+    fused_score: 0.030000
+    source_path: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\filings\0000789019\0000950170-24-087843\msft-20240630.htm
+    source_url: https://www.sec.gov/Archives/edgar/data/789019/000095017024087843/msft-20240630.htm
+    preview: Our CISO leads the strategy, engineering, and operations of cybersecurity across the company, and reports to the EVP of Microsoft Security. Our CISO has extensive experience assessing and managing cybersecurity programs and cybersecurity risk. Before joining Microsoft, our CISO served in a prior Chief Technology Officer role as well as in senior leadership, engineering, and operational roles within multiple organizations. In addition to the Board’s oversight of cybersecurity risk, to support the CISO, we have established a Cybersecurity Governance Council (“CGC”) charged with overseeing initiatives that safeguard Microsoft’s infrastructure. The CGC is comprised of an executive-level team of Deputy CISOs with cybersecurity backgrounds and expertise relevant to their roles. The CGC responsibilities include approving our enterprise security risk assessment process and results, determining t
+
+  Rank 4
+    chunk_id: 56494e4e3556b1485120a12499d57dbdc99bd55560cd1a6c3b712212cedc87f5
+    text_sha256: 703dfb1c929ca5fd7b20ba8b9bf97a5a27052fac36bc473a521a50303e7cdeff
+    section: cybersecurity (CYBERSECURITY)
+    form_and_date: 10-K 2025-07-30
+    accession: 0000950170-25-100235
+    vector_rank_score: 19 / 0.618465
+    bm25_rank_score: 2 / 3.889976
+    fused_score: 0.029214
+    source_path: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\filings\0000789019\0000950170-25-100235\msft-20250630.htm
+    source_url: https://www.sec.gov/Archives/edgar/data/789019/000095017025100235/msft-20250630.htm
+    preview: Our CISO leads the strategy, engineering, and operations of cybersecurity across the company, and reports to the EVP of Cloud + AI. Our CISO has extensive experience assessing and managing cybersecurity programs and cybersecurity risk. Before joining Microsoft, our CISO served in a prior Chief Technology Officer role as well as in senior leadership, engineering, and operational roles within multiple organizations. In addition to the Board’s oversight of cybersecurity risk, to support the CISO, we have established a Cybersecurity Governance Council (“CGC”) charged with overseeing initiatives that safeguard Microsoft’s computing environments, products, and services. The CGC is comprised of an executive-level team of Deputy CISOs with cybersecurity backgrounds and expertise relevant to their roles. The CGC responsibilities include approving our enterprise security risk assessment process an
+
+  Rank 5
+    chunk_id: f8f46f324c5fab83604ffb141b3a2d392b3746fe3add19bda6d2e8c502044cde
+    text_sha256: f0c146521393b26787eb29a5135fed9ce4a0764dc15c5eb324f5e7ee09079ecc
+    section: risk_factors (RISK FACTORS)
+    form_and_date: 10-Q 2024-10-30
+    accession: 0000950170-24-118967
+    vector_rank_score: 4 / 0.708791
+    bm25_rank_score: 16 / 2.426905
+    fused_score: 0.029206
+    source_path: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\filings\0000789019\0000950170-24-118967\msft-20240930.htm
+    source_url: https://www.sec.gov/Archives/edgar/data/789019/000095017024118967/msft-20240930.htm
+    preview: CYBERSECURITY, DATA PRIVACY, AND PLATFORM ABUSE RISKS Cyberattacks and security vulnerabilities could lead to reduced revenue, increased costs, liability claims, or harm to our reputation or competitive position. Security of our information technology Threats to IT security can take a variety of forms. Individual and groups of hackers and sophisticated organizations, including state-sponsored organizations or nation-states, continuously undertake attacks that pose threats to our customers and our IT, and we have experienced cybersecurity incidents in which such actors have gained unauthorized access to our IT systems and data, including customer systems and data. These actors use a wide variety of methods, which include developing and deploying malicious software; exploiting known and potential vulnerabilities or intentionally designed processes in hardware, software, or other infrastruc
+
+  Rank 6
+    chunk_id: 793f88b49a20e1dc4b5f1347b75cdc1218d2d008eb55bcfa9321dc1ade75eb28
+    text_sha256: 8a5319b1b5222490130c2a904797f4fbff77ba4108d16e8152b820e6410467cd
+    section: risk_factors (RISK FACTORS)
+    form_and_date: 10-Q 2026-04-29
+    accession: 0001193125-26-191507
+    vector_rank_score: 7 / 0.668348
+    bm25_rank_score: 14 / 2.429801
+    fused_score: 0.028850
+    source_path: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\filings\0000789019\0001193125-26-191507\msft-20260331.htm
+    source_url: https://www.sec.gov/Archives/edgar/data/789019/000119312526191507/msft-20260331.htm
+    preview: It may be difficult to determine the best way to investigate, mitigate, contain, and remediate the harm caused by a cyber incident. Such efforts may not be successful, and we may make errors or fail to take necessary actions. It is possible that threat actors may gain undetected access to other networks and systems after establishing a foothold on an internal system. Cyber incidents and attacks can have cascading impacts that unfold with increasing speed across our internal networks and systems, as well as those of our partners and customers. In addition, it may take considerable time for us to investigate and evaluate the full impact of incidents, particularly for sophisticated attacks. As a result of these and other factors, we may not be able to provide prompt, full, and reliable information about the incident to our customers, partners, regulators, and the public. Breaches of our fac
+
+  Rank 7
+    chunk_id: 33d38f4e1cd9bd6023d6320053dc3717da5eedc5f25af56d747401cb0ee88f47
+    text_sha256: 5374d0e7864833b8a628959771f65c6e718590242bbe5fc4e00b68f6523eea4a
+    section: risk_factors (RISK FACTORS)
+    form_and_date: 10-Q 2025-04-30
+    accession: 0000950170-25-061046
+    vector_rank_score: 3 / 0.711483
+    bm25_rank_score: None / n/a
+    fused_score: 0.016129
+    source_path: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\filings\0000789019\0000950170-25-061046\msft-20250331.htm
+    source_url: https://www.sec.gov/Archives/edgar/data/789019/000095017025061046/msft-20250331.htm
+    preview: CYBERSECURITY, DATA PRIVACY, AND PLATFORM ABUSE RISKS Cyberattacks and security vulnerabilities could lead to reduced revenue, increased costs, liability claims, or harm to our reputation or competitive position. Security of our information technology Threats to security can take a variety of forms. Threat actors, including individual and groups of hackers and sophisticated organizations, including nation-states or state-sponsored organizations, continuously undertake attacks that pose threats to our customers and our internal infrastructure, and we have experienced cybersecurity incidents in which such actors have gained unauthorized access to our systems and data, including customer systems and data. These actors use a wide variety of methods, which include developing and deploying malicious software; exploiting known and potential vulnerabilities or intentionally designed processes in
+
+  Rank 8
+    chunk_id: b8038067013dfcfeafc9f564de443a3ba32fb5863969bff4690015a98c573b2b
+    text_sha256: 80ae217aba75676c2e69cbc856f9c1c25f854e3f9faf5414a1fb7d9fe50ac094
+    section: cybersecurity (CYBERSECURITY)
+    form_and_date: 10-K 2024-07-30
+    accession: 0000950170-24-087843
+    vector_rank_score: None / n/a
+    bm25_rank_score: 5 / 3.715718
+    fused_score: 0.015625
+    source_path: C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\data_store\filings\0000789019\0000950170-24-087843\msft-20240630.htm
+    source_url: https://www.sec.gov/Archives/edgar/data/789019/000095017024087843/msft-20240630.htm
+    preview: RISK MANAGEMENT AND STRATEGY Microsoft plays a central role in the world’s digital ecosystem. We have made it the top corporate priority to protect the computing environment used by our customers and employees and to support the resiliency of our cloud infrastructure and services, products, devices, and our internal corporate resources from determined adversaries. In response to the evolving cybersecurity threat landscape, we launched the Secure Future Initiative (“SFI”) in November 2023 and expanded the scope of SFI in May 2024. The SFI focuses our business strategy and efforts on continual improvement in cybersecurity protection, and is aligned around three security principles: Secure by Design: Security comes first when designing any product or service. Secure by Default: Security protections are enabled and enforced by default, require no extra effort, and are not optional. Secure Op
+
+Artifact Integrity:
+  Canonical chunks and lineage are stored in SQLite.
+  Vector and BM25 artifacts are rebuildable from those chunks.
+  Retrieval validates generation and chunk-set hashes before use.

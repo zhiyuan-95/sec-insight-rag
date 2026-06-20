@@ -6,6 +6,12 @@ from src.storage.facts_repository import RawFactRepository, StoredRawFact
 from src.storage.filings_repository import FilingRecord, FilingRepository
 from src.storage.indicators_repository import FinancialIndicatorRepository
 from src.storage.metrics_repository import FinancialMetric, FinancialMetricRepository
+from src.storage.retrieval_repository import (
+    FilingChunk,
+    RetrievalIndexState,
+    RetrievalRepository,
+    StoredFilingChunk,
+)
 
 __all__ = [
     "CompanyRecord",
@@ -15,8 +21,12 @@ __all__ = [
     "FinancialIndicatorRepository",
     "FinancialMetric",
     "FinancialMetricRepository",
+    "FilingChunk",
     "RawFactRepository",
+    "RetrievalIndexState",
+    "RetrievalRepository",
     "StoredRawFact",
+    "StoredFilingChunk",
     "connect_sqlite",
     "initialize_database",
 ]

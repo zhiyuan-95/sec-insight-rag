@@ -11,6 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_CHAT_MODEL = "gemini-2.5-flash"
 SUPPORTED_CHAT_MODELS = {DEFAULT_CHAT_MODEL}
+DEFAULT_RETRIEVAL_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 
 class Settings(BaseSettings):
@@ -38,9 +39,23 @@ class Settings(BaseSettings):
         default=Path("./data_store/filings"),
         validation_alias="STOCK_FILINGS_BASE_DIR",
     )
-    knowledge_storage_dir: Path | None = Field(
-        default=None,
+    knowledge_storage_dir: Path = Field(
+        default=Path("./data_store/knowledge"),
         validation_alias="KNOWLEDGE_STORAGE_DIR",
+    )
+    retrieval_embedding_model: str = Field(
+        default=DEFAULT_RETRIEVAL_EMBEDDING_MODEL,
+        validation_alias="RETRIEVAL_EMBEDDING_MODEL",
+    )
+    retrieval_chunk_size: int = Field(
+        default=512,
+        ge=128,
+        validation_alias="RETRIEVAL_CHUNK_SIZE",
+    )
+    retrieval_chunk_overlap: int = Field(
+        default=64,
+        ge=0,
+        validation_alias="RETRIEVAL_CHUNK_OVERLAP",
     )
     primary_chat_model: str = Field(
         default=DEFAULT_CHAT_MODEL,
@@ -81,6 +96,10 @@ class Settings(BaseSettings):
             raise ValueError(f"Unsupported chat model configured: {names}")
         if self.primary_chat_model not in self.allowed_chat_models:
             raise ValueError("PRIMARY_CHAT_MODEL must be in ALLOWED_CHAT_MODELS")
+        if self.retrieval_chunk_overlap >= self.retrieval_chunk_size:
+            raise ValueError("RETRIEVAL_CHUNK_OVERLAP must be smaller than RETRIEVAL_CHUNK_SIZE")
+        if not self.retrieval_embedding_model.strip():
+            raise ValueError("RETRIEVAL_EMBEDDING_MODEL must not be empty")
         return self
 
 

@@ -192,4 +192,73 @@ def initialize_database(connection: sqlite3.Connection) -> None:
         ON financial_indicators (company_id, indicator_name, fiscal_year, fiscal_period)
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS filing_chunks (
+            chunk_id TEXT PRIMARY KEY,
+            generation_id TEXT NOT NULL,
+            company_id INTEGER NOT NULL,
+            filing_id INTEGER NOT NULL,
+            accession_number TEXT NOT NULL,
+            section_name TEXT NOT NULL,
+            section_title TEXT NOT NULL,
+            section_order INTEGER NOT NULL,
+            chunk_order INTEGER NOT NULL,
+            text TEXT NOT NULL,
+            text_sha256 TEXT NOT NULL,
+            source_sha256 TEXT NOT NULL,
+            source_path TEXT NOT NULL,
+            token_count INTEGER NOT NULL,
+            parser_version TEXT NOT NULL,
+            splitter_version TEXT NOT NULL,
+            is_active_window INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (company_id) REFERENCES companies(company_id) ON DELETE CASCADE,
+            FOREIGN KEY (filing_id) REFERENCES filings(filing_id) ON DELETE CASCADE
+        )
+        """
+    )
+    chunk_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(filing_chunks)").fetchall()
+    }
+    if "source_path" not in chunk_columns:
+        connection.execute("ALTER TABLE filing_chunks ADD COLUMN source_path TEXT")
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_filing_chunks_company_active
+        ON filing_chunks (company_id, is_active_window)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_filing_chunks_filing
+        ON filing_chunks (filing_id, section_name, chunk_order)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_filing_chunks_accession
+        ON filing_chunks (accession_number)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS retrieval_index_state (
+            company_id INTEGER PRIMARY KEY,
+            generation_id TEXT NOT NULL,
+            source_fingerprint TEXT NOT NULL,
+            parser_version TEXT NOT NULL,
+            splitter_version TEXT NOT NULL,
+            embedding_model TEXT NOT NULL,
+            chunk_size INTEGER NOT NULL,
+            chunk_overlap INTEGER NOT NULL,
+            chunk_set_hash TEXT NOT NULL,
+            filing_count INTEGER NOT NULL,
+            chunk_count INTEGER NOT NULL,
+            artifact_path TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (company_id) REFERENCES companies(company_id) ON DELETE CASCADE
+        )
+        """
+    )
     connection.commit()

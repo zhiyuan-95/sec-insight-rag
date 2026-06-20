@@ -169,8 +169,8 @@ def run_experiment(
     setup_result = ingest_company(normalized_ticker, settings)
     setup_snapshot = _snapshot(paths.database, normalized_ticker)
 
-    session_before_snapshot = _snapshot(paths.database, normalized_ticker)
-    session_company_exists = _company_exists(paths.database, normalized_ticker)
+    session_before_snapshot = setup_snapshot
+    session_company_exists = bool(session_before_snapshot.get("company"))
     if session_company_exists:
         session_result = ingest_company(normalized_ticker, settings)
         session_after_snapshot = _snapshot(paths.database, normalized_ticker)
@@ -506,6 +506,46 @@ def _target_raw_fact_coverage(
     if company_id is None or not cik:
         return []
     targets = target_facts_for_industry_labels(assignment.assigned_industry_labels)
+    target_keys = tuple(dict.fromkeys((target.taxonomy, target.raw_concept) for target in targets))
+    target_clause = ", ".join("(?, ?)" for _ in target_keys)
+    target_params = [value for key in target_keys for value in key]
+    observed_by_key = {
+        (str(row["taxonomy"]), str(row["concept"])): row
+        for row in _fetch_all(
+            connection,
+            f"""
+            SELECT
+                taxonomy,
+                concept,
+                COUNT(*) AS observed_rows,
+                MAX(filed_date) AS latest_filing_date,
+                COUNT(DISTINCT unit) AS unit_count,
+                COALESCE(GROUP_CONCAT(DISTINCT form), '') AS forms
+            FROM raw_xbrl_facts
+            WHERE cik = ? AND (taxonomy, concept) IN ({target_clause})
+            GROUP BY taxonomy, concept
+            """,
+            [cik, *target_params],
+        )
+    }
+    mapped_by_key = {
+        (str(row["taxonomy"]), str(row["concept"])): int(row["mapped_rows"])
+        for row in _fetch_all(
+            connection,
+            f"""
+            SELECT
+                f.taxonomy,
+                f.concept,
+                COUNT(*) AS mapped_rows
+            FROM financial_metrics AS m
+            INNER JOIN raw_xbrl_facts AS f
+                ON f.id = m.raw_fact_id
+            WHERE m.company_id = ? AND (f.taxonomy, f.concept) IN ({target_clause})
+            GROUP BY f.taxonomy, f.concept
+            """,
+            [company_id, *target_params],
+        )
+    }
     label_review_note = (
         "industry-specific targets are not included until a source-controlled label is assigned"
         if assignment.label_status == "needs_label_review"
@@ -513,38 +553,10 @@ def _target_raw_fact_coverage(
     )
     rows: list[dict[str, Any]] = []
     for target in targets:
-        observed_rows = _count(
-            connection,
-            """
-            SELECT COUNT(*) AS count
-            FROM raw_xbrl_facts
-            WHERE cik = ? AND taxonomy = ? AND concept = ?
-            """,
-            [cik, target.taxonomy, target.raw_concept],
-        )
-        mapped_rows = _count(
-            connection,
-            """
-            SELECT COUNT(*) AS count
-            FROM financial_metrics AS m
-            LEFT JOIN raw_xbrl_facts AS f
-                ON f.id = m.raw_fact_id
-            WHERE m.company_id = ? AND f.taxonomy = ? AND f.concept = ?
-            """,
-            [company_id, target.taxonomy, target.raw_concept],
-        )
-        latest = _fetch_one(
-            connection,
-            """
-            SELECT
-                MAX(filed_date) AS latest_filing_date,
-                COUNT(DISTINCT unit) AS unit_count,
-                COALESCE(GROUP_CONCAT(DISTINCT form), '') AS forms
-            FROM raw_xbrl_facts
-            WHERE cik = ? AND taxonomy = ? AND concept = ?
-            """,
-            [cik, target.taxonomy, target.raw_concept],
-        )
+        key = (target.taxonomy, target.raw_concept)
+        observed = observed_by_key.get(key, {})
+        observed_rows = int(observed.get("observed_rows") or 0)
+        mapped_rows = mapped_by_key.get(key, 0)
         status = _target_coverage_status(observed_rows, mapped_rows)
         notes = "; ".join(
             note
@@ -567,9 +579,9 @@ def _target_raw_fact_coverage(
                 "status": status,
                 "observed_rows": observed_rows,
                 "mapped_rows": mapped_rows,
-                "unit_count": latest.get("unit_count") or 0,
-                "forms": latest.get("forms") or "",
-                "latest_filing_date": latest.get("latest_filing_date") or "",
+                "unit_count": observed.get("unit_count") or 0,
+                "forms": observed.get("forms") or "",
+                "latest_filing_date": observed.get("latest_filing_date") or "",
                 "notes": notes,
             }
         )
@@ -616,56 +628,45 @@ def _raw_fact_mapping_coverage(
         return []
     concept_clause = _concept_in_clause()
     concept_params = _base_metric_concepts()
-    raw_fact_rows = _count(
+    raw_summary = _fetch_one(
         connection,
-        "SELECT COUNT(*) AS count FROM raw_xbrl_facts WHERE cik = ?",
-        [cik],
-    )
-    distinct_raw_concepts = _count(
-        connection,
-        "SELECT COUNT(DISTINCT concept) AS count FROM raw_xbrl_facts WHERE cik = ?",
-        [cik],
-    )
-    raw_facts_with_supported_concepts = _count(
-        connection,
-        f"SELECT COUNT(*) AS count FROM raw_xbrl_facts WHERE cik = ? AND concept IN ({concept_clause})",
-        [cik, *concept_params],
-    )
-    unknown_raw_fact_rows = _count(
-        connection,
-        f"SELECT COUNT(*) AS count FROM raw_xbrl_facts WHERE cik = ? AND concept NOT IN ({concept_clause})",
-        [cik, *concept_params],
-    )
-    unknown_raw_concepts = _count(
-        connection,
-        f"SELECT COUNT(DISTINCT concept) AS count FROM raw_xbrl_facts WHERE cik = ? AND concept NOT IN ({concept_clause})",
-        [cik, *concept_params],
-    )
-    financial_metric_rows = _count(
-        connection,
-        "SELECT COUNT(*) AS count FROM financial_metrics WHERE company_id = ?",
-        [company_id],
-    )
-    mapped_raw_facts = _count(
-        connection,
-        """
-        SELECT COUNT(DISTINCT raw_fact_id) AS count
-        FROM financial_metrics
-        WHERE company_id = ? AND raw_fact_id IS NOT NULL
+        f"""
+        SELECT
+            COUNT(*) AS raw_fact_rows,
+            COUNT(DISTINCT concept) AS distinct_raw_concepts,
+            SUM(CASE WHEN concept IN ({concept_clause}) THEN 1 ELSE 0 END)
+                AS raw_facts_with_supported_concepts,
+            SUM(CASE WHEN concept NOT IN ({concept_clause}) THEN 1 ELSE 0 END)
+                AS unknown_raw_fact_rows,
+            COUNT(DISTINCT CASE WHEN concept NOT IN ({concept_clause}) THEN concept END)
+                AS unknown_raw_concepts
+        FROM raw_xbrl_facts
+        WHERE cik = ?
         """,
-        [company_id],
+        [*concept_params, *concept_params, *concept_params, cik],
     )
-    mapped_raw_concepts = _count(
+    mapped_summary = _fetch_one(
         connection,
         """
-        SELECT COUNT(DISTINCT f.concept) AS count
+        SELECT
+            COUNT(*) AS financial_metric_rows,
+            COUNT(DISTINCT m.raw_fact_id) AS mapped_raw_facts,
+            COUNT(DISTINCT f.concept) AS mapped_raw_concepts
         FROM financial_metrics AS m
         LEFT JOIN raw_xbrl_facts AS f
             ON f.id = m.raw_fact_id
-        WHERE m.company_id = ? AND f.concept IS NOT NULL
+        WHERE m.company_id = ?
         """,
         [company_id],
     )
+    raw_fact_rows = int(raw_summary.get("raw_fact_rows") or 0)
+    distinct_raw_concepts = int(raw_summary.get("distinct_raw_concepts") or 0)
+    raw_facts_with_supported_concepts = int(raw_summary.get("raw_facts_with_supported_concepts") or 0)
+    unknown_raw_fact_rows = int(raw_summary.get("unknown_raw_fact_rows") or 0)
+    unknown_raw_concepts = int(raw_summary.get("unknown_raw_concepts") or 0)
+    financial_metric_rows = int(mapped_summary.get("financial_metric_rows") or 0)
+    mapped_raw_facts = int(mapped_summary.get("mapped_raw_facts") or 0)
+    mapped_raw_concepts = int(mapped_summary.get("mapped_raw_concepts") or 0)
     supported_but_not_mapped = max(raw_facts_with_supported_concepts - mapped_raw_facts, 0)
     return [
         {
@@ -800,11 +801,6 @@ def _unknown_xbrl_concepts(connection: sqlite3.Connection, cik: str | None) -> l
         """,
         [cik, *_base_metric_concepts()],
     )
-
-
-def _count(connection: sqlite3.Connection, query: str, params: Sequence[Any]) -> int:
-    row = connection.execute(query, list(params)).fetchone()
-    return int(row["count"]) if row is not None else 0
 
 
 def _concept_in_clause() -> str:
@@ -1082,8 +1078,13 @@ def format_lineage_report(run: ExperimentRun) -> str:
 def _pivot_metric_rows(rows: list[dict[str, Any]], *, annual: bool) -> list[dict[str, Any]]:
     period_labels: set[str] = set()
     grouped: dict[tuple[str, str], dict[str, list[str]]] = {}
+    quarterly_end_dates = {} if annual else _latest_end_dates_by_fiscal_period(rows)
     for row in rows:
-        period_label = _pivot_period_label(row, annual=annual)
+        period_label = _pivot_period_label(
+            row,
+            annual=annual,
+            quarterly_end_dates=quarterly_end_dates,
+        )
         if period_label is None:
             continue
         metric_name = str(row.get("metric_name") or "unknown_metric")
@@ -1110,7 +1111,28 @@ def _pivot_metric_rows(rows: list[dict[str, Any]], *, annual: bool) -> list[dict
     return pivot_rows
 
 
-def _pivot_period_label(row: dict[str, Any], *, annual: bool) -> str | None:
+def _latest_end_dates_by_fiscal_period(
+    rows: list[dict[str, Any]],
+) -> dict[tuple[int, str], datetime]:
+    latest: dict[tuple[int, str], datetime] = {}
+    for row in rows:
+        fiscal_year = _as_int(row.get("fiscal_year"))
+        fiscal_period = str(row.get("fiscal_period") or "").upper()
+        end_date = _parse_date(row.get("end_date"))
+        if fiscal_year is None or not fiscal_period or end_date is None:
+            continue
+        key = (fiscal_year, fiscal_period)
+        if key not in latest or end_date > latest[key]:
+            latest[key] = end_date
+    return latest
+
+
+def _pivot_period_label(
+    row: dict[str, Any],
+    *,
+    annual: bool,
+    quarterly_end_dates: dict[tuple[int, str], datetime] | None = None,
+) -> str | None:
     fiscal_year = _as_int(row.get("fiscal_year"))
     fiscal_period = str(row.get("fiscal_period") or "").upper()
     if fiscal_year is None or not fiscal_period:
@@ -1129,8 +1151,14 @@ def _pivot_period_label(row: dict[str, Any], *, annual: bool) -> str | None:
     quarter = _quarter_number(fiscal_period)
     if quarter is None:
         return None
-    if not _end_date_matches_period(row.get("end_date"), fiscal_year, quarter=quarter):
-        return None
+    expected_end_date = (quarterly_end_dates or {}).get((fiscal_year, fiscal_period))
+    if expected_end_date is None:
+        if not _end_date_matches_period(row.get("end_date"), fiscal_year, quarter=quarter):
+            return None
+    else:
+        row_end_date = _parse_date(row.get("end_date"))
+        if row_end_date is not None and row_end_date != expected_end_date:
+            return None
     if not _duration_matches_period(row, annual=False):
         return None
     return f"{fiscal_year} Q{quarter}"
@@ -1694,8 +1722,14 @@ def _export_csv_artifacts(paths: ExperimentPaths, *, company_id: int | None) -> 
 
 
 def _export_query(connection: sqlite3.Connection, query: str, path: Path) -> None:
-    rows = _fetch_all(connection, query)
-    _export_rows(rows, path)
+    cursor = connection.execute(query)
+    headers = [column[0] for column in cursor.description or ()]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as file:
+        writer = csv.writer(file)
+        if headers:
+            writer.writerow(headers)
+            writer.writerows(cursor)
 
 
 def _export_rows(rows: list[dict[str, Any]], path: Path) -> None:

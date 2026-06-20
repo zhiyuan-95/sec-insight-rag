@@ -1,0 +1,219 @@
+Milestone 5 Design: Retrieval Pipeline
+
+Task Restatement
+
+Build a local, deterministic retrieval foundation that converts active-window
+10-K and 10-Q filing HTML into section-aware chunks and returns ranked,
+traceable evidence. Milestone 5 must not generate answers or use Gemini.
+
+SQLite owns canonical chunks and lineage. Persisted LlamaIndex vector and BM25
+indexes are rebuildable retrieval artifacts.
+
+Core Data Flow
+
+```text
+active filing records
+  -> validate local filing HTML
+  -> remove scripts and hidden Inline XBRL content
+  -> detect form-specific SEC sections
+  -> split each section into chunks
+  -> store canonical chunks in SQLite
+  -> build local vector and BM25 indexes
+  -> fuse rankings
+  -> return RetrievedEvidence records
+```
+
+Core Scope
+
+- Index active-window 10-K and 10-Q filings for one company.
+- Parse filings one at a time without modifying source HTML.
+- Detect form-specific SEC sections such as Business, Risk Factors, MD&A,
+  Financial Statements, and Notes.
+- Preserve uncertain filings as `unclassified_full_filing` evidence and report
+  the section-detection warning instead of silently discarding the filing.
+- Use LlamaIndex `SentenceSplitter` with a 512-token chunk size and 64-token
+  overlap.
+- Generate deterministic chunk IDs from accession, source hash, section,
+  chunk order, parser version, and chunk text hash.
+- Store chunk text and complete filing lineage in SQLite.
+- Use local semantic embeddings plus BM25 keyword retrieval.
+- Return evidence records with source metadata and component scores.
+- Keep the terminal concise and save detailed experiment evidence as text.
+
+Storage Design
+
+Add a `filing_chunks` table containing:
+
+- chunk ID
+- generation ID
+- company ID
+- filing ID
+- accession number
+- canonical section and original section title
+- section order and chunk order
+- chunk text and text hash
+- filing source hash
+- token count
+- parser and splitter versions
+- active-window state
+- creation timestamp
+
+Add a `retrieval_index_state` table containing the current successful generation,
+source fingerprint, parser version, splitter version, embedding model, chunk
+configuration, chunk-set hash, and update timestamp.
+
+Store rebuildable index generations under:
+
+```text
+KNOWLEDGE_STORAGE_DIR/<CIK>/generations/<generation_id>/
+```
+
+The SQLite state change must happen only after the new index generation has
+been completely written. A failed build must leave the previous generation
+usable.
+
+Retrieval Design
+
+- Use local `sentence-transformers/all-MiniLM-L6-v2` embeddings through
+  FastEmbed. This model keeps semantic retrieval local while making full active-
+  window indexing practical on the target Windows CPU environment.
+- Build a LlamaIndex vector index and a persisted BM25 index over the same node
+  IDs.
+- Use reciprocal-rank fusion with the original query only. Do not use LLM query
+  expansion.
+- Retrieve 20 candidates from each component and return eight fused results by
+  default.
+- Treat fused scores as ranking values, not calibrated relevance probabilities.
+- Do not apply an arbitrary similarity cutoff in Milestone 5.
+
+Public Interfaces
+
+```python
+sync_company_retrieval_index(
+    ticker: str,
+    settings: Settings,
+    *,
+    force_rebuild: bool = False,
+) -> IndexSyncResult
+
+retrieve_filing_evidence(
+    ticker: str,
+    query: str,
+    settings: Settings,
+    *,
+    top_k: int = 8,
+) -> tuple[RetrievedEvidence, ...]
+```
+
+`IndexSyncResult` reports whether the generation was built or reused, filing
+and chunk counts, skipped or fallback sections, generation ID, storage path,
+warnings, and elapsed time.
+
+`RetrievedEvidence` includes rank, chunk ID, chunk text, ticker, CIK, form,
+filing date, accession number, section, source URL, source path, vector score
+and rank, BM25 score and rank, and fused score.
+
+Index Lifecycle
+
+- Compute a source fingerprint from active accessions, source hashes, parser
+  version, splitter settings, and embedding model.
+- Reuse the current generation when the fingerprint matches.
+- Build a complete new generation before replacing SQLite chunks and state in
+  one transaction.
+- Remove inactive accessions from the canonical chunk set on synchronization.
+- Clean obsolete generation directories only after a successful switch.
+- Delete retrieval rows and index artifacts when an ingested company is deleted.
+- Never replace a complete generation with a partial generation when an active
+  filing is missing, unreadable, or produces no text.
+
+Error Handling
+
+Use named errors for:
+
+- missing or unwritable retrieval configuration
+- company or active filings not found
+- missing filing source files
+- malformed filing HTML
+- empty extracted filing text
+- invalid or empty retrieval queries
+- retrieval index not found
+- index generation or configuration mismatch
+- corrupt index artifacts
+
+Do not silently swallow these errors. The experiment report should identify the
+failing accession, file, operation, and recommended recovery action.
+
+Security And Integrity
+
+- Treat filing HTML as untrusted input and never execute scripts or load remote
+  resources referenced by a filing.
+- Remove script, style, hidden Inline XBRL, and other non-visible content.
+- Resolve filing paths and require them to remain under configured filing
+  storage roots.
+- Preserve downloaded filings as immutable raw evidence.
+- Reject empty queries and cap query length.
+- Do not send filing text, queries, or embeddings to an external service.
+
+Milestone 5 Experiment
+
+Implement:
+
+```text
+experiments/MS5/milestone5_retrieval_pipeline.py
+```
+
+Supported arguments:
+
+- `--ticker`
+- repeatable `--query`
+- `--mode local`
+- `--force-rebuild`
+- `--report-path`
+- `--verbose`
+
+Default report path:
+
+```text
+experiments/MS5/experiment_report_<TICKER>.txt
+```
+
+The terminal should show only a brief completion or error summary. The report
+must contain run context, filing coverage, failed accessions, detected and
+fallback sections, chunk counts, generation status, timings, and ranked
+evidence with complete lineage and readable previews.
+
+Manual Verification
+
+1. An initial build creates chunks for every active filing.
+2. An unchanged rerun reuses the index without parsing or embedding again.
+3. A forced rebuild produces stable chunk identities for unchanged inputs.
+4. Missing or malformed active files preserve the previous generation.
+5. Retrieved chunk IDs and hashes match the canonical SQLite rows.
+6. Exact financial terms benefit from BM25 and paraphrased questions benefit
+   from vector retrieval.
+7. Empty queries and unavailable indexes produce actionable errors.
+8. Retrieval works offline after the embedding model has been cached.
+9. Detailed report output is not printed in the terminal.
+
+Likely Files Changed During Implementation
+
+- `pyproject.toml`
+- `src/config/settings.py`
+- `src/retrieval/`
+- `src/storage/database.py`
+- `src/storage/retrieval_repository.py`
+- `src/storage/__init__.py`
+- `src/ingestion/company.py`
+- `experiments/MS5/milestone5_retrieval_pipeline.py`
+- `experiments/MS5/experiment_proposal.md`
+- `docs/structure.md`
+
+Out Of Scope
+
+- Gemini, generated answers, prompt templates, causal interpretation, or LLM
+  reranking.
+- API routes, frontend work, or cloud vector databases.
+- Cross-company retrieval or automatic ingestion-triggered indexing.
+- OCR, PDFs, or filings outside the active accession window.
+- Fixed relevance thresholds.
+- A new pytest suite; verification follows the repository experiment policy.

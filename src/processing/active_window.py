@@ -22,17 +22,31 @@ def active_period_keys(
     quarterly_limit: int = QUARTERLY_WINDOW_LIMIT,
 ) -> set[ActivePeriodKey]:
     """Return active latest 10-K fiscal years and 10-Q fiscal quarters."""
+    return active_period_keys_from_periods(
+        ((fact.form, fact.fiscal_year, fact.fiscal_period) for fact in facts),
+        annual_limit=annual_limit,
+        quarterly_limit=quarterly_limit,
+    )
+
+
+def active_period_keys_from_periods(
+    periods: Iterable[tuple[str | None, int | None, str | None]],
+    *,
+    annual_limit: int = ANNUAL_WINDOW_LIMIT,
+    quarterly_limit: int = QUARTERLY_WINDOW_LIMIT,
+) -> set[ActivePeriodKey]:
+    """Return active period keys from lightweight stored period values."""
     annual_periods: set[tuple[int, str]] = set()
     quarterly_periods: set[tuple[int, str]] = set()
-    for fact in facts:
-        if fact.fiscal_year is None or fact.fiscal_period is None or fact.form is None:
+    for form_value, fiscal_year, fiscal_period_value in periods:
+        if fiscal_year is None or fiscal_period_value is None or form_value is None:
             continue
-        form = fact.form.upper()
-        fiscal_period = fact.fiscal_period.upper()
+        form = form_value.upper()
+        fiscal_period = fiscal_period_value.upper()
         if form == ANNUAL_FORM and fiscal_period == ANNUAL_PERIOD:
-            annual_periods.add((fact.fiscal_year, fiscal_period))
+            annual_periods.add((fiscal_year, fiscal_period))
         elif form == QUARTERLY_FORM and fiscal_period in QUARTER_ORDER:
-            quarterly_periods.add((fact.fiscal_year, fiscal_period))
+            quarterly_periods.add((fiscal_year, fiscal_period))
 
     latest_annual = sorted(annual_periods, key=lambda item: item[0], reverse=True)[:annual_limit]
     latest_quarterly = sorted(

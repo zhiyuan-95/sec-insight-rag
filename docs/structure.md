@@ -16,7 +16,7 @@ Keep this file updated whenever:
 
 Use `proposal.md` for the product goal, architecture direction, MVP scope, and milestones. Use this file for the most updated structure of the actual system. If `proposal.md` and this file disagree about current folders or module responsibilities, this file should be updated to reflect the actual repository structure.
 
-Use `plan1.txt`, `plan2.txt`, `plan2.5.txt`, `plan2.5.1.txt`, and `plan3.txt` as milestone notes. Do not treat old plan files as the current structure source of truth.
+Use `plan1.txt`, `plan2.txt`, `plan2.5.txt`, `plan2.5.1.txt`, `plan3.txt`, and `plan5.txt` as milestone notes. Do not treat old plan files as the current structure source of truth.
 
 ## Visual Overview
 
@@ -50,17 +50,24 @@ src/ingestion/company.py
   +-- src/storage/metrics_repository.py
   |     -> persist mapped base financial metrics
   +-- src/storage/indicators_repository.py
-        -> persist derived financial indicators and skipped calculations
+  |     -> persist derived financial indicators and skipped calculations
+  +-- src/retrieval/service.py
+  |     -> build and query local vector and BM25 filing-evidence indexes
+  +-- src/storage/retrieval_repository.py
+        -> persist canonical filing chunks and current index generation state
 
 Generated local data:
 
 data_store/filings/          downloaded SEC filing HTML
+data_store/knowledge/        local embedding cache and versioned retrieval indexes
 stock_data.db                SQLite database
   raw_xbrl_facts             normalized XBRL facts table
   companies                  local company registry
   filings                    ingested filing inventory
   financial_metrics          base metrics mapped from raw XBRL facts
   financial_indicators       derived indicators with formulas and traceability
+  filing_chunks              canonical section-aware filing text chunks
+  retrieval_index_state      current complete retrieval generation per company
 ```
 
 ### Backend Layer Map
@@ -84,10 +91,10 @@ Data and analysis layers
   +-- src/processing/         XBRL normalization, fact cleanup, active-window selection,
   |                            and deterministic base metric mapping
   +-- src/storage/            SQLite persistence and retrieval for raw facts,
-  |                            companies, filings, base metrics, and indicators
+  |                            companies, filings, metrics, indicators, and chunks
   +-- src/indicators/         deterministic derived financial indicators
   +-- src/analytics/          planned deterministic financial analysis
-  +-- src/retrieval/          planned filing chunking and evidence retrieval
+  +-- src/retrieval/          local filing chunking, hybrid indexing, and evidence retrieval
   +-- src/analyze/            planned Gemini/RAG answer synthesis
   +-- src/evaluation/         planned analysis-quality checks
 ```
@@ -214,6 +221,7 @@ experiments/
     experiment_proposal.md
   MS5/
     experiment_proposal.md
+    milestone5_retrieval_pipeline.py
   MS6/
     experiment_proposal.md
   MS7/
@@ -229,7 +237,8 @@ experiments/
 - `experiments/MS3/experiment_proposal.md`: Human-inspection proposal for the Milestone 3 indicator engine experiment. It defines active accession-window scope, yearly and quarterly indicator tables for the requested catalog, skipped-period reasons, formulas, and source-metric traceability output.
 - `experiments/MS3/milestone3_indicator_engine.py`: Runnable Milestone 3 experiment script that reads stored `financial_indicators` and writes a `.txt` report under `experiments/MS3` with active accession-window scope, yearly and quarterly indicator tables for the requested ticker or tickers, skipped reasons, formulas, and source traceability.
 - `experiments/MS4/experiment_proposal.md`: Human-inspection proposal for the Milestone 4 deterministic financial analytics experiment. It defines trend, comparison, gap, outlier, and chart-ready output.
-- `experiments/MS5/experiment_proposal.md`: Human-inspection proposal for the Milestone 5 retrieval pipeline experiment. It defines chunking, retrieval metadata, score, source-path, and preview output.
+- `experiments/MS5/experiment_proposal.md`: Human-inspection proposal for the Milestone 5 retrieval pipeline experiment. It defines active filing coverage, section-aware chunking, generation state, hybrid retrieval metadata, source lineage, and saved text-report output.
+- `experiments/MS5/milestone5_retrieval_pipeline.py`: Runnable local retrieval experiment that builds or reuses a company index, accepts repeatable queries, saves `experiment_report_<TICKER>.txt`, and prints only a brief terminal summary by default.
 - `experiments/MS6/experiment_proposal.md`: Human-inspection proposal for the Milestone 6 Gemini integration experiment. It defines model, prompt-source, prompt-preview, and call-metadata output.
 - `experiments/MS7/experiment_proposal.md`: Human-inspection proposal for the Milestone 7 RAG analysis experiment. It defines evidence inventory, answer section separation, references, and unsupported-claim checks.
 
@@ -259,7 +268,7 @@ Runtime configuration loading.
 
 Current files:
 
-- `settings.py`: Defines `Settings`, model configuration validation, and `load_settings`.
+- `settings.py`: Defines `Settings`, chat-model validation, local retrieval model/chunk settings, storage paths, and `load_settings`.
 - `__init__.py`: Exports configuration helpers.
 
 Key responsibilities:
@@ -297,7 +306,7 @@ Current files:
 - `filings.py`: Filing metadata listing, latest-form selection helpers, and filing document download.
 - `refresh_policy.py`: Next-check date heuristics for 10-K and 10-Q refresh checks, plus business-day helpers.
 - `company.py`: Refresh-aware `ingest_company` orchestration and `CompanyIngestionResult`.
-- `company.py`: also exposes `delete_ingested_company` for local company reset/delete orchestration.
+- `company.py`: also exposes `delete_ingested_company` for local company reset/delete orchestration, including canonical retrieval rows and generated index artifacts.
 - `errors.py`: SEC ingestion error types.
 - `__init__.py`: Public exports for ingestion APIs.
 
@@ -370,6 +379,7 @@ Current files:
 - `filings_repository.py`: `FilingRepository` and `FilingRecord` for ingested filing metadata and active-window state.
 - `metrics_repository.py`: `FinancialMetricRepository` and `FinancialMetric` for mapped base financial metrics.
 - `indicators_repository.py`: `FinancialIndicatorRepository` for persisted derived indicator rows.
+- `retrieval_repository.py`: `RetrievalRepository`, `FilingChunk`, and `RetrievalIndexState` for canonical filing chunks and atomic current-generation state.
 - `__init__.py`: Public exports for storage APIs.
 
 Key responsibilities:
@@ -378,11 +388,13 @@ Key responsibilities:
 - Persist normalized raw XBRL facts.
 - Upsert facts using a stable uniqueness key.
 - Retrieve stored facts by CIK and optional concept filters.
-- Delete company-scoped raw facts, filing metadata, base metrics, derived indicators, and registry rows when reset orchestration requests it.
+- Delete company-scoped raw facts, filing metadata, base metrics, derived indicators, retrieval chunks/state, and registry rows when reset orchestration requests it.
 - Persist company registry records.
 - Persist ingested filing metadata.
 - Persist business-friendly base financial metrics mapped from raw XBRL facts.
 - Persist derived financial indicators with formula versions, skipped reasons, source metric IDs, raw fact IDs, accession numbers, and active-window state.
+- Persist active-window filing chunks with source hashes, resolved source paths, canonical sections, stable chunk IDs, and parser/splitter versions.
+- Switch the current retrieval generation only after complete vector and BM25 artifacts exist.
 - Track latest ingested filing dates and next-check dates for 10-K and 10-Q updates.
 - Mark filings, base metrics, and derived indicators as active or inactive for the default inspection scope.
 - Keep `raw_xbrl_facts` as the source-of-truth archive while active-window filters constrain normal metric retrieval.
@@ -440,19 +452,20 @@ Semantic filing retrieval layer.
 
 Current files:
 
-- `__init__.py`: Package marker.
+- `errors.py`: Named retrieval configuration, corpus, query, mismatch, and corruption errors.
+- `models.py`: Parsed-section, index-sync, filing-summary, and retrieved-evidence dataclasses.
+- `parser.py`: Visible Inline XBRL cleanup and form-aware 10-K/10-Q item extraction.
+- `service.py`: Active-window synchronization, stable chunking, local index generation, integrity validation, hybrid retrieval, and artifact cleanup.
+- `__init__.py`: Public retrieval exports.
 
-Current status:
+Current status and responsibilities:
 
-- Folder exists as a placeholder.
-- Filing chunking, indexing, and retrieval are not implemented yet.
-
-Planned responsibilities:
-
-- Load and chunk SEC filing text.
-- Store filing chunk metadata.
-- Build retrieval indexes using LlamaIndex tools where suitable.
-- Retrieve relevant filing evidence for analysis and Q&A.
+- Loads active-window 10-K and 10-Q HTML from stored filing records.
+- Removes non-visible Inline XBRL content and extracts form-aware SEC sections.
+- Uses LlamaIndex `SentenceSplitter`, local MiniLM embeddings, and a persisted BM25 index.
+- Stores canonical chunks and lineage in SQLite while treating retrieval indexes as rebuildable generation artifacts.
+- Reuses unchanged generations and preserves the last complete generation when a rebuild fails.
+- Returns ranked evidence with component scores, fused rank, and complete filing lineage without calling Gemini.
 
 ### `src/analyze/`
 
@@ -510,8 +523,9 @@ manual and experiment-driven:
 
 - Use milestone experiment scripts under `experiments/MS*/` for human-readable
   workflow inspection.
-- Inspect generated SQLite databases, filing downloads, CSV exports, terminal
-  reports, and optional Markdown reports.
+- Inspect generated SQLite databases, filing downloads, CSV exports, and saved
+  text or Markdown reports; terminal output should remain concise when the
+  experiment defines a report artifact.
 - Use `uv run python ...` for local scripts and experiment runs.
 - Do not add pytest files unless the project testing policy changes again.
 

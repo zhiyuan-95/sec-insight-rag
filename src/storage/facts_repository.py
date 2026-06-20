@@ -120,6 +120,26 @@ class RawFactRepository:
         rows = self.connection.execute(query, params).fetchall()
         return [StoredRawFact(raw_fact_id=row["id"], fact=_row_to_fact(row)) for row in rows]
 
+    def list_distinct_concepts(self, cik: str) -> tuple[str, ...]:
+        """List distinct raw concept names without loading complete fact rows."""
+        rows = self.connection.execute(
+            "SELECT DISTINCT concept FROM raw_xbrl_facts WHERE cik = ? ORDER BY concept",
+            [cik],
+        ).fetchall()
+        return tuple(str(row["concept"]) for row in rows if row["concept"])
+
+    def list_distinct_periods(self, cik: str) -> list[tuple[str | None, int | None, str | None]]:
+        """List distinct form and fiscal-period values without loading complete facts."""
+        rows = self.connection.execute(
+            """
+            SELECT DISTINCT form, fiscal_year, fiscal_period
+            FROM raw_xbrl_facts
+            WHERE cik = ?
+            """,
+            [cik],
+        ).fetchall()
+        return [(row["form"], row["fiscal_year"], row["fiscal_period"]) for row in rows]
+
     def delete_by_cik(self, cik: str) -> int:
         """Delete all raw XBRL facts for one CIK and return deleted row count."""
         cursor = self.connection.execute("DELETE FROM raw_xbrl_facts WHERE cik = ?", [cik])

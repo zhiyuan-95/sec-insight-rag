@@ -1,6 +1,11 @@
 """XBRL processing package."""
 
-from src.processing.active_window import active_accessions_for_facts, active_period_keys, is_fact_in_active_window
+from src.processing.active_window import (
+    active_accessions_for_facts,
+    active_period_keys,
+    active_period_keys_from_periods,
+    is_fact_in_active_window,
+)
 from src.processing.base_metrics import (
     BASE_METRIC_MAPPINGS,
     BaseMetricRecord,
@@ -40,6 +45,7 @@ __all__ = [
     "XbrlProcessingError",
     "active_accessions_for_facts",
     "active_period_keys",
+    "active_period_keys_from_periods",
     "classify_period",
     "find_duplicate_facts",
     "industry_label_assignments_for_company",

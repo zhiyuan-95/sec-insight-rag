@@ -45,7 +45,7 @@ Use `local` mode by default. Retrieval should read local filing files from
 Command:
 
 ```text
-python experiments/MS5/milestone5_retrieval_pipeline.py --ticker AAPL --query "revenue change" --mode local
+uv run python experiments/MS5/milestone5_retrieval_pipeline.py --ticker AAPL --query "revenue change" --mode local
 ```
 
 Purpose:
@@ -57,7 +57,7 @@ Inspect retrieval for management discussion and financial evidence.
 Command:
 
 ```text
-python experiments/MS5/milestone5_retrieval_pipeline.py --ticker AAPL --query "supply chain risk" --mode local
+uv run python experiments/MS5/milestone5_retrieval_pipeline.py --ticker AAPL --query "supply chain risk" --mode local
 ```
 
 Purpose:
@@ -70,7 +70,12 @@ Purpose:
 
 Show weak or empty retrieval results clearly.
 
-## Proposed Terminal Report
+## Saved Text Report
+
+Save the detailed report to `experiments/MS5/experiment_report_<TICKER>.txt`
+unless `--report-path` is provided. The terminal should show only one brief
+completion or failure summary. Dependency progress and warnings should be
+captured in the report unless `--verbose` is used.
 
 ```text
 Milestone 5 Experiment: Retrieval Pipeline
@@ -108,15 +113,15 @@ Expected Outcome:
   paths, and text previews before chunks are passed into analysis.
 ```
 
-## Required Printed Sections
+## Required Report Sections
 
-1. Human question
-2. Run context
-3. Chunking summary
-4. Top retrieved chunks
-5. Chunk preview
-6. Artifacts to inspect
-7. Expected outcome
+1. Run context and retrieval configuration
+2. Index generation status and timing
+3. Active filing and section coverage
+4. Fallback-section and parsing warnings
+5. Top retrieved evidence with vector, BM25, and fused scores
+6. Full source lineage and readable previews
+7. Artifact integrity and captured dependency output
 
 ## Implementation Guidance
 
@@ -126,6 +131,10 @@ Expected Outcome:
   text.
 - Preserve metadata: ticker, CIK, form, filing date, section, accession number,
   and source path.
+- Store canonical chunks in SQLite and treat vector/BM25 indexes as rebuildable
+  generation artifacts.
+- Use local `sentence-transformers/all-MiniLM-L6-v2` embeddings and no external
+  embedding API.
 - Do not use Gemini to judge retrieval quality.
 
 ## Edge Cases To Show
