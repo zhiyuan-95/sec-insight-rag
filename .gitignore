@@ -17,6 +17,8 @@ stock_data.db
 data_store/
 experiments/storage/
 experiments/MS3/milestone3_indicator_report_*.txt
+experiments/MS*/experiment_report*.md
+experiments/MS*/experiment_report*.txt
 
 # Generated exports
 data/exports/*
@@ -30,3 +32,4 @@ plan2.txt
 plan2.5.txt
 plan2_5.txt
 to_do.txt
+to_do.md

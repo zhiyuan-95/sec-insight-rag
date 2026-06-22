@@ -166,7 +166,7 @@ The important rule is that each box should remain traceable. Reported facts, cal
   plan5.txt
   proposal.md
   pyproject.toml
-  to_do.txt
+  to_do.md
   uv.lock
   data/
   data_store/
@@ -195,7 +195,7 @@ The important rule is that each box should remain traceable. Reported facts, cal
 - `proposal.md`: Current product scope, architecture direction, and MVP roadmap.
 - `pyproject.toml`: Python project metadata and dependencies.
 - `tests/`: Automated pytest coverage for implemented deterministic behavior and important failure paths.
-- `to_do.txt`: Local task notes.
+- `to_do.md`: Local task notes. This file is ignored and not part of the tracked repository.
 - `uv.lock`: Locked dependency versions for `uv`.
 - `stock_data.db`: Local generated SQLite database. This is runtime data, not source architecture.
 
@@ -590,6 +590,7 @@ The following paths may exist locally but should not be treated as source archit
 - generated Milestone 2.5 report artifact: `experiments/MS2_5/experiment_report.md`
 - generated Milestone 3 report artifacts: `experiments/MS3/milestone3_indicator_report_*.txt`
 - generated Milestone 5 report artifacts: `experiments/MS5/experiment_report_*.txt`
+- local task notes in `to_do.md`
 
 ## Update Rule
 
