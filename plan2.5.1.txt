@@ -1,4 +1,4 @@
-Plan 2.5.1 - Hard Industry Label Raw Fact Mapping
+Plan 2.5.1 - Gemini-Assisted Industry Label Raw Fact Mapping
 
 Problem Summary
 
@@ -16,10 +16,17 @@ raw evidence.
 The system needs a way to:
 
 - keep the raw XBRL archive broad
+- classify each company into one or more approved hard industry labels from
+  the latest relevant 10-K Item 1 Business section
+- reuse approved labels during the same annual filing cycle
+- refresh the labels when a newer 10-K is ingested, because a company can move
+  into or out of industries over time
 - define target raw facts for each hard industry label
 - use the union of target raw facts when a company has multiple hard industry labels
 - map only approved, business-meaningful concepts into financial_metrics
 - keep unknown concepts visible for review
+- run semantic mapping only after Round 1 hard mapping leaves missing target
+  raw facts
 - show the industry-label target facts and mapping coverage in the experiment
   report
 
@@ -76,8 +83,51 @@ Company Industry Label Assignment Requirement
 
 Plan 2.5.1 must make hard industry label assignment explicit and auditable.
 
-For the first implementation, company hard industry labels should come from a
-source-controlled assignment registry, not from automatic inference.
+Company hard industry labels should be stored in the system as reusable company
+state. The stored approved labels are the labels that control target raw fact
+selection.
+
+The label lifecycle is:
+
+```text
+first company initialization:
+  no approved labels exist
+  -> use latest active 10-K
+  -> extract Item 1. Business
+  -> classify with Gemini using the fixed 11-label set
+  -> validate strict JSON output
+  -> if confidence and evidence pass the gate:
+       persist labels as approved
+       use labels for target raw fact selection
+     else:
+       persist review-needed evidence
+       use common-base targets only
+
+normal reuse during the same annual filing cycle:
+  approved labels exist for the current latest 10-K
+  -> reuse stored labels
+  -> do not call Gemini
+
+new annual 10-K ingested:
+  latest 10-K accession changed
+  -> extract new Item 1. Business
+  -> classify again with Gemini
+  -> if confidence and evidence pass:
+       replace/update approved labels
+     else:
+       keep prior approved labels for continuity and report the refresh failure
+       as a review state
+```
+
+Important meaning:
+
+```text
+No approved labels means:
+  no rows in company_industry_labels for this company have status = approved
+  for the latest accepted classification state.
+
+It does not mean the company has no industry.
+```
 
 Recommended first file:
 
@@ -95,6 +145,14 @@ CompanyIndustryLabelAssignment
   assignment_source
   assignment_reason
   supporting_evidence
+  source_form
+  source_accession_number
+  source_filing_date
+  source_section
+  source_text_sha256
+  classifier_model
+  classifier_prompt_version
+  confidence
   reviewed_at
   label_status
   notes
@@ -104,19 +162,33 @@ Rules:
 
 - `assigned_industry_labels` must use only the fixed 11-label set.
 - A company can have more than one hard industry label.
-- `assignment_source` should show whether the label came from manual review,
-  SIC support, business description support, or another approved source.
+- `assignment_source` should show whether the label came from Gemini
+  classification, manual review, source-controlled seed data, SIC support, or
+  another approved source.
 - SIC code, SIC description, observed XBRL concepts, and business descriptions
-  are supporting evidence. They are not the source of truth in the first
-  implementation.
+  are supporting evidence. Observed XBRL concepts must not be the source of
+  truth for labels.
+- Gemini must classify from SEC filing narrative evidence, specifically the
+  latest relevant 10-K Item 1 Business section.
+- Gemini output must be strict JSON, not free-form text.
+- The JSON must include `industry_labels`, `confidence`, `reason`, and
+  `evidence_quotes`.
+- The system must validate every returned label against the fixed 11-label set.
+- High-confidence, valid output can be persisted as `approved`.
+- Low-confidence, malformed, or invalid output must be persisted as
+  `needs_label_review` evidence and must not control industry-specific target
+  raw fact selection.
+- Approved labels should be reused until a newer 10-K is ingested.
+- A newer 10-K should trigger annual reclassification because company business
+  mix can change.
 - If no label is assigned, the report should mark the company as
   `needs_label_review` and avoid pretending that industry-specific target facts
   are complete.
 
 Important:
 
-Do not let observed XBRL concepts alone assign the industry label in the first
-implementation. That creates circular logic:
+Do not let observed XBRL concepts alone assign the industry label. That creates
+circular logic:
 
 ```text
 observed raw facts
@@ -126,6 +198,10 @@ observed raw facts
 
 Observed XBRL concept patterns can help review an assignment, but they should not
 silently decide the assignment.
+
+Gemini classification is allowed for industry labels only. Gemini must not
+approve raw XBRL concept-to-financial metric mappings. Raw concept mappings
+still require deterministic catalog entries or governed approved mapping records.
 
 Industry Target Concept Catalog Requirement
 
@@ -278,6 +354,97 @@ SEC taxonomy and observed company filings before implementation. The plan is to
 store the catalog explicitly, inspect it in the report, and refine it from real
 raw facts.
 
+Target Candidate Embedding Requirement
+
+Plan 2.5.1 must align with the raw fact mapping pipeline:
+
+```text
+company filing
+  -> ingest broad XBRL raw facts
+  -> classify company industry labels from latest 10-K Item 1 Business
+  -> choose common + industry-specific target raw fact candidates
+  -> Round 1: hard mapping
+  -> Round 2: semantic mapping only for missing target raw facts
+```
+
+Round 1 hard mapping:
+
+```text
+target raw fact candidate names from the catalog
+  compared directly against
+provided company XBRL raw fact concept names
+
+if candidate concept is observed and approved:
+  map raw fact into system financial_metrics
+
+if no candidate concept is observed for the target:
+  mark the target raw fact as missing for Round 2
+```
+
+Round 2 semantic mapping:
+
+```text
+missing target raw facts
+  -> select their pre-embedded candidate raw fact vectors
+
+unknown / unmapped company XBRL raw facts
+  -> embed during ingestion or experiment run
+
+semantic similarity
+  -> compare company unknown fact vectors against selected target candidate vectors
+  -> persist review-only mapping candidates
+  -> do not automatically promote candidates into financial_metrics
+```
+
+The important vector rule:
+
+```text
+Target raw fact candidate vectors are pre-embedded and reused.
+Company-provided unknown XBRL fact vectors are generated when needed.
+```
+
+Do not create one blended vector per internal metric. Each target raw fact can
+have multiple candidate raw fact names, and each candidate raw fact name should
+have its own vector.
+
+Example:
+
+```text
+target metric: revenue
+
+candidate raw fact vectors:
+  RevenueFromContractWithCustomerExcludingAssessedTax
+  Revenues
+  SalesRevenueNet
+
+company unknown raw fact vectors:
+  generated from the company's unmapped XBRL concept name, label, and description
+```
+
+Recommended cache key shape:
+
+```text
+taxonomy
+raw_concept
+internal_metric_name
+statement_type
+industry_label
+embedding_model
+candidate_text_sha256
+catalog_version
+```
+
+This keeps semantic mapping aligned with the diagram:
+
+```text
+Round 1 answers:
+  did we find any known candidate name for this target raw fact?
+
+Round 2 answers:
+  if not, is any unknown company XBRL concept semantically close to one of the
+  pre-embedded candidate names for that missing target?
+```
+
 Current System Facts
 
 The current system already has the right foundation:
@@ -291,6 +458,13 @@ The current system already has the right foundation:
   accession traceability.
 - `companies` stores `sic` and `sic_description`, which can be used as one
   optional supporting signal for assigning hard industry labels.
+- `company_industry_labels` stores reusable company industry labels, status,
+  confidence, evidence, classifier version, and review metadata.
+- `src/retrieval/parser.py` already extracts 10-K `Item 1. Business` as the
+  `business` section when SEC item headings are detected.
+- `src/analyze/prompts.py` is the required location for Gemini prompt templates.
+- Settings already include `gemini_api_key` and the pinned
+  `gemini-2.5-flash` chat model.
 - The MS2.5 experiment report already shows raw fact mapping coverage, alternate
   XBRL tags, and unknown XBRL concepts.
 - The MS3 indicator engine calculates from stable internal metric names, not
@@ -331,11 +505,11 @@ Plan 2.5.1 should not:
 - map every unknown XBRL concept
 - force a company into only one industry label
 - mix segment-level facts into consolidated company indicators
-- add LLM reasoning to metric mapping
+- use Gemini to approve raw XBRL concept-to-financial metric mappings
+- use free-form LLM output to control mapping behavior
 - calculate derived indicators inside ingestion or base metric mapping
 - replace the MS3 indicator engine
-- change the database schema in the first implementation unless later evidence
-  proves it is necessary
+- change the financial_metrics schema for industry labels
 
 Shared Understanding
 
@@ -345,8 +519,13 @@ The system should use three separate layers:
 raw_xbrl_facts
   broad archive of reported SEC/XBRL facts
 
+company_industry_labels
+  approved reusable hard industry labels derived from 10-K Item 1 Business or
+  manual/source-controlled review evidence
+
 mapping catalog
-  source-controlled target facts and approved concept-to-metric candidates
+  source-controlled target raw facts, candidate raw fact names, pre-embedded
+  candidate vectors, and approved concept-to-metric candidates
 
 financial_metrics
   curated, canonical base metrics used by indicators and analysis
@@ -382,10 +561,11 @@ Do not use industry target raw fact sets as ingestion filters.
 Use them as mapping and report coverage targets.
 ```
 
-Design Decision 2 - Add An Inspectable Mapping Catalog
+Design Decision 2 - Add An Inspectable Mapping And Candidate Vector Catalog
 
 Create a source-controlled mapping catalog that stores hard industry label target
-raw facts and approved mapping candidates.
+raw facts, candidate raw fact names, approved mapping candidates, and stable
+candidate embedding metadata.
 
 Recommended first file:
 
@@ -422,6 +602,17 @@ MappingDecision
   internal_metric_name
   status
   reason
+
+TargetCandidateEmbedding
+  taxonomy
+  raw_concept
+  internal_metric_name
+  statement_type
+  industry_label
+  embedding_model
+  candidate_text_sha256
+  catalog_version
+  vector
 ```
 
 Start with the fixed 11-label catalog. Do not create custom labels for one
@@ -445,6 +636,10 @@ Real Estate
 
 Only add target raw concepts to a label when we need them for an experiment, a
 real ticker, or a reviewed indicator need.
+
+Target candidate vectors should be generated from the catalog and reused across
+companies. Regenerate them only when the candidate text, catalog version, or
+embedding model changes.
 
 Design Decision 3 - Keep Canonical Metric Names Stable
 
@@ -477,15 +672,29 @@ Design Decision 4 - Use Union Target Sets For Multi-Label Companies
 
 A company may have more than one hard industry label.
 
-In the first implementation, labels should be selected from the source-controlled
-company industry label registry. The following signals can support the registry
-decision and explain it in the report:
+Labels should be selected from persisted approved `company_industry_labels`.
+Those labels may originate from Gemini classification, source-controlled seed
+assignments, or manual review.
+
+Gemini classification rules:
+
+- classify from the latest active 10-K Item 1 Business section
+- use only the fixed 11-label set
+- return strict JSON
+- include evidence quotes and confidence
+- approve labels only when confidence and validation pass
+- reuse approved labels until a newer 10-K is ingested
+- reclassify when a new annual 10-K is ingested
+
+The following signals can support the label decision and explain it in the
+report:
 
 - SEC SIC code as supporting evidence
 - SIC description
-- company business description
+- 10-K Item 1 Business narrative
 - observed XBRL concept patterns
-- manually approved project configuration later if needed
+- manually approved project configuration
+- source-controlled seed assignment
 - future segment evidence
 
 For a multi-label company:
@@ -537,12 +746,22 @@ But it should expand selectively.
 The process should be:
 
 ```text
-1. Report unknown and alternate concepts.
-2. Compare them against hard industry label target facts.
-3. Decide whether the concept represents a useful financial metric.
-4. Add the approved concept to the mapping catalog.
-5. Preserve the source raw fact traceability.
-6. Leave non-useful concepts in raw_xbrl_facts only.
+1. Ingest broad raw XBRL facts.
+2. Build the common + approved industry target raw fact candidate set.
+3. Round 1 hard mapping:
+   - compare candidate raw fact names directly against observed company facts
+   - map only approved deterministic candidates into financial_metrics
+   - record missing target raw facts
+4. Round 2 semantic mapping:
+   - load pre-embedded vectors for candidate names belonging to the missing
+     target raw facts
+   - embed unknown / unmapped company XBRL concepts from the provided company
+     facts
+   - compare similarity
+   - persist review-only mapping candidates
+5. Human or governed review approves useful candidate mappings.
+6. Preserve source raw fact traceability.
+7. Leave non-useful concepts in raw_xbrl_facts only.
 ```
 
 Do not expand mappings just to reduce the unknown count.
@@ -553,16 +772,40 @@ Better mapping quality is the goal.
 Plan 2.5.1 Data Flow
 
 ```text
-source-controlled company industry label registry
-  -> provide assigned hard industry labels and assignment rationale
-
-SEC companyfacts
+company filing ingestion
+  -> fetch SEC submissions and companyfacts
+  -> download active 10-K / 10-Q filing HTML
   -> normalize broad raw facts
   -> store raw_xbrl_facts
-  -> validate assigned hard industry labels
-  -> build union target raw fact set
-  -> compare target facts against observed raw facts
-  -> map approved raw concepts into financial_metrics
+
+industry label selection
+  -> if approved labels exist and latest 10-K accession has not changed:
+       reuse labels
+     else:
+       extract latest 10-K Item 1 Business
+       classify with Gemini using fixed 11-label set
+       validate strict JSON output
+       persist approved labels or review-needed evidence
+       if refresh fails and prior approved labels exist:
+         keep prior labels for continuity and report stale-label review state
+
+target raw fact selection
+  -> common base targets
+  -> UNION industry targets for every approved label
+  -> select target candidate raw fact names
+
+Round 1 hard mapping
+  -> compare target candidate raw fact names against company XBRL facts
+  -> map approved deterministic candidates into financial_metrics
+  -> record missing target raw facts
+
+Round 2 semantic mapping
+  -> load pre-embedded target candidate vectors for missing targets
+  -> embed unknown / unmapped company XBRL facts
+  -> compare semantic similarity
+  -> persist review-only mapping candidates
+
+analysis readiness
   -> report mapping coverage
   -> calculate indicators from financial_metrics
 ```
@@ -580,7 +823,16 @@ Company Industry Labels:
   assigned_industry_labels:
   assignment_source:
   assignment_reason:
+  classifier_model:
+  classifier_prompt_version:
+  source_form:
+  source_accession_number:
+  source_filing_date:
+  source_section:
+  source_text_sha256:
+  confidence:
   supporting_evidence:
+  evidence_quotes:
   label_status:
   review_notes:
 
@@ -601,6 +853,17 @@ Found Target Facts:
 
 Missing Target Facts:
   target facts expected by assigned hard industry labels but not observed
+
+Semantic Mapping Candidates:
+  missing_target_metric_name
+  missing_target_candidate_raw_concept
+  observed_unknown_xbrl_concept
+  observed_label
+  observed_description
+  semantic_similarity
+  candidate_vector_cache_key
+  match_status
+  requires_review
 
 Found But Unmapped Target Facts:
   target facts observed but not yet mapped because they need approval or quality
@@ -649,23 +912,26 @@ Verification:
 - confirm it answers why unknown concepts exist
 - confirm it says we should not map every unknown concept
 
-Phase 2 - Add Company Label Registry And Mapping Catalog
+Phase 2 - Add Company Label Registry, Mapping Catalog, And Candidate Vector Catalog
 
 Create:
 
 ```text
 src/processing/company_industry_labels.py
 src/processing/mapping_catalog.py
+src/processing/semantic_mapping.py
 ```
 
 Initial content:
 
 - dataclass for company hard industry label assignments
-- source-controlled assignments for experiment tickers
+- persisted label records as the source of reusable approved labels
+- source-controlled assignments only as seed data or manual fallback
 - dataclasses for hard industry labels and target facts
 - the fixed 11-label hard industry set
 - common base target facts used for most companies
 - initial target concept bundles for each hard industry label
+- target candidate embedding cache helpers
 - helper functions:
 
 ```text
@@ -673,20 +939,72 @@ industry_label_assignments_for_company(ticker, cik)
 industry_label_evidence_for_company(sic, sic_description, observed_concepts)
 target_facts_for_industry_labels(industry_labels)
 mapping_candidates_by_concept()
+candidate_vectors_for_missing_targets(missing_targets)
 ```
 
 Keep this source-controlled and human-readable.
 
-No database schema change is required for the first version.
+Use the existing `company_industry_labels` table for label persistence. It
+already has status, confidence, evidence, classifier version, and review fields.
 
-First-version rule:
+Vector rule:
 
-`industry_label_assignments_for_company(...)` should read the explicit registry
-assignment. `industry_label_evidence_for_company(...)` can collect supporting
-evidence for review, but it should not silently infer labels in the first
-implementation.
+Pre-embed target candidate raw fact names from the mapping catalog. Do not
+embed target definitions repeatedly for every company ingestion. Embed only the
+company-provided unknown / unmapped XBRL facts when semantic matching is needed.
 
-Phase 3 - Refactor Base Metric Mapping To Use Catalog
+Phase 3 - Add Gemini Industry Classification And Annual Label Refresh
+
+Create:
+
+```text
+src/analyze/industry_classification.py
+```
+
+Update:
+
+```text
+src/analyze/prompts.py
+src/ingestion/company.py
+pyproject.toml
+uv.lock
+```
+
+Goal:
+
+- use the official Gemini SDK
+- keep the prompt template in `src/analyze/prompts.py`
+- classify only from latest active 10-K Item 1 Business
+- require strict JSON output
+- validate labels against the fixed 11-label set
+- persist high-confidence valid labels as `approved`
+- persist low-confidence or malformed results as `needs_label_review`
+- reuse approved labels during the same annual filing cycle
+- reclassify when a newer 10-K is ingested
+
+Required JSON shape:
+
+```text
+{
+  "industry_labels": ["Information Technology", "Communication Services"],
+  "confidence": 0.0-1.0,
+  "reason": "...",
+  "evidence_quotes": ["short quote from Item 1 Business", "..."]
+}
+```
+
+Fallback behavior:
+
+- If no 10-K Item 1 Business section is available, do not call Gemini.
+- If `GEMINI_API_KEY` is missing, do not fail ingestion; persist/report a
+  review-needed state and use common-base targets only unless approved labels
+  already exist.
+- If Gemini output is malformed, includes unknown labels, or confidence is too
+  low, do not let it control industry-specific target raw fact selection.
+- If a new 10-K reclassification fails, keep the prior approved labels for
+  continuity and report that the latest classification needs review.
+
+Phase 4 - Refactor Base Metric Mapping To Use Catalog
 
 Update:
 
@@ -708,7 +1026,42 @@ Compatibility:
 - `financial_metrics` schema should not change in this phase
 - indicator engine should not change in this phase
 
-Phase 4 - Add Company Industry Labels And Target Coverage To MS2.5
+Phase 5 - Add Candidate-Level Semantic Mapping For Missing Targets
+
+Update:
+
+```text
+src/processing/semantic_mapping.py
+src/ingestion/company.py
+src/storage/concept_mappings_repository.py
+```
+
+Goal:
+
+- run semantic mapping only after Round 1 hard mapping identifies missing target
+  raw facts
+- select pre-embedded candidate vectors for the missing target raw facts
+- embed only the company's unknown / unmapped XBRL concepts during ingestion or
+  experiment execution
+- compare candidate vectors to company unknown fact vectors
+- persist results as review-only mapping candidates
+- never auto-promote semantic candidates into financial_metrics
+
+Expected candidate cache behavior:
+
+```text
+catalog target candidates
+  -> pre-embedded and cached by candidate key
+
+company unknown facts
+  -> embedded on demand
+
+similarity results
+  -> stored as candidate mappings with evidence
+  -> require review before becoming approved mappings
+```
+
+Phase 6 - Add Company Industry Labels And Target Coverage To MS2.5
 
 Update:
 
@@ -722,11 +1075,14 @@ Report additions:
 - company SIC and SIC description as supporting assignment evidence
 - assigned hard industry labels
 - assignment source, assignment reason, and label status
+- classifier model, prompt version, source 10-K accession, filing date, Item 1
+  source hash, confidence, and evidence quotes
 - supporting evidence used to justify or review the assigned labels
 - target raw fact coverage
 - missing target facts
 - found target facts
 - found but unmapped target facts
+- candidate-level semantic mapping suggestions for missing targets
 - unknown raw concepts outside current mapping catalog
 
 This is the most important experiment output for Plan 2.5.1.
@@ -739,9 +1095,11 @@ Which ones were present?
 Which ones mapped into financial_metrics?
 Which useful ones are missing from the mapping catalog?
 Which unknown facts are probably irrelevant?
+Did Gemini classify labels from the latest 10-K Item 1 Business or reuse stored labels?
+Which semantic candidates were suggested after Round 1 hard mapping failed?
 ```
 
-Phase 5 - Selectively Expand Mappings
+Phase 7 - Selectively Expand Mappings
 
 Use the MS2.5 report to review unknown and missing target concepts.
 
@@ -761,7 +1119,7 @@ Expansion workflow:
 Do not expand mapping just because a concept appears frequently.
 Expand mapping only when the concept has a clear business meaning in the system.
 
-Phase 6 - Prepare Hard-Industry-Label-Aware Indicator Catalogs
+Phase 8 - Prepare Hard-Industry-Label-Aware Indicator Catalogs
 
 This can happen after the base mapping catalog is useful.
 
@@ -851,17 +1209,63 @@ Real Estate:
 The indicator engine should still calculate from internal metrics, not raw XBRL
 concept names.
 
+Automated Test Requirements
+
+Add focused tests for deterministic behavior and mocked Gemini behavior.
+
+Required coverage:
+
+```text
+Industry classification:
+  - approved stored labels skip Gemini
+  - first initialization with valid high-confidence Gemini JSON persists approved labels
+  - low-confidence Gemini JSON does not control industry-specific target selection
+  - malformed Gemini JSON does not crash ingestion and does not approve labels
+  - unknown industry labels from Gemini are rejected
+  - missing 10-K Item 1 Business falls back to review-needed/common-base behavior
+  - new annual 10-K triggers reclassification
+  - same annual 10-K reuses stored approved labels
+
+Prompt and parser:
+  - prompt includes fixed 11-label vocabulary and strict JSON requirement
+  - 10-K Item 1 Business extraction supplies the classifier input
+
+Semantic mapping:
+  - candidate-level target embeddings create multiple vectors for one internal
+    metric when multiple candidate raw fact names exist
+  - cached target candidate vectors are reused
+  - company unknown XBRL facts are embedded on demand
+  - semantic matches are persisted as review-only candidates, not approved mappings
+
+Integration behavior:
+  - mocked Gemini labels change the selected industry target raw fact set before
+    Round 1 hard mapping
+  - Round 2 semantic mapping runs only after Round 1 leaves missing target facts
+```
+
+Verification command:
+
+```text
+uv run python -m pytest -q
+```
+
 Plan 2.5.1 Acceptance Evidence
 
 Plan 2.5.1 is working when the experiment report can show:
 
-- the source-controlled hard industry label assignment
+- the approved hard industry label assignment used for target raw fact selection
+- whether labels came from Gemini, manual/source-controlled seed data, or reuse
 - the company SIC and SIC description as supporting evidence
-- the assignment source, assignment reason, label status, and review notes
+- the source 10-K accession, Item 1 Business evidence, classifier model, prompt
+  version, confidence, assignment reason, label status, and review notes
+- stable label reuse within the same annual filing cycle
+- annual label reclassification when a newer 10-K is ingested
 - the union target raw fact set for the assigned hard industry labels
 - target facts found in `raw_xbrl_facts`
 - target facts missing from `raw_xbrl_facts`
 - found facts mapped into `financial_metrics`
+- Round 2 semantic mapping candidates generated only for missing target raw facts
+- candidate-level target vectors were reused from the pre-embedded cache
 - found target facts that need mapping review
 - unknown concepts that remain raw-only evidence
 - stable traceability from financial_metrics to raw_fact_id and accession number
@@ -878,6 +1282,8 @@ Expected report behavior:
 - `experiments/MS2_5/experiment_report.md` is updated
 - Company Industry Labels section is present
 - Target Raw Fact Coverage section is present
+- Semantic Mapping Candidates section is present when Round 1 leaves missing
+  target facts and unknown company facts are available
 - unknown concept count can still be high
 - useful found_unmapped target facts are visible for mapping review
 
@@ -918,6 +1324,32 @@ Mitigation:
   Explain in the report that unknown concepts are raw evidence and review
   candidates, not automatically missing mappings.
 
+Risk:
+  Gemini misclassifies the company and selects the wrong industry target raw
+  fact set.
+
+Mitigation:
+  Require strict JSON, validate labels against the fixed label set, require
+  confidence and Item 1 Business evidence quotes, and report low-confidence
+  classifications as `needs_label_review` instead of using them.
+
+Risk:
+  Approved labels become stale after the company changes business direction.
+
+Mitigation:
+  Reuse labels during the same annual filing cycle, but trigger
+  reclassification when a newer 10-K is ingested. Store source accession,
+  filing date, classifier version, prompt version, and Item 1 source hash with
+  label evidence.
+
+Risk:
+  Semantic mapping candidates are mistaken for approved mappings.
+
+Mitigation:
+  Persist semantic matches as review-only candidates. They must not populate
+  `financial_metrics` until a deterministic catalog mapping or governed
+  approved mapping record exists.
+
 Files Likely To Change Later
 
 Documentation:
@@ -926,6 +1358,7 @@ Documentation:
 docs/mapping_policy.md
 docs/structure.md
 experiments/MS2_5/experiment_proposal.md
+proposal.md
 ```
 
 Processing:
@@ -933,8 +1366,32 @@ Processing:
 ```text
 src/processing/company_industry_labels.py
 src/processing/mapping_catalog.py
+src/processing/semantic_mapping.py
 src/processing/base_metrics.py
 src/processing/__init__.py
+```
+
+LLM analysis:
+
+```text
+src/analyze/prompts.py
+src/analyze/industry_classification.py
+src/analyze/__init__.py
+```
+
+Ingestion and retrieval:
+
+```text
+src/ingestion/company.py
+src/retrieval/parser.py
+```
+
+Storage:
+
+```text
+src/storage/industry_labels_repository.py
+src/storage/concept_mappings_repository.py
+src/storage/database.py
 ```
 
 Experiment:
@@ -942,6 +1399,14 @@ Experiment:
 ```text
 experiments/MS2_5/milestone25_live_sec_inspection.py
 experiments/MS2_5/experiment_report.md
+```
+
+Dependencies and tests:
+
+```text
+pyproject.toml
+uv.lock
+tests/
 ```
 
 Possible later indicator work:
@@ -955,19 +1420,26 @@ experiments/MS3/experiment_proposal.md
 
 Recommended Next Action
 
-Start Plan 2.5.1 with the report-facing version:
+Start the revised Plan 2.5.1 with the classification-and-mapping pipeline:
 
 ```text
-1. Create `docs/mapping_policy.md`.
-2. Create `src/processing/company_industry_labels.py` with explicit assignments
-   for experiment tickers.
-3. Create `src/processing/mapping_catalog.py` with a small initial catalog.
-4. Extend MS2.5 to print Company Industry Labels and Target Raw Fact Coverage.
-5. Use the report to decide which mappings to expand.
+1. Keep broad raw XBRL ingestion unchanged.
+2. Add Gemini industry classification from latest 10-K Item 1 Business.
+3. Persist approved labels in `company_industry_labels`; reuse them during the
+   annual cycle and refresh them on a new 10-K.
+4. Use approved labels to build the common + industry union target candidate set.
+5. Run Round 1 hard mapping from approved candidate raw fact names.
+6. For missing target raw facts, run Round 2 semantic mapping with pre-embedded
+   candidate vectors and on-demand company unknown fact embeddings.
+7. Persist semantic matches as review-only mapping candidates.
+8. Extend MS2.5 to print label source, target coverage, hard mapping result,
+   semantic candidates, and unknown raw facts.
+9. Use the report to approve additional mappings deliberately.
 ```
 
 Do not start by building a full industry taxonomy system.
 Do not start by mapping every unknown XBRL concept.
+Do not let Gemini approve raw XBRL concept-to-financial metric mappings.
 
 Start with an inspectable catalog and let the experiment report reveal the next
 mapping gaps.

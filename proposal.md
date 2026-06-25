@@ -353,6 +353,15 @@ The first version will not include:
 * Automatic buy/sell ratings
 * Non-GAAP reconciliation beyond what is clearly available from filings
 
+### Deferred indicator extensions
+
+The core indicator catalog may later add ROIC, multi-year CAGR, accrual,
+stock-based compensation, capital-return, composite-score, DuPont, margin-bridge,
+and working-capital contribution indicators. Industry-specific indicators should
+remain in separate, explicit catalogs or modules rather than being forced into
+one universal catalog. Initial deferred families include bank, insurance, REIT,
+and SaaS operating indicators.
+
 ## GSTACK REVIEW REPORT
 
 | Review | Trigger | Why | Runs | Status | Findings |

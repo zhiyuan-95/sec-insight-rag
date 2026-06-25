@@ -72,3 +72,79 @@ def test_mapping_candidates_prefer_common_mapping_for_shared_concepts() -> None:
     assert candidates["Revenues"].internal_metric_name == "revenue"
     assert candidates["Revenues"].industry_label == COMMON_BASE_LABEL
     assert "AssetRetirementObligation" in candidates
+
+
+def test_direct_standard_candidates_from_mapping_file_are_available() -> None:
+    common_candidates = mapping_candidates_by_concept(())
+
+    assert (
+        common_candidates["RevenueFromContractWithCustomerIncludingAssessedTax"].internal_metric_name
+        == "revenue"
+    )
+    assert common_candidates["ProfitLoss"].internal_metric_name == "net_income"
+    assert common_candidates["InterestAndDebtExpense"].internal_metric_name == "interest_expense"
+    assert common_candidates["InterestExpenseNonoperating"].internal_metric_name == "interest_expense"
+    assert common_candidates["MarketableSecuritiesCurrent"].internal_metric_name == "short_term_investments"
+    assert common_candidates["AvailableForSaleSecuritiesCurrent"].internal_metric_name == "short_term_investments"
+    assert common_candidates["TradingSecuritiesCurrent"].internal_metric_name == "short_term_investments"
+    assert common_candidates["HeldToMaturitySecuritiesCurrent"].internal_metric_name == "short_term_investments"
+    assert common_candidates["OtherShortTermInvestments"].internal_metric_name == "short_term_investments"
+    assert common_candidates["InvestmentsCurrent"].internal_metric_name == "short_term_investments"
+    assert common_candidates["FinanceLeaseLiabilityCurrent"].internal_metric_name == "finance_lease_liability_current"
+    assert common_candidates["FinanceLeaseLiabilityNoncurrent"].internal_metric_name == "finance_lease_liability_noncurrent"
+    assert common_candidates["DepreciationAndAmortization"].internal_metric_name == "depreciation_and_amortization"
+    assert (
+        common_candidates["DepreciationAmortizationAndAccretionNet"].internal_metric_name
+        == "depreciation_and_amortization"
+    )
+    assert common_candidates["Depreciation"].internal_metric_name == "depreciation"
+    assert (
+        common_candidates["AmortizationOfIntangibleAssets"].internal_metric_name
+        == "amortization_of_intangible_assets"
+    )
+    assert (
+        common_candidates["WeightedAverageNumberOfSharesOutstandingBasicAndDiluted"].internal_metric_name
+        == "weighted_average_diluted_shares"
+    )
+    assert common_candidates["AccountsPayableTradeCurrent"].internal_metric_name == "accounts_payable"
+    assert common_candidates["PaymentsToAcquireProductiveAssets"].internal_metric_name == "capital_expenditure"
+
+
+def test_direct_standard_candidates_stay_scoped_to_selected_industry_labels() -> None:
+    common_candidates = mapping_candidates_by_concept(())
+    energy_candidates = mapping_candidates_by_concept(("Energy",))
+    communication_candidates = mapping_candidates_by_concept(("Communication Services",))
+    real_estate_candidates = mapping_candidates_by_concept(("Real Estate",))
+
+    assert "AssetRetirementObligations" not in common_candidates
+    assert energy_candidates["AssetRetirementObligations"].internal_metric_name == "asset_retirement_obligation"
+    assert communication_candidates["DeferredRevenueNoncurrent"].internal_metric_name == "deferred_revenue_noncurrent"
+    assert (
+        real_estate_candidates["OperatingLeasesIncomeStatementLeaseRevenue"].internal_metric_name
+        == "operating_lease_income"
+    )
+
+
+def test_short_term_investments_are_common_target_facts_for_indicators() -> None:
+    targets = target_facts_for_industry_labels(())
+    short_term_investment_concepts = {
+        target.raw_concept
+        for target in targets
+        if target.internal_metric_name == "short_term_investments"
+    }
+
+    assert short_term_investment_concepts == {
+        "ShortTermInvestments",
+        "MarketableSecuritiesCurrent",
+        "AvailableForSaleSecuritiesCurrent",
+        "TradingSecuritiesCurrent",
+        "HeldToMaturitySecuritiesCurrent",
+        "OtherShortTermInvestments",
+        "InvestmentsCurrent",
+    }
+
+
+def test_company_extension_wildcards_are_not_hard_mapping_candidates() -> None:
+    candidates = mapping_candidates_by_concept()
+
+    assert not any("*" in concept for concept in candidates)

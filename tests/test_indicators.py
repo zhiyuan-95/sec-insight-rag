@@ -66,6 +66,46 @@ def test_indicator_engine_returns_explicit_skip_reasons() -> None:
     assert results["current_ratio"].skip_reason == MISSING_REQUIRED_METRIC
 
 
+def test_indicator_engine_uses_finance_leases_and_depreciation_components_for_leverage() -> None:
+    metrics = [
+        _metric(1, "debt_current", "50", 2025, metric_id=1, raw_fact_id=11),
+        _metric(1, "finance_lease_liability_current", "5", 2025, metric_id=2, raw_fact_id=12),
+        _metric(1, "finance_lease_liability_noncurrent", "20", 2025, metric_id=3, raw_fact_id=13),
+        _metric(1, "shareholders_equity", "100", 2025, metric_id=4, raw_fact_id=14),
+        _metric(1, "cash_and_equivalents", "10", 2025, metric_id=5, raw_fact_id=15),
+        _metric(1, "short_term_investments", "5", 2025, metric_id=6, raw_fact_id=16),
+        _metric(1, "operating_income", "30", 2025, metric_id=7, raw_fact_id=17),
+        _metric(1, "depreciation", "4", 2025, metric_id=8, raw_fact_id=18),
+        _metric(1, "amortization_of_intangible_assets", "1", 2025, metric_id=9, raw_fact_id=19),
+    ]
+
+    results = _results_by_name(calculate_indicators(1, metrics))
+
+    assert results["debt_to_equity"].value_numeric == Decimal("0.75")
+    assert results["debt_to_equity"].source_metric_ids == (1, 2, 3, 4)
+    assert results["net_debt_to_ebitda"].value_numeric.quantize(Decimal("0.0001")) == Decimal("1.7143")
+    assert results["net_debt_to_ebitda"].source_metric_ids == (1, 2, 3, 5, 6, 7, 8, 9)
+
+
+def test_indicator_engine_prefers_direct_depreciation_and_amortization_metric() -> None:
+    metrics = [
+        _metric(1, "debt_current", "50", 2025, metric_id=1, raw_fact_id=11),
+        _metric(1, "finance_lease_liability_current", "5", 2025, metric_id=2, raw_fact_id=12),
+        _metric(1, "finance_lease_liability_noncurrent", "20", 2025, metric_id=3, raw_fact_id=13),
+        _metric(1, "cash_and_equivalents", "10", 2025, metric_id=4, raw_fact_id=14),
+        _metric(1, "short_term_investments", "5", 2025, metric_id=5, raw_fact_id=15),
+        _metric(1, "operating_income", "30", 2025, metric_id=6, raw_fact_id=16),
+        _metric(1, "depreciation_and_amortization", "9", 2025, metric_id=7, raw_fact_id=17),
+        _metric(1, "depreciation", "4", 2025, metric_id=8, raw_fact_id=18),
+        _metric(1, "amortization_of_intangible_assets", "1", 2025, metric_id=9, raw_fact_id=19),
+    ]
+
+    results = _results_by_name(calculate_indicators(1, metrics))
+
+    assert results["net_debt_to_ebitda"].value_numeric.quantize(Decimal("0.0001")) == Decimal("1.5385")
+    assert results["net_debt_to_ebitda"].source_metric_ids == (1, 2, 3, 4, 5, 6, 7)
+
+
 def test_indicator_engine_ignores_other_companies_and_can_emit_inactive_periods() -> None:
     metrics = [
         _metric(1, "revenue", "100", 2024, active=False),

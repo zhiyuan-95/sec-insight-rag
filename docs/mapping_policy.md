@@ -116,6 +116,8 @@ than duplicating the raw concept.
 Common targets plus every assigned industry bundle form a union. Duplicate raw
 aliases are collapsed by canonical metric, taxonomy, concept, and statement
 type; they are not stored as duplicate vectors or duplicate internal metrics.
+This union combines target expectations only. It must never add or merge
+numeric fact values across industry labels.
 
 ## Mapping Rules
 

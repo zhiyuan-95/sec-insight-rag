@@ -27,9 +27,9 @@ For repository-specific guidance, use this order:
 If repository documents conflict, stop and explain the conflict before making
 changes that depend on the disputed instruction.
 
-Historical milestone notes include `plan1.txt`, `plan2.txt`, `plan2.5.txt`,
-`plan2.5.1.txt`, and `plan3.txt`. These files may explain past reasoning, but
-they are not current structure truth.
+Completed root `plan*.txt` milestone notes are local-only historical context.
+Use Git history when past reasoning is needed; do not treat those plans as
+current structure truth.
 
 ## Project overview
 

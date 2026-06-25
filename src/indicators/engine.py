@@ -386,23 +386,26 @@ def _net_debt_to_ebitda(
     total_debt, skip_reason = _total_debt(lookup, period)
     if total_debt is None:
         return _skip(definition, period, skip_reason)
-    cash, investments, operating_income, depreciation = _required_metrics(
+    cash, investments, operating_income = _required_metrics(
         lookup,
         period,
         (
             "cash_and_equivalents",
             "short_term_investments",
             "operating_income",
-            "depreciation_and_amortization",
         ),
     )
-    extra_sources = tuple(metric for metric in (cash, investments, operating_income, depreciation) if metric is not None)
-    sources = (*total_debt.source_metrics, *extra_sources)
-    if None in (cash, investments, operating_income, depreciation):
+    depreciation, depreciation_skip_reason = _depreciation_and_amortization(lookup, period)
+    extra_sources = tuple(metric for metric in (cash, investments, operating_income) if metric is not None)
+    depreciation_sources = depreciation.source_metrics if depreciation is not None else ()
+    sources = (*total_debt.source_metrics, *extra_sources, *depreciation_sources)
+    if None in (cash, investments, operating_income):
         return _skip(definition, period, MISSING_REQUIRED_METRIC, sources)
+    if depreciation is None:
+        return _skip(definition, period, depreciation_skip_reason, sources)
     if not _units_match(sources):
         return _skip(definition, period, UNIT_MISMATCH, sources)
-    ebitda = operating_income.value_numeric + depreciation.value_numeric
+    ebitda = operating_income.value_numeric + depreciation.value
     if ebitda <= 0:
         return _skip(definition, period, NON_POSITIVE_EBITDA, sources)
     net_debt = total_debt.value - cash.value_numeric - investments.value_numeric
@@ -530,6 +533,36 @@ def _days_value(
     return _MetricValue(value=value, unit="days", source_metrics=sources), ""
 
 
+def _depreciation_and_amortization(
+    lookup: _MetricLookup,
+    period: _PeriodKey,
+) -> tuple[_MetricValue | None, str]:
+    direct, skip_reason = _required_metric(lookup, period, "depreciation_and_amortization")
+    if direct is not None:
+        return _MetricValue(value=direct.value_numeric, unit=direct.unit, source_metrics=(direct,)), ""
+    if skip_reason != MISSING_REQUIRED_METRIC:
+        return None, skip_reason or MISSING_REQUIRED_METRIC
+
+    depreciation, amortization = _required_metrics(
+        lookup,
+        period,
+        ("depreciation", "amortization_of_intangible_assets"),
+    )
+    sources = tuple(metric for metric in (depreciation, amortization) if metric is not None)
+    if depreciation is None or amortization is None:
+        return None, MISSING_REQUIRED_METRIC
+    if not _units_match(sources):
+        return None, UNIT_MISMATCH
+    return (
+        _MetricValue(
+            value=depreciation.value_numeric + amortization.value_numeric,
+            unit=depreciation.unit,
+            source_metrics=sources,
+        ),
+        "",
+    )
+
+
 def _total_debt(
     lookup: _MetricLookup,
     period: _PeriodKey,
@@ -539,8 +572,26 @@ def _total_debt(
             "long_term_debt_and_finance_lease_obligations_current",
             "long_term_debt_and_finance_lease_obligations_noncurrent",
         ),
+        (
+            "long_term_debt_current",
+            "long_term_debt_noncurrent",
+            "finance_lease_liability_current",
+            "finance_lease_liability_noncurrent",
+        ),
+        (
+            "debt_current",
+            "debt_noncurrent",
+            "finance_lease_liability_current",
+            "finance_lease_liability_noncurrent",
+        ),
         ("long_term_debt_current", "long_term_debt_noncurrent"),
         ("debt_current", "debt_noncurrent"),
+        (
+            "debt_current",
+            "finance_lease_liability_current",
+            "finance_lease_liability_noncurrent",
+        ),
+        ("finance_lease_liability_current", "finance_lease_liability_noncurrent"),
     )
     for group in component_groups:
         components = _required_metrics(lookup, period, group)

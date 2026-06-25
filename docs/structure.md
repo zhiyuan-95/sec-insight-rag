@@ -16,7 +16,8 @@ Keep this file updated whenever:
 
 Use `proposal.md` for the product goal, architecture direction, MVP scope, and milestones. Use this file for the most updated structure of the actual system. If `proposal.md` and this file disagree about current folders or module responsibilities, this file should be updated to reflect the actual repository structure.
 
-Use `plan1.txt`, `plan2.txt`, `plan2.5.txt`, `plan2.5.1.txt`, `plan3.txt`, and `plan5.txt` as milestone notes. Do not treat old plan files as the current structure source of truth.
+Completed root `plan*.txt` milestone notes are local-only historical context.
+Use Git history for past reasoning, not as current structure truth.
 
 ## Visual Overview
 
@@ -157,16 +158,8 @@ The important rule is that each box should remain traceable. Reported facts, cal
   config.env
   discussion.txt
   main.py
-  plan1.txt
-  plan2.txt
-  plan2.5.txt
-  plan2.5.1.txt
-  plan3.txt
-  plan3.5.txt
-  plan5.txt
   proposal.md
   pyproject.toml
-  to_do.md
   uv.lock
   data/
   data_store/
@@ -185,17 +178,9 @@ The important rule is that each box should remain traceable. Reported facts, cal
 - `discussion.txt`: Architecture discussion, follow-up questions, and decision notes.
 - `experiments/`: Milestone experiment folders, local experiment proposals, runnable experiment scripts, and shared generated experiment storage. Explicit milestone experiment designs live in each `experiments/MS*/experiment_proposal.md` file.
 - `main.py`: Local CLI-style script that runs company ingestion and prints a SEC/XBRL ingestion report.
-- `plan1.txt`: Historical Milestone 1 scaffold plan.
-- `plan2.txt`: Historical SEC/XBRL ingestion and normalization milestone plan.
-- `plan2.5.txt`: Company registry, filing inventory, update state, active-window policy, and base metric mapping milestone.
-- `plan2.5.1.txt`: Historical hard-industry-label raw fact mapping and mapping coverage plan.
-- `plan3.txt`: Historical indicator engine milestone for deterministic derived indicators, formula traceability, and indicator storage.
-- `plan3.5.txt`: Historical notes for future and industry-specific indicator extensions.
-- `plan5.txt`: Historical retrieval pipeline milestone covering filing parsing, chunking, local hybrid indexing, and evidence lineage.
 - `proposal.md`: Current product scope, architecture direction, and MVP roadmap.
 - `pyproject.toml`: Python project metadata and dependencies.
 - `tests/`: Automated pytest coverage for implemented deterministic behavior and important failure paths.
-- `to_do.md`: Local task notes. This file is ignored and not part of the tracked repository.
 - `uv.lock`: Locked dependency versions for `uv`.
 - `stock_data.db`: Local generated SQLite database. This is runtime data, not source architecture.
 
@@ -591,6 +576,7 @@ The following paths may exist locally but should not be treated as source archit
 - generated Milestone 3 report artifacts: `experiments/MS3/milestone3_indicator_report_*.txt`
 - generated Milestone 5 report artifacts: `experiments/MS5/experiment_report_*.txt`
 - local task notes in `to_do.md`
+- completed root `plan*.txt` milestone notes retained locally or in Git history
 
 ## Update Rule
 
@@ -598,5 +584,5 @@ When the repository structure changes:
 
 1. Update this file first if the change affects folders, modules, file responsibilities, generated storage locations, or verification workflows.
 2. Update `proposal.md` only if the change affects product scope, milestones, or architecture direction.
-3. Keep `plan1.txt` and `plan2.txt` historical unless correcting those specific milestone notes.
+3. Keep completed root `plan*.txt` notes local-only; preserve durable current rules in the appropriate source-of-truth document.
 4. Do not list cache files, virtual environments, or generated runtime data as architecture.

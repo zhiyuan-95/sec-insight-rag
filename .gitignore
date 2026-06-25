@@ -27,9 +27,6 @@ data/exports/*
 # Local notes and planning
 my ideas/
 discussion.txt
-plan1.txt
-plan2.txt
-plan2.5.txt
-plan2_5.txt
+/plan*.txt
 to_do.txt
 to_do.md

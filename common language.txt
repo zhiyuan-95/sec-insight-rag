@@ -1,4 +1,0 @@
-Data lineage view
-
-A data lineage view shows where a value came from, how the system translated it,
-and whether it is available for the calculation or report being inspected.
