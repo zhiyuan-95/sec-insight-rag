@@ -64,7 +64,7 @@ This experiment covers:
 - raw fact mapping coverage: raw facts downloaded/stored, mapped raw facts,
   unmapped raw facts, unknown raw concepts, and supported mapping catalog size
 - persisted hard industry label assignment, including assignment source, reason,
-  supporting evidence, classifier version, and label review status
+  supporting evidence, classifier version, confidence, and label status
 - target raw fact coverage for the assigned hard industry labels, including
   found, missing, and found-but-unmapped target facts
 - alternate SEC/XBRL tags that map to the same internal business metric
@@ -74,12 +74,22 @@ This experiment covers:
 - approved learned mappings with global, industry, or company scope
 - missing exact target tags whose canonical metric is recovered through an
   approved alternate concept
+- report-only LLM formula proposal diagnostics for unresolved target concepts
+  after hard mapping and semantic mapping, using period-scoped raw fact pools
+  that include found targets, mapped base metrics, approved alternates, and
+  unknown/unmapped raw facts, with target-compatible unit filtering,
+  statement-first prompting, one representative context per target, and
+  exact-context cache reuse
+- report-only debt recovery diagnostics for missing `debt_current` and
+  `debt_noncurrent`, including component statuses, assumed-zero components,
+  skip reasons, formula versions, and source metric/raw fact IDs
 - saved compact report with appended annual and quarterly XBRL metric evidence,
   with source rows still available in SQLite and CSV exports
 
 This experiment does not cover derived indicators, deterministic analytics,
-retrieval indexes, Gemini calls, RAG answers, frontend behavior, or pass/fail
-grading.
+retrieval indexes, Gemini calls, RAG answers, frontend behavior, durable
+recovered metric storage, indicator use of recovered values, identity
+inference, or pass/fail grading.
 
 ## Recommended Location
 
@@ -87,7 +97,8 @@ grading.
 experiments/MS2_5/
   experiment_proposal.md
   milestone25_live_sec_inspection.py
-  experiment_report.md
+  prewarm_target_embeddings.py
+  milestone25_mapping_report_<TICKER>.md
 
 experiments/storage/
   experiment.db
@@ -104,14 +115,17 @@ data/exports/
     metric_traceability_sample.csv
 ```
 
-The experiment should write a compact report to `experiment_report.md` by
-default and should not print the report body to the terminal.
+The experiment should write a compact report to
+`milestone25_mapping_report_<TICKER>.md` by default and should not print the
+report body to the terminal.
 `experiments/storage/experiment.db` should persist across runs and across
 milestone experiments. The CSV exports should overwrite stable paths on each
 run.
-The detailed Markdown report sections should be added to the saved report only
-when the user asks for them with `--full-report`. `--write-report` is accepted
-only as a compatibility flag because the report is now always saved.
+Detailed run-path sections should be added to the saved report only when the
+user asks for them with `--full-report`. These sections should show run context,
+session deltas, and compact samples without repeating the full mapping and
+lineage tables. `--write-report` is accepted only as a compatibility flag
+because the report is now always saved.
 
 ## Data Mode
 
@@ -157,13 +171,27 @@ Detailed saved report run:
 uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER --full-report
 ```
 
+Report-only LLM formula proposal run:
+
+```text
+uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER --full-report --formula-proposals
+```
+
+Use `--formula-proposal-target-limit N` for a capped live-provider smoke test.
+The formula proposal panel evaluates one representative period context per
+missing target to keep live provider calls bounded; the full eligible raw fact
+pool is still shown in the report/export evidence.
+
 Rules:
 
 - exactly one ticker is accepted per run
-- the compact summary is saved to `experiment_report.md` by default
+- the compact summary is saved to `milestone25_mapping_report_<TICKER>.md` by default
 - the report body is not printed to the terminal
-- `--full-report` includes the detailed Markdown report in `experiment_report.md`
+- `--full-report` includes detailed run context, session deltas, and compact
+  samples in `milestone25_mapping_report_<TICKER>.md`
 - `--write-report` is accepted for compatibility; the report is already saved
+- `prewarm_target_embeddings.py` precomputes target XBRL concept candidate
+  vectors for common-base and every hard-industry bundle
 - both 10-K and 10-Q behavior are presented for that ticker
 - normal runs do not delete `experiments/storage/experiment.db`; repeat runs
   should make already-ingested behavior visible
@@ -175,7 +203,7 @@ Rules:
 Main report output:
 
 ```text
-experiments/MS2_5/experiment_report.md
+experiments/MS2_5/milestone25_mapping_report_<TICKER>.md
 ```
 
 Kept SQLite artifact:
@@ -193,22 +221,21 @@ data/exports/ms2_5/
 Financial metric lineage section:
 
 ```text
-experiments/MS2_5/experiment_report.md
+experiments/MS2_5/milestone25_mapping_report_<TICKER>.md
 ```
 
 The compact saved report should show the operational decision path first:
 whether the company is local, whether an update check is due this session,
 whether SEC was checked, whether new filing data was ingested, and the next
 10-K/10-Q check dates after the session. It should then show source-controlled
-hard industry label assignment and target raw fact coverage. The same
-`experiment_report.md` should append the full financial metric lineage content,
-including company industry labels, target raw fact coverage, raw fact mapping
-coverage, alternate and unknown SEC/XBRL tag evidence, and two pivoted XBRL
-metric tables: one annual table with fiscal years as columns and one quarterly
-table with fiscal quarters as columns. Other full rows should remain available
-in `experiments/storage/experiment.db` and CSV exports. If `--full-report` is
-used, the saved report should also include detailed Markdown sections and
-compact table samples.
+hard industry label assignment, target raw fact coverage, formula proposal
+summary, debt recovery summary, adaptive mapping summary, base metric counts,
+and evidence locations. Full rows should remain available in
+`experiments/storage/experiment.db` and CSV exports. If `--full-report` is used,
+the saved report should append detailed run context, compact table samples, and
+the full financial metric lineage appendix, including mapping coverage, formula
+proposal diagnostics, debt recovery diagnostics, alternate/unknown SEC/XBRL tag
+evidence, and annual/quarterly pivoted metric tables.
 
 ## Compact Saved Report Shape
 
@@ -313,7 +340,7 @@ Evidence to present:
 - metric-level data lineage view showing raw XBRL concepts, system mappings,
   `financial_metrics` row counts, active-row counts, and inactive context rows
 - compact metric traceability sample
-- appended financial metric lineage section in `experiment_report.md`
+- appended financial metric lineage section in `milestone25_mapping_report_<TICKER>.md`
 
 ### Already-Ingested Session Check
 
@@ -431,8 +458,26 @@ Evidence to present:
 - Reuse `src/processing/semantic_mapping.py` only to generate review candidates.
 - Read approved learned mappings from `xbrl_concept_mappings`; never treat a
   semantic candidate as an approved base metric mapping.
+- Prewarm target XBRL concept candidate vectors for the entire mapping catalog;
+  embed observed company unknown concepts only when semantic discovery runs.
+- Keep LLM formula proposal prompt text in `src/analyze/prompts.py`, provider
+  calls in `src/analyze/xbrl_formula_proposals.py`, and period context
+  construction, target-compatible unit filtering, exact-cache reuse, and deterministic validation in
+  `src/processing/formula_proposals.py`. The provider panel is Gemini plus
+  OpenAI `gpt-4.1-mini`.
+- Treat LLM formula proposals as report-only evidence. Do not approve mappings,
+  persist recovered values, or feed indicators from model confidence or model
+  agreement. A model may also return a report-only zero-target decision when
+  same-period raw facts provide affirmative evidence that the missing target
+  may be zero; that decision is still review evidence and does not create a
+  financial metric.
+- Reuse `src/processing/metric_recovery.py` for report-only debt recovery
+  diagnostics. Do not duplicate formula logic in this experiment script.
 - Reuse repositories in `src/storage/` for all database reads and writes.
 - Do not calculate derived indicators inside the experiment script.
+- Do not persist recovered debt values or insert them into `financial_metrics`.
+- Do not let indicator formulas consume recovered debt values in this
+  experiment.
 - Do not duplicate SEC HTTP logic inside the experiment script.
 - Do not define pass/fail labels inside the experiment script.
 - Do not write to `stock_data.db`.
@@ -440,11 +485,13 @@ Evidence to present:
 - Do not print secrets or the actual `SEC_USER_AGENT` value.
 - Keep the default saved report compact and point to the SQLite database, CSV
   exports, filing downloads, and optional detailed sections.
-- Append the financial metric data lineage view to `experiment_report.md`.
-- Save the compact report to `experiment_report.md` by default without printing
-  the report body to the terminal.
-- Include the detailed Markdown report in `experiment_report.md` only when
-  `--full-report` is present.
+- Append the financial metric data lineage view to
+  `milestone25_mapping_report_<TICKER>.md`.
+- Save the compact report to `milestone25_mapping_report_<TICKER>.md` by
+  default without printing the report body to the terminal.
+- Include detailed run context, session deltas, and compact samples in
+  `milestone25_mapping_report_<TICKER>.md` only when `--full-report` is present;
+  do not repeat the full mapping and lineage tables.
 - Accept `--write-report` as a compatibility flag, not as a separate output
   mode.
 - Store Decimal-compatible numeric text values as they come from the storage

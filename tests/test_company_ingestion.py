@@ -14,13 +14,24 @@ from src.ingestion import (
     ingest_company,
 )
 from src.ingestion import company as company_module
+from src.analyze.industry_classification import (
+    GEMINI_INDUSTRY_ASSIGNMENT_SOURCE,
+    GEMINI_INDUSTRY_CLASSIFIER_VERSION,
+)
+from src.processing.company_industry_labels import (
+    CompanyIndustryLabelAssignment,
+    LABEL_STATUS_ASSIGNED,
+)
+from src.retrieval.models import ParsedFiling, ParsedSection
 from src.storage import (
     CompanyRecord,
+    CompanyIndustryLabelRepository,
     CompanyRepository,
     FilingRecord,
     FilingRepository,
     FinancialMetricRepository,
     RawFactRepository,
+    StoredCompanyIndustryLabel,
     connect_sqlite,
 )
 
@@ -119,6 +130,146 @@ def test_ingest_company_orchestrates_sec_processing_and_storage(
     assert metrics[0].metric_name == "revenue"
     assert metrics[0].accession_number == "0000320193-25-000073"
     assert metrics[0].raw_fact_id is not None
+
+
+def test_ingest_company_persists_gemini_industry_classification(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    submissions = json.loads(Path("data/fixtures/sec_submissions_sample.json").read_text(encoding="utf-8"))
+    companyfacts = json.loads(Path("data/fixtures/sec_companyfacts_sample.json").read_text(encoding="utf-8"))
+    classified: list[str] = []
+
+    def load_ticker_mapping(client) -> dict[str, TickerMapping]:
+        return {"AAPL": TickerMapping(ticker="AAPL", cik="0000320193", title="Apple Inc.")}
+
+    def get_company_submissions(client, cik: str) -> dict:
+        return submissions
+
+    def get_companyfacts(client, cik: str) -> dict:
+        return companyfacts
+
+    def download_filing_document(client, filing: FilingMetadata, base_dir: Path) -> Path:
+        path = base_dir / filing.cik / filing.accession_number / filing.primary_document
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("<html>filing</html>", encoding="utf-8")
+        return path
+
+    def parse_filing_html(path: Path, form_type: str) -> ParsedFiling:
+        assert form_type == "10-K"
+        return ParsedFiling(
+            source_sha256="abc",
+            sections=(
+                ParsedSection(
+                    name="business",
+                    title="Item 1. Business",
+                    order=10,
+                    text="Apple designs consumer devices, software, services, and related platforms.",
+                ),
+            ),
+        )
+
+    def classify_company_industry_labels(**kwargs) -> CompanyIndustryLabelAssignment:
+        business_section = kwargs["business_section"]
+        classified.append(business_section.accession_number)
+        assert business_section.text.startswith("Apple designs consumer devices")
+        return CompanyIndustryLabelAssignment(
+            ticker="AAPL",
+            cik="0000320193",
+            assigned_industry_labels=("Information Technology",),
+            assignment_source=GEMINI_INDUSTRY_ASSIGNMENT_SOURCE,
+            assignment_reason="Apple reports devices, software, and services.",
+            supporting_evidence=(
+                "Source accession: 0000320193-25-000079",
+                "Source section: 10-K Item 1. Business",
+            ),
+            reviewed_at="",
+            label_status=LABEL_STATUS_ASSIGNED,
+            confidence=0.93,
+            classifier_version=GEMINI_INDUSTRY_CLASSIFIER_VERSION,
+        )
+
+    monkeypatch.setattr(company_module, "load_ticker_mapping", load_ticker_mapping)
+    monkeypatch.setattr(company_module, "get_company_submissions", get_company_submissions)
+    monkeypatch.setattr(company_module, "get_companyfacts", get_companyfacts)
+    monkeypatch.setattr(company_module, "download_filing_document", download_filing_document)
+    monkeypatch.setattr(company_module, "parse_filing_html", parse_filing_html)
+    monkeypatch.setattr(
+        company_module,
+        "classify_company_industry_labels",
+        classify_company_industry_labels,
+    )
+
+    settings = Settings(
+        sec_user_agent="Example contact@example.com",
+        stock_sql_db_path=tmp_path / "stock.db",
+        stock_filings_base_dir=tmp_path / "filings",
+        gemini_api_key="fake-key",
+    )
+    result = ingest_company("AAPL", settings)
+
+    assert result.industry_label_count == 1
+    assert classified == ["0000320193-25-000079"]
+    with connect_sqlite(tmp_path / "stock.db") as connection:
+        company = CompanyRepository(connection).get_by_cik("0000320193")
+        assert company is not None
+        assert company.company_id is not None
+        labels = CompanyIndustryLabelRepository(connection).list_labels(company.company_id)
+
+    assert len(labels) == 1
+    assert labels[0].industry_label == "Information Technology"
+    assert labels[0].assignment_source == GEMINI_INDUSTRY_ASSIGNMENT_SOURCE
+    assert labels[0].confidence == 0.93
+    assert labels[0].classifier_version == GEMINI_INDUSTRY_CLASSIFIER_VERSION
+    assert labels[0].evidence == (
+        "Source accession: 0000320193-25-000079",
+        "Source section: 10-K Item 1. Business",
+    )
+
+
+def test_gemini_industry_classification_reuses_same_10k_accession() -> None:
+    stored_label = StoredCompanyIndustryLabel(
+        company_id=1,
+        industry_label="Information Technology",
+        assignment_source=GEMINI_INDUSTRY_ASSIGNMENT_SOURCE,
+        assignment_reason="classified from Item 1",
+        classifier_version=GEMINI_INDUSTRY_CLASSIFIER_VERSION,
+        evidence=("Source accession: 0000320193-25-000079",),
+    )
+
+    assert (
+        company_module._industry_classification_due(
+            (stored_label,),
+            "0000320193-25-000079",
+        )
+        is False
+    )
+    assert (
+        company_module._industry_classification_due(
+            (stored_label,),
+            "0000320193-26-000080",
+        )
+        is True
+    )
+
+
+def test_source_controlled_labels_remain_due_for_gemini_classification() -> None:
+    stored_label = StoredCompanyIndustryLabel(
+        company_id=1,
+        industry_label="Information Technology",
+        assignment_source="manual_source_controlled_registry",
+        assignment_reason="seed label",
+        classifier_version="source_controlled_registry_v1",
+        evidence=("SEC SIC 7372: Services-Prepackaged Software",),
+    )
+
+    assert (
+        company_module._industry_classification_due(
+            (stored_label,),
+            "0000320193-25-000079",
+        )
+        is True
+    )
 
 
 def test_ingest_company_rejects_missing_sec_user_agent(tmp_path: Path) -> None:

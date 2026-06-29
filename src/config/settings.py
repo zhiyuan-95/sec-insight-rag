@@ -23,6 +23,14 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("Gemini_API_KEY", "GEMINI_API_KEY"),
     )
+    openai_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias="OPENAI_API_KEY",
+    )
+    hf_token: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("HF_TOKEN", "HUGGINGFACE_API_KEY"),
+    )
     sec_user_agent: str | None = Field(
         default=None,
         validation_alias="SEC_USER_AGENT",
@@ -65,6 +73,14 @@ class Settings(BaseSettings):
         default_factory=lambda: [DEFAULT_CHAT_MODEL],
         validation_alias="ALLOWED_CHAT_MODELS",
     )
+    gemini_formula_proposal_model: str = Field(
+        default=DEFAULT_CHAT_MODEL,
+        validation_alias="GEMINI_FORMULA_PROPOSAL_MODEL",
+    )
+    openai_formula_proposal_model: str = Field(
+        default="gpt-4.1-mini",
+        validation_alias="OPENAI_FORMULA_PROPOSAL_MODEL",
+    )
 
     @field_validator("allowed_chat_models", mode="before")
     @classmethod
@@ -96,6 +112,10 @@ class Settings(BaseSettings):
             raise ValueError(f"Unsupported chat model configured: {names}")
         if self.primary_chat_model not in self.allowed_chat_models:
             raise ValueError("PRIMARY_CHAT_MODEL must be in ALLOWED_CHAT_MODELS")
+        if not self.gemini_formula_proposal_model.strip():
+            raise ValueError("GEMINI_FORMULA_PROPOSAL_MODEL must not be empty")
+        if not self.openai_formula_proposal_model.strip():
+            raise ValueError("OPENAI_FORMULA_PROPOSAL_MODEL must not be empty")
         if self.retrieval_chunk_overlap >= self.retrieval_chunk_size:
             raise ValueError("RETRIEVAL_CHUNK_OVERLAP must be smaller than RETRIEVAL_CHUNK_SIZE")
         if not self.retrieval_embedding_model.strip():

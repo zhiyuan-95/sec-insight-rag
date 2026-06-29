@@ -1,4 +1,4 @@
-Plan 2.5.1 - Gemini-Assisted Industry Label Raw Fact Mapping
+Plan 2.5.1 - Gemini-Assisted Industry Label XBRL Concept Mapping
 
 Problem Summary
 
@@ -21,20 +21,47 @@ The system needs a way to:
 - reuse approved labels during the same annual filing cycle
 - refresh the labels when a newer 10-K is ingested, because a company can move
   into or out of industries over time
-- define target raw facts for each hard industry label
-- use the union of target raw facts when a company has multiple hard industry labels
+- define target XBRL concept sets for each hard industry label
+- use the union of target XBRL concept sets when a company has multiple hard industry labels
 - map only approved, business-meaningful concepts into financial_metrics
+- persist the approved company concept profile so later ingestions can reuse
+  reviewed concept mappings without rerunning semantic mapping every time
 - keep unknown concepts visible for review
 - run semantic mapping only after Round 1 hard mapping leaves missing target
-  raw facts
-- show the industry-label target facts and mapping coverage in the experiment
+  XBRL concepts
+- show the industry-label target XBRL concepts and mapping coverage in the experiment
   report
 
 The key rule:
 
 ```text
-Hard industry label target facts guide mapping and reporting.
+Hard industry label target XBRL concept sets guide mapping and reporting.
 They do not limit raw XBRL ingestion.
+```
+
+Second key rule:
+
+```text
+Approved company concept profiles speed up later mapping.
+They do not limit raw XBRL ingestion.
+```
+
+Source-of-truth note:
+
+```text
+common language.md
+  owns mapping terminology.
+
+src/processing/mapping_catalog.py
+  owns executable hard-mapping candidates used by the system.
+
+xbrl_direct_candidate_mapping.txt
+  owns research candidates and candidate-expansion notes, including candidate
+  concepts that may require review before becoming hard mappings.
+
+plan2.5.1.txt
+  owns design intent and implementation phases. It should not duplicate the
+  complete live candidate catalog.
 ```
 
 Hard Industry Label Requirement
@@ -61,8 +88,9 @@ Real Estate
 There are no secondary labels in Plan 2.5.1.
 
 If a company has business in multiple industries, the company should receive
-multiple hard industry labels. The target raw fact set for that company is the
-union of the target concepts for all assigned hard industry labels.
+multiple hard industry labels. The target XBRL concept set for that company is
+the union of the common base concepts and the target concepts for all assigned
+hard industry labels.
 
 Rule:
 
@@ -70,9 +98,9 @@ Rule:
 company_hard_industry_labels:
   one or more labels from the fixed 11-label set
 
-target raw fact set:
-  common base facts
-  UNION facts for every assigned hard industry label
+target XBRL concept set:
+  common base candidate XBRL concepts
+  UNION candidate XBRL concepts for every assigned hard industry label
 ```
 
 The 11-label set is intended to cover all public market companies. If the system
@@ -84,8 +112,8 @@ Company Industry Label Assignment Requirement
 Plan 2.5.1 must make hard industry label assignment explicit and auditable.
 
 Company hard industry labels should be stored in the system as reusable company
-state. The stored approved labels are the labels that control target raw fact
-selection.
+state. The stored approved labels are the labels that control target XBRL
+concept selection.
 
 The label lifecycle is:
 
@@ -98,7 +126,7 @@ first company initialization:
   -> validate strict JSON output
   -> if confidence and evidence pass the gate:
        persist labels as approved
-       use labels for target raw fact selection
+       use labels for target XBRL concept selection
      else:
        persist review-needed evidence
        use common-base targets only
@@ -158,6 +186,14 @@ CompanyIndustryLabelAssignment
   notes
 ```
 
+Storage note:
+
+Use the existing `company_industry_labels` table first. Store classifier
+metadata such as source accession, source section, prompt version, source text
+hash, and evidence quotes inside `evidence_json` unless later reporting needs
+prove that dedicated columns are required. Do not change the schema just to
+mirror the plan vocabulary.
+
 Rules:
 
 - `assigned_industry_labels` must use only the fixed 11-label set.
@@ -177,13 +213,13 @@ Rules:
 - High-confidence, valid output can be persisted as `approved`.
 - Low-confidence, malformed, or invalid output must be persisted as
   `needs_label_review` evidence and must not control industry-specific target
-  raw fact selection.
+  XBRL concept selection.
 - Approved labels should be reused until a newer 10-K is ingested.
 - A newer 10-K should trigger annual reclassification because company business
   mix can change.
 - If no label is assigned, the report should mark the company as
-  `needs_label_review` and avoid pretending that industry-specific target facts
-  are complete.
+  `needs_label_review` and avoid pretending that industry-specific target XBRL
+  concept coverage is complete.
 
 Important:
 
@@ -193,7 +229,7 @@ circular logic:
 ```text
 observed raw facts
   -> inferred label
-  -> expected raw facts
+  -> expected XBRL concepts
 ```
 
 Observed XBRL concept patterns can help review an assignment, but they should not
@@ -205,193 +241,160 @@ still require deterministic catalog entries or governed approved mapping records
 
 Industry Target Concept Catalog Requirement
 
-Plan 2.5.1 must create an inspectable catalog of hard industry labels and their
+Plan 2.5.1 must keep an inspectable catalog of hard industry labels and their
 target SEC/XBRL concepts.
 
 Important:
 
 This catalog is not a list of every raw XBRL concept in SEC companyfacts. It is
-the list of concepts that we intentionally look for because they may become base
-financial metrics or support industry-specific indicators.
+the source-controlled list of concepts that the system intentionally looks for
+because they may map to system financial metrics or support indicators.
 
-Every hard industry label starts with the common base concepts:
+Authoritative files:
 
 ```text
-RevenueFromContractWithCustomerExcludingAssessedTax -> revenue
-Revenues -> revenue
-SalesRevenueNet -> revenue
-CostOfRevenue -> cost_of_revenue
-CostOfGoodsAndServicesSold -> cost_of_revenue
-GrossProfit -> gross_profit
-OperatingIncomeLoss -> operating_income
-NetIncomeLoss -> net_income
-ResearchAndDevelopmentExpense -> research_and_development_expense
-SellingGeneralAndAdministrativeExpense -> selling_general_and_administrative_expense
-InterestExpenseNonOperating -> interest_expense
-EarningsPerShareDiluted -> diluted_eps
-WeightedAverageNumberOfDilutedSharesOutstanding -> weighted_average_diluted_shares
-CashAndCashEquivalentsAtCarryingValue -> cash_and_equivalents
-Assets -> total_assets
-AssetsCurrent -> current_assets
-Liabilities -> total_liabilities
-LiabilitiesCurrent -> current_liabilities
-AccountsReceivableNetCurrent -> accounts_receivable
-AccountsPayableCurrent -> accounts_payable
-DebtCurrent -> debt_current
-DebtNoncurrent -> debt_noncurrent
-LongTermDebtCurrent -> long_term_debt_current
-LongTermDebtNoncurrent -> long_term_debt_noncurrent
-LongTermDebtAndFinanceLeaseObligationsCurrent -> long_term_debt_and_finance_lease_obligations_current
-LongTermDebtAndFinanceLeaseObligationsNoncurrent -> long_term_debt_and_finance_lease_obligations_noncurrent
-ShortTermBorrowings -> short_term_borrowings
-StockholdersEquity -> shareholders_equity
-NetCashProvidedByUsedInOperatingActivities -> operating_cash_flow
-PaymentsToAcquirePropertyPlantAndEquipment -> capital_expenditure
-DepreciationDepletionAndAmortization -> depreciation_and_amortization
-DepreciationDepletionAndAmortizationExpense -> depreciation_and_amortization
+src/processing/mapping_catalog.py
+  executable catalog used by ingestion, base metric mapping, semantic mapping,
+  and MS2.5 coverage reporting.
+
+xbrl_direct_candidate_mapping.txt
+  research and expansion notes for direct candidates, broader candidates,
+  company-extension patterns, and concepts that require review before hard
+  mapping.
+
+tests/test_mapping_catalog.py
+  regression tests proving important candidates stay available and correctly
+  scoped.
+```
+
+Do not keep a second complete candidate list in this plan. The plan should
+describe catalog rules and cite the source files above. The executable catalog
+must remain the source of truth.
+
+Current catalog rules:
+
+```text
+common base targets:
+  target XBRL concepts used by most companies and core indicators
+
+industry targets:
+  additional target XBRL concepts used only when a company has a matching hard
+  industry label
+
+compatibility targets:
+  deterministic mappings preserved for current behavior even when target
+  coverage treats the concept as industry-specific
+
+research candidates:
+  concepts or company-extension patterns tracked in
+  xbrl_direct_candidate_mapping.txt but not automatically promoted into hard
+  mapping
+```
+
+Examples of current common-base candidate groups:
+
+```text
+revenue:
+  RevenueFromContractWithCustomerExcludingAssessedTax
+  RevenueFromContractWithCustomerIncludingAssessedTax
+  Revenues
+  SalesRevenueNet
+
+net_income:
+  NetIncomeLoss
+  ProfitLoss
+
+interest_expense:
+  InterestExpenseNonOperating
+  InterestExpenseNonoperating
+  InterestExpense
+  InterestAndDebtExpense
+
+short_term_investments:
+  ShortTermInvestments
+  MarketableSecuritiesCurrent
+  AvailableForSaleSecuritiesCurrent
+  TradingSecuritiesCurrent
+  HeldToMaturitySecuritiesCurrent
+  OtherShortTermInvestments
+  InvestmentsCurrent
+
+capital_expenditure:
+  PaymentsToAcquirePropertyPlantAndEquipment
+  PaymentsToAcquireProductiveAssets
+
+depreciation_and_amortization:
+  DepreciationDepletionAndAmortization
+  DepreciationDepletionAndAmortizationExpense
+  DepreciationAndAmortization
+  DepreciationAmortizationAndAccretionNet
+  Depreciation
+  AmortizationOfIntangibleAssets
 ```
 
 Mapping note:
 
-`NetIncomeLoss -> net_income` is intentional. The internal `net_income` metric
-represents bottom-line income or loss for the period. Positive values mean net
-income/profit, and negative values mean net loss. Do not create a separate
-`net_loss` metric unless a later report shows a different SEC concept with a
-different business meaning.
+`NetIncomeLoss -> net_income` and `ProfitLoss -> net_income` are intentional.
+The internal `net_income` metric represents bottom-line income or loss for the
+period. Positive values mean net income/profit, and negative values mean net
+loss. Do not create a separate `net_loss` metric unless a later report shows a
+different SEC concept with a different business meaning.
 
-Initial hard-industry target concept bundles:
-
-These bundles contain only additional industry-specific raw facts beyond the
-common base concepts above. Do not repeat common base concepts inside an
+Industry target bundles contain only additional industry-specific XBRL concepts
+beyond common base concepts. Do not repeat common base concepts inside an
 industry bundle. If a common base concept is especially important for an
 industry, record that later as metadata such as `important_for_labels` instead
-of duplicating the raw concept in the industry bundle.
+of duplicating the XBRL concept in the industry bundle.
+
+The catalog should be refined from real filing evidence:
 
 ```text
-Energy:
-  InventoryNet -> inventory
-  PropertyPlantAndEquipmentNet -> property_plant_and_equipment
-  AssetRetirementObligation -> asset_retirement_obligation
-
-Materials:
-  InventoryNet -> inventory
-  PropertyPlantAndEquipmentNet -> property_plant_and_equipment
-  AssetRetirementObligation -> asset_retirement_obligation
-  EnvironmentalRemediationExpense -> environmental_remediation_expense
-
-Industrials:
-  InventoryNet -> inventory
-  PropertyPlantAndEquipmentNet -> property_plant_and_equipment
-  ContractAssetCurrent -> contract_assets_current
-  ContractWithCustomerLiabilityCurrent -> contract_liabilities_current
-  Backlog -> backlog
-
-Consumer Discretionary:
-  InventoryNet -> inventory
-  MerchandiseInventory -> inventory
-  OperatingLeaseRightOfUseAsset -> operating_lease_right_of_use_asset
-  OperatingLeaseLiabilityCurrent -> operating_lease_liability_current
-  OperatingLeaseLiabilityNoncurrent -> operating_lease_liability_noncurrent
-  AdvertisingExpense -> advertising_expense
-
-Consumer Staples:
-  InventoryNet -> inventory
-  MerchandiseInventory -> inventory
-  OperatingLeaseRightOfUseAsset -> operating_lease_right_of_use_asset
-  OperatingLeaseLiabilityCurrent -> operating_lease_liability_current
-  OperatingLeaseLiabilityNoncurrent -> operating_lease_liability_noncurrent
-  AdvertisingExpense -> advertising_expense
-
-Health Care:
-  InventoryNet -> inventory
-  PropertyPlantAndEquipmentNet -> property_plant_and_equipment
-  IntangibleAssetsNetExcludingGoodwill -> intangible_assets
-  Goodwill -> goodwill
-
-Financials:
-  InterestIncomeExpenseNet -> net_interest_income
-  InterestIncomeExpenseNonOperatingNet -> net_interest_income
-  LoansAndLeasesReceivableNetReportedAmount -> loans_receivable
-  Deposits -> deposits
-  AllowanceForCreditLosses -> allowance_for_credit_losses
-  PremiumsEarnedNet -> insurance_premiums
-  InsuranceClaimsAndClaimsExpense -> insurance_claims_expense
-  InvestmentIncomeNet -> investment_income
-
-Information Technology:
-  ContractWithCustomerLiabilityCurrent -> deferred_revenue_current
-  ContractWithCustomerLiabilityNoncurrent -> deferred_revenue_noncurrent
-  DeferredRevenueCurrent -> deferred_revenue_current
-  DeferredRevenueNoncurrent -> deferred_revenue_noncurrent
-  SellingAndMarketingExpense -> selling_and_marketing_expense
-  IntangibleAssetsNetExcludingGoodwill -> intangible_assets
-  Goodwill -> goodwill
-
-Communication Services:
-  ContractWithCustomerLiabilityCurrent -> deferred_revenue_current
-  ContractWithCustomerLiabilityNoncurrent -> deferred_revenue_noncurrent
-  SellingAndMarketingExpense -> selling_and_marketing_expense
-  Goodwill -> goodwill
-  IntangibleAssetsNetExcludingGoodwill -> intangible_assets
-
-Utilities:
-  PropertyPlantAndEquipmentNet -> property_plant_and_equipment
-  UtilityPlantNet -> utility_plant
-  RegulatedAndUnregulatedOperatingRevenue -> revenue
-  AssetRetirementObligation -> asset_retirement_obligation
-
-Real Estate:
-  RentalIncome -> rental_income
-  RealEstateInvestmentPropertyNet -> real_estate_investment_property
-  RealEstateAccumulatedDepreciation -> real_estate_accumulated_depreciation
-  OperatingLeaseIncome -> operating_lease_income
-  PropertyPlantAndEquipmentNet -> property_plant_and_equipment
-  MortgageLoansOnRealEstate -> mortgage_loans_on_real_estate
+MS2.5 report evidence
+  -> missing target XBRL concepts
+  -> found but unmapped target XBRL concepts
+  -> unknown observed XBRL concepts
+  -> reviewed update to mapping_catalog.py or xbrl_direct_candidate_mapping.txt
+  -> regression test in tests/test_mapping_catalog.py
 ```
-
-Some concept names in the first catalog may need validation against the actual
-SEC taxonomy and observed company filings before implementation. The plan is to
-store the catalog explicitly, inspect it in the report, and refine it from real
-raw facts.
 
 Target Candidate Embedding Requirement
 
-Plan 2.5.1 must align with the raw fact mapping pipeline:
+Plan 2.5.1 must align with the XBRL concept mapping pipeline:
 
 ```text
 company filing
   -> ingest broad XBRL raw facts
   -> classify company industry labels from latest 10-K Item 1 Business
-  -> choose common + industry-specific target raw fact candidates
+  -> choose common + industry-specific target XBRL concept candidates
   -> Round 1: hard mapping
-  -> Round 2: semantic mapping only for missing target raw facts
+  -> Round 2: semantic mapping only for missing target XBRL concepts
 ```
 
 Round 1 hard mapping:
 
 ```text
-target raw fact candidate names from the catalog
+candidate XBRL concept names from the catalog
   compared directly against
-provided company XBRL raw fact concept names
+observed company XBRL concept names
 
 if candidate concept is observed and approved:
   map raw fact into system financial_metrics
 
 if no candidate concept is observed for the target:
-  mark the target raw fact as missing for Round 2
+  mark the target XBRL concept as missing for Round 2
 ```
 
 Round 2 semantic mapping:
 
 ```text
-missing target raw facts
-  -> select their pre-embedded candidate raw fact vectors
+missing target XBRL concepts
+  -> select their pre-embedded candidate XBRL concept vectors
 
-unknown / unmapped company XBRL raw facts
+unknown / unmapped company XBRL concepts
   -> embed during ingestion or experiment run
 
 semantic similarity
-  -> compare company unknown fact vectors against selected target candidate vectors
+  -> compare company unknown concept vectors against selected target candidate vectors
   -> persist review-only mapping candidates
   -> do not automatically promote candidates into financial_metrics
 ```
@@ -399,25 +402,25 @@ semantic similarity
 The important vector rule:
 
 ```text
-Target raw fact candidate vectors are pre-embedded and reused.
-Company-provided unknown XBRL fact vectors are generated when needed.
+Target candidate XBRL concept vectors are pre-embedded and reused.
+Company-provided unknown XBRL concept vectors are generated when needed.
 ```
 
-Do not create one blended vector per internal metric. Each target raw fact can
-have multiple candidate raw fact names, and each candidate raw fact name should
-have its own vector.
+Do not create one blended vector per internal metric. Each system financial
+metric can have multiple candidate XBRL concept names, and each candidate XBRL
+concept name should have its own vector.
 
 Example:
 
 ```text
 target metric: revenue
 
-candidate raw fact vectors:
+candidate XBRL concept vectors:
   RevenueFromContractWithCustomerExcludingAssessedTax
   Revenues
   SalesRevenueNet
 
-company unknown raw fact vectors:
+company unknown XBRL concept vectors:
   generated from the company's unmapped XBRL concept name, label, and description
 ```
 
@@ -438,11 +441,11 @@ This keeps semantic mapping aligned with the diagram:
 
 ```text
 Round 1 answers:
-  did we find any known candidate name for this target raw fact?
+  did we find any known candidate concept name for this target XBRL concept?
 
 Round 2 answers:
   if not, is any unknown company XBRL concept semantically close to one of the
-  pre-embedded candidate names for that missing target?
+  pre-embedded candidate names for that missing target XBRL concept?
 ```
 
 Current System Facts
@@ -452,8 +455,11 @@ The current system already has the right foundation:
 - `src/ingestion/company.py` calls `normalize_companyfacts(..., concepts=None,
   forms=None, taxonomies=None)`, so ingestion keeps a broad raw XBRL archive.
 - `raw_xbrl_facts` is the source-of-truth archive.
-- `src/processing/base_metrics.py` has `BASE_METRIC_MAPPINGS`, which maps a
-  limited set of raw XBRL concepts into canonical base metrics.
+- `src/processing/mapping_catalog.py` owns the executable catalog-backed mapping
+  candidates.
+- `src/processing/base_metrics.py` maps clean supported raw XBRL facts into
+  canonical base metrics using catalog-backed candidates and approved learned
+  mappings.
 - `financial_metrics` stores mapped base metrics with `raw_fact_id` and
   accession traceability.
 - `companies` stores `sic` and `sic_description`, which can be used as one
@@ -462,37 +468,57 @@ The current system already has the right foundation:
   confidence, evidence, classifier version, and review metadata.
 - `src/retrieval/parser.py` already extracts 10-K `Item 1. Business` as the
   `business` section when SEC item headings are detected.
+- `src/analyze/industry_classification.py` implements Gemini-backed hard
+  industry classification from 10-K Item 1 Business with strict label
+  validation and review fallbacks.
 - `src/analyze/prompts.py` is the required location for Gemini prompt templates.
 - Settings already include `gemini_api_key` and the pinned
   `gemini-2.5-flash` chat model.
-- The MS2.5 experiment report already shows raw fact mapping coverage, alternate
-  XBRL tags, and unknown XBRL concepts.
+- `src/ingestion/company.py` reuses stored Gemini labels for the same source
+  10-K accession and reruns classification when a newer 10-K accession becomes
+  the label evidence source.
+- `src/ingestion/company.py` loads the approved company concept profile from
+  approved global, industry, and company-scoped learned mappings before
+  deterministic metric mapping.
+- `src/processing/semantic_mapping.py` embeds target XBRL concept candidates
+  separately for missing canonical metrics instead of using one blended vector
+  per internal metric.
+- The MS2.5 experiment report already shows hard industry labels, target XBRL
+  concept coverage, raw fact mapping coverage, alternate XBRL tags, semantic
+  candidates, and unknown XBRL concepts.
 - The MS3 indicator engine calculates from stable internal metric names, not
   directly from raw XBRL concepts.
 
-Current Limitation
+Current Limitations
 
-`BASE_METRIC_MAPPINGS` is a flat global dictionary:
+The current system no longer depends on only a flat global `BASE_METRIC_MAPPINGS`
+dictionary. The mapping flow is catalog-backed.
 
 ```text
-raw XBRL concept -> statement_type + internal metric_name
+observed XBRL concept
+  -> catalog-backed mapping candidate or approved learned mapping
+  -> system financial metric
 ```
 
-That is enough for common company metrics, but it does not describe:
+Remaining Plan 2.5.1 gaps after Steps 1-4 are:
 
-- which raw facts are expected for a specific industry
-- which raw facts are essential vs optional
-- which raw facts support core indicators vs specialized indicators
-- which raw concepts are consolidated company-level facts vs segment facts
-- which concept should win when multiple concepts can map to the same metric
-- why a concept was selected, skipped, unknown, or left raw
+- The MS2.5 report should make approved company concept profile reuse and
+  semantic-discovery skip reasons more visible for human inspection.
+- Low-confidence or invalid Gemini classification evidence is currently exposed
+  as warnings/fallback behavior; persisting an empty review-needed
+  classification event would require a separate review-event store or schema
+  change.
+- Real-ticker validation should confirm the candidate-level semantic mapping
+  output is useful before promoting any new mappings.
+- `plan2.5.1.txt` should continue avoiding a duplicate full candidate catalog
+  because `src/processing/mapping_catalog.py` is the executable source of truth.
 
 Plan Goal
 
 Plan 2.5.1 should introduce a hard-industry-label-aware mapping layer between the
 broad raw XBRL archive and the base financial metric layer.
 
-The goal is not to map every raw concept.
+The goal is not to map every observed XBRL concept.
 
 The goal is to build an inspectable target mapping catalog and use it to expand
 concept-to-metric mappings selectively, based on evidence from actual filings.
@@ -502,6 +528,8 @@ Non-Goals
 Plan 2.5.1 should not:
 
 - limit SEC/companyfacts ingestion to a preset concept list
+- treat the approved company concept profile as a raw ingestion filter
+- freeze a company concept profile forever without revalidation triggers
 - map every unknown XBRL concept
 - force a company into only one industry label
 - mix segment-level facts into consolidated company indicators
@@ -524,8 +552,12 @@ company_industry_labels
   manual/source-controlled review evidence
 
 mapping catalog
-  source-controlled target raw facts, candidate raw fact names, pre-embedded
-  candidate vectors, and approved concept-to-metric candidates
+  source-controlled target XBRL concepts, candidate XBRL concept names,
+  pre-embedded candidate vectors, and approved concept-to-metric candidates
+
+approved company concept profile
+  reusable company-specific view of approved XBRL concepts that are allowed to
+  populate system financial metrics for this company
 
 financial_metrics
   curated, canonical base metrics used by indicators and analysis
@@ -557,15 +589,15 @@ Reason:
 Rule:
 
 ```text
-Do not use industry target raw fact sets as ingestion filters.
+Do not use industry target XBRL concept sets as ingestion filters.
 Use them as mapping and report coverage targets.
 ```
 
 Design Decision 2 - Add An Inspectable Mapping And Candidate Vector Catalog
 
 Create a source-controlled mapping catalog that stores hard industry label target
-raw facts, candidate raw fact names, approved mapping candidates, and stable
-candidate embedding metadata.
+XBRL concepts, candidate XBRL concept names, approved mapping candidates, and
+stable candidate embedding metadata.
 
 Recommended first file:
 
@@ -634,16 +666,27 @@ Utilities
 Real Estate
 ```
 
-Only add target raw concepts to a label when we need them for an experiment, a
+Only add target XBRL concepts to a label when we need them for an experiment, a
 real ticker, or a reviewed indicator need.
 
 Target candidate vectors should be generated from the catalog and reused across
 companies. Regenerate them only when the candidate text, catalog version, or
 embedding model changes.
 
+Candidate-source rule:
+
+```text
+mapping_catalog.py
+  concepts approved for deterministic hard mapping
+
+xbrl_direct_candidate_mapping.txt
+  candidate research, broader alternatives, and company-extension patterns that
+  require review before becoming deterministic hard mapping candidates
+```
+
 Design Decision 3 - Keep Canonical Metric Names Stable
 
-Different raw concepts can map to the same internal metric.
+Different XBRL concepts can map to the same internal metric.
 
 Example:
 
@@ -665,7 +708,7 @@ operating_cash_flow
 capital_expenditure
 ```
 
-The mapping layer owns raw concept variation.
+The mapping layer owns XBRL concept variation.
 The indicator layer should not need to know every XBRL tag variation.
 
 Design Decision 4 - Use Union Target Sets For Multi-Label Companies
@@ -700,15 +743,15 @@ report:
 For a multi-label company:
 
 ```text
-target_raw_facts =
-  common base target facts
-  UNION target facts for every assigned hard industry label
+target_xbrl_concept_set =
+  common base target XBRL concepts
+  UNION target XBRL concepts for every assigned hard industry label
 ```
 
 Important rule:
 
 ```text
-Union the target raw fact expectations.
+Union the target XBRL concept expectations.
 Do not union numerical values unless the facts are clearly consolidated
 company-level facts.
 ```
@@ -747,14 +790,14 @@ The process should be:
 
 ```text
 1. Ingest broad raw XBRL facts.
-2. Build the common + approved industry target raw fact candidate set.
+2. Build the common + approved industry target XBRL concept candidate set.
 3. Round 1 hard mapping:
-   - compare candidate raw fact names directly against observed company facts
+   - compare candidate XBRL concept names directly against observed company XBRL concepts
    - map only approved deterministic candidates into financial_metrics
-   - record missing target raw facts
+   - record missing target XBRL concepts
 4. Round 2 semantic mapping:
    - load pre-embedded vectors for candidate names belonging to the missing
-     target raw facts
+     target XBRL concepts
    - embed unknown / unmapped company XBRL concepts from the provided company
      facts
    - compare similarity
@@ -768,6 +811,66 @@ Do not expand mappings just to reduce the unknown count.
 
 A lower unknown count is not the goal.
 Better mapping quality is the goal.
+
+Design Decision 7 - Reuse Approved Company Concept Profiles
+
+Normal post-initialization ingestion should not redo semantic mapping when the
+company already has an approved concept profile that still covers the required
+target metrics.
+
+Meaning:
+
+```text
+approved company concept profile =
+  global approved mappings
+  + industry approved mappings for the company's approved hard labels
+  + company approved mappings for the company's CIK
+```
+
+This profile is not a fixed ingestion allowlist. It is a reusable mapping view.
+The system should still ingest broad raw facts so future catalog improvements,
+new issuer-extension concepts, and unknown concept review remain possible.
+
+First ingestion / first review:
+
+```text
+ingest broad raw facts
+  -> assign approved hard industry labels
+  -> build common + industry target XBRL concept set
+  -> run Round 1 hard mapping
+  -> run Round 2 semantic discovery only for missing targets
+  -> approve/reject candidate mappings
+  -> persist approved mappings by proper scope
+  -> approved company concept profile becomes available for reuse
+```
+
+Later ingestion:
+
+```text
+ingest broad raw facts
+  -> load approved company concept profile
+  -> map observed facts through approved profile into financial_metrics
+  -> skip semantic discovery if target coverage remains sufficient
+```
+
+Revalidation triggers:
+
+```text
+run target coverage / semantic discovery again when:
+  - approved hard industry labels change
+  - a newer 10-K triggers label reclassification
+  - an approved concept disappears from active periods
+  - a required indicator input becomes missing
+  - a new issuer-extension concept appears for a missing target metric
+  - a reviewer rejects or invalidates an existing mapping
+  - catalog version or mapping policy changes require review
+```
+
+Important:
+
+Do not call this a fixed XBRL concept set for every company. The better term is
+`approved company concept profile`, because it is governed mapping state, not a
+raw ingestion filter.
 
 Plan 2.5.1 Data Flow
 
@@ -789,21 +892,27 @@ industry label selection
        if refresh fails and prior approved labels exist:
          keep prior labels for continuity and report stale-label review state
 
-target raw fact selection
+target XBRL concept selection
   -> common base targets
   -> UNION industry targets for every approved label
-  -> select target candidate raw fact names
+  -> select candidate XBRL concept names
 
 Round 1 hard mapping
-  -> compare target candidate raw fact names against company XBRL facts
-  -> map approved deterministic candidates into financial_metrics
-  -> record missing target raw facts
+  -> load approved company concept profile when available
+  -> compare approved candidate XBRL concept names against observed company XBRL concepts
+  -> map only approved deterministic candidates into financial_metrics
+  -> record missing target XBRL concepts
 
 Round 2 semantic mapping
-  -> load pre-embedded target candidate vectors for missing targets
-  -> embed unknown / unmapped company XBRL facts
+  -> load pre-embedded target candidate vectors for missing target XBRL concepts
+  -> embed unknown / unmapped company XBRL concepts
   -> compare semantic similarity
   -> persist review-only mapping candidates
+
+profile reuse
+  -> after review, persist approved global / industry / company mappings
+  -> later ingestions reuse the approved company concept profile first
+  -> skip semantic discovery unless profile coverage breaks or labels change
 
 analysis readiness
   -> report mapping coverage
@@ -836,9 +945,9 @@ Company Industry Labels:
   label_status:
   review_notes:
 
-Target Raw Fact Coverage:
+Target XBRL Concept Coverage:
   industry_label
-  target_raw_concept
+  target_xbrl_concept
   taxonomy
   internal_metric_name
   required_for_core
@@ -848,15 +957,15 @@ Target Raw Fact Coverage:
   latest_filing_date
   notes
 
-Found Target Facts:
-  target facts observed in raw_xbrl_facts
+Found Target XBRL Concepts:
+  target XBRL concepts observed in raw_xbrl_facts
 
-Missing Target Facts:
-  target facts expected by assigned hard industry labels but not observed
+Missing Target XBRL Concepts:
+  target XBRL concepts expected by assigned hard industry labels but not observed
 
 Semantic Mapping Candidates:
   missing_target_metric_name
-  missing_target_candidate_raw_concept
+  missing_target_candidate_xbrl_concept
   observed_unknown_xbrl_concept
   observed_label
   observed_description
@@ -865,12 +974,12 @@ Semantic Mapping Candidates:
   match_status
   requires_review
 
-Found But Unmapped Target Facts:
-  target facts observed but not yet mapped because they need approval or quality
-  review
+Found But Unmapped Target XBRL Concepts:
+  target XBRL concepts observed but not yet mapped because they need approval or
+  quality review
 
 Alternate SEC/XBRL Tags:
-  multiple raw concepts mapping to the same internal metric
+  multiple XBRL concepts mapping to the same internal metric
 
 Unknown SEC/XBRL Concepts:
   concepts that are not in the target catalog or mapping catalog
@@ -900,7 +1009,7 @@ Purpose:
 - explain broad raw ingestion vs selective metric mapping
 - define the fixed hard industry label set
 - define the company hard industry label assignment registry
-- define industry target raw fact sets
+- define industry target XBRL concept sets
 - define union target set behavior for multi-label companies
 - define consolidated vs segment facts
 - define mapping statuses
@@ -927,9 +1036,9 @@ Initial content:
 - dataclass for company hard industry label assignments
 - persisted label records as the source of reusable approved labels
 - source-controlled assignments only as seed data or manual fallback
-- dataclasses for hard industry labels and target facts
+- dataclasses for hard industry labels and target XBRL concepts
 - the fixed 11-label hard industry set
-- common base target facts used for most companies
+- common base target XBRL concepts used for most companies
 - initial target concept bundles for each hard industry label
 - target candidate embedding cache helpers
 - helper functions:
@@ -949,9 +1058,9 @@ already has status, confidence, evidence, classifier version, and review fields.
 
 Vector rule:
 
-Pre-embed target candidate raw fact names from the mapping catalog. Do not
+Pre-embed target candidate XBRL concept names from the mapping catalog. Do not
 embed target definitions repeatedly for every company ingestion. Embed only the
-company-provided unknown / unmapped XBRL facts when semantic matching is needed.
+company-provided unknown / unmapped XBRL concepts when semantic matching is needed.
 
 Phase 3 - Add Gemini Industry Classification And Annual Label Refresh
 
@@ -1000,7 +1109,7 @@ Fallback behavior:
   review-needed state and use common-base targets only unless approved labels
   already exist.
 - If Gemini output is malformed, includes unknown labels, or confidence is too
-  low, do not let it control industry-specific target raw fact selection.
+  low, do not let it control industry-specific target XBRL concept selection.
 - If a new 10-K reclassification fails, keep the prior approved labels for
   continuity and report that the latest classification needs review.
 
@@ -1039,11 +1148,11 @@ src/storage/concept_mappings_repository.py
 Goal:
 
 - run semantic mapping only after Round 1 hard mapping identifies missing target
-  raw facts
-- select pre-embedded candidate vectors for the missing target raw facts
+  XBRL concepts
+- select pre-embedded candidate vectors for the missing target XBRL concepts
 - embed only the company's unknown / unmapped XBRL concepts during ingestion or
   experiment execution
-- compare candidate vectors to company unknown fact vectors
+- compare candidate vectors to company unknown XBRL concept vectors
 - persist results as review-only mapping candidates
 - never auto-promote semantic candidates into financial_metrics
 
@@ -1053,13 +1162,60 @@ Expected candidate cache behavior:
 catalog target candidates
   -> pre-embedded and cached by candidate key
 
-company unknown facts
+company unknown XBRL concepts
   -> embedded on demand
 
 similarity results
   -> stored as candidate mappings with evidence
   -> require review before becoming approved mappings
 ```
+
+Phase 5A - Add Approved Company Concept Profile Reuse
+
+Goal:
+
+- define the approved company concept profile as the company-specific view of
+  global, industry, and company-scoped approved mappings
+- load this profile before running semantic discovery
+- reuse approved mappings for normal later ingestions
+- skip semantic mapping when the approved profile still covers target metrics
+- rerun target coverage and semantic discovery only when the profile is stale or
+  incomplete
+
+Reuse flow:
+
+```text
+company has approved labels and approved mappings
+  -> build approved company concept profile
+  -> use profile for deterministic mapping
+  -> avoid semantic discovery unless coverage breaks
+```
+
+Staleness triggers:
+
+```text
+industry labels changed
+new annual 10-K changed label evidence
+approved concept disappeared in active periods
+required indicator input missing
+new extension concept appears for a missing target
+reviewer rejects or invalidates a mapping
+catalog / policy version changes
+```
+
+Storage note:
+
+Use the existing `xbrl_concept_mappings` scopes first:
+
+```text
+global
+industry
+company
+```
+
+Do not add a new table until reports or performance show that a materialized
+profile is necessary. The first implementation can derive the profile by loading
+approved mappings for the company CIK and its approved hard industry labels.
 
 Phase 6 - Add Company Industry Labels And Target Coverage To MS2.5
 
@@ -1078,24 +1234,29 @@ Report additions:
 - classifier model, prompt version, source 10-K accession, filing date, Item 1
   source hash, confidence, and evidence quotes
 - supporting evidence used to justify or review the assigned labels
-- target raw fact coverage
-- missing target facts
-- found target facts
-- found but unmapped target facts
-- candidate-level semantic mapping suggestions for missing targets
-- unknown raw concepts outside current mapping catalog
+- approved company concept profile used for deterministic reuse
+- whether semantic discovery was skipped because the profile covered the target
+  metrics
+- target XBRL concept coverage
+- missing target XBRL concepts
+- found target XBRL concepts
+- found but unmapped target XBRL concepts
+- candidate-level semantic mapping suggestions for missing target XBRL concepts
+- unknown XBRL concepts outside current mapping catalog
 
 This is the most important experiment output for Plan 2.5.1.
 
 It should answer:
 
 ```text
-For this ticker, what raw XBRL facts did we expect because of its assigned hard industry labels?
+For this ticker, what target XBRL concepts did we expect because of its assigned hard industry labels?
 Which ones were present?
 Which ones mapped into financial_metrics?
 Which useful ones are missing from the mapping catalog?
-Which unknown facts are probably irrelevant?
+Which unknown XBRL concepts are probably irrelevant?
 Did Gemini classify labels from the latest 10-K Item 1 Business or reuse stored labels?
+Did the system reuse the approved company concept profile?
+Did target coverage break and require semantic discovery again?
 Which semantic candidates were suggested after Round 1 hard mapping failed?
 ```
 
@@ -1107,13 +1268,19 @@ Expansion workflow:
 
 ```text
 1. Pick one ticker and one assigned hard industry label.
-2. Read Target Raw Fact Coverage.
+2. Read Target XBRL Concept Coverage.
 3. Review missing or found_unmapped concepts.
 4. Decide if the concept is useful for a base metric or industry indicator.
-5. Add it to `mapping_catalog.py`.
-6. Re-run MS2.5.
-7. Confirm mapped rows increased for the intended metric.
-8. Confirm no unrelated indicators changed unexpectedly.
+5. Add deterministic hard-mapping candidates to `mapping_catalog.py`, or add
+   research candidates and caveats to `xbrl_direct_candidate_mapping.txt`.
+6. If approved, persist the mapping at the narrowest correct scope:
+   company first when the concept is issuer-specific, industry when it is safe
+   across that industry, global only when broadly standard.
+7. Re-run MS2.5.
+8. Confirm mapped rows increased for the intended metric.
+9. Confirm the approved company concept profile reuses the mapping on the next
+   ingestion without rerunning semantic discovery.
+10. Confirm no unrelated indicators changed unexpectedly.
 ```
 
 Do not expand mapping just because a concept appears frequently.
@@ -1232,15 +1399,15 @@ Prompt and parser:
 
 Semantic mapping:
   - candidate-level target embeddings create multiple vectors for one internal
-    metric when multiple candidate raw fact names exist
+    metric when multiple candidate XBRL concept names exist
   - cached target candidate vectors are reused
-  - company unknown XBRL facts are embedded on demand
+  - company unknown XBRL concepts are embedded on demand
   - semantic matches are persisted as review-only candidates, not approved mappings
 
 Integration behavior:
-  - mocked Gemini labels change the selected industry target raw fact set before
+  - mocked Gemini labels change the selected industry target XBRL concept set before
     Round 1 hard mapping
-  - Round 2 semantic mapping runs only after Round 1 leaves missing target facts
+  - Round 2 semantic mapping runs only after Round 1 leaves missing target XBRL concepts
 ```
 
 Verification command:
@@ -1253,22 +1420,26 @@ Plan 2.5.1 Acceptance Evidence
 
 Plan 2.5.1 is working when the experiment report can show:
 
-- the approved hard industry label assignment used for target raw fact selection
+- the approved hard industry label assignment used for target XBRL concept selection
 - whether labels came from Gemini, manual/source-controlled seed data, or reuse
 - the company SIC and SIC description as supporting evidence
 - the source 10-K accession, Item 1 Business evidence, classifier model, prompt
   version, confidence, assignment reason, label status, and review notes
 - stable label reuse within the same annual filing cycle
 - annual label reclassification when a newer 10-K is ingested
-- the union target raw fact set for the assigned hard industry labels
-- target facts found in `raw_xbrl_facts`
-- target facts missing from `raw_xbrl_facts`
+- the union target XBRL concept set for the assigned hard industry labels
+- the approved company concept profile used for deterministic mapping reuse
+- whether semantic discovery was skipped because the approved profile covered
+  the required target metrics
+- target XBRL concepts found in `raw_xbrl_facts`
+- target XBRL concepts missing from `raw_xbrl_facts`
 - found facts mapped into `financial_metrics`
-- Round 2 semantic mapping candidates generated only for missing target raw facts
+- Round 2 semantic mapping candidates generated only for missing target XBRL concepts
 - candidate-level target vectors were reused from the pre-embedded cache
-- found target facts that need mapping review
+- found target XBRL concepts that need mapping review
 - unknown concepts that remain raw-only evidence
 - stable traceability from financial_metrics to raw_fact_id and accession number
+- revalidation triggers are visible when the profile is incomplete or stale
 
 Manual verification command:
 
@@ -1281,11 +1452,11 @@ Expected report behavior:
 - no report body printed to terminal
 - `experiments/MS2_5/experiment_report.md` is updated
 - Company Industry Labels section is present
-- Target Raw Fact Coverage section is present
+- Target XBRL Concept Coverage section is present
 - Semantic Mapping Candidates section is present when Round 1 leaves missing
-  target facts and unknown company facts are available
+  target XBRL concepts and unknown company XBRL concepts are available
 - unknown concept count can still be high
-- useful found_unmapped target facts are visible for mapping review
+- useful found_unmapped target XBRL concepts are visible for mapping review
 
 Risks And Mitigations
 
@@ -1300,8 +1471,8 @@ Risk:
   Multi-label union sets create noise.
 
 Mitigation:
-  Mark target facts as required, optional, core, or specialized. Do not treat all
-  target facts as mandatory.
+  Mark target XBRL concepts as required, optional, core, or specialized. Do not
+  treat all target XBRL concepts as mandatory.
 
 Risk:
   Segment-level facts get mixed into consolidated indicators.
@@ -1314,7 +1485,7 @@ Risk:
   Indicator formulas become polluted with raw XBRL tags.
 
 Mitigation:
-  Keep raw concept handling in `src/processing/`. Indicators should use stable
+  Keep XBRL concept handling in `src/processing/`. Indicators should use stable
   internal metric names only.
 
 Risk:
@@ -1349,6 +1520,16 @@ Mitigation:
   Persist semantic matches as review-only candidates. They must not populate
   `financial_metrics` until a deterministic catalog mapping or governed
   approved mapping record exists.
+
+Risk:
+  The approved company concept profile becomes stale and hides better new
+  concepts.
+
+Mitigation:
+  Keep raw ingestion broad, report profile coverage, and rerun discovery when
+  labels change, approved concepts disappear, required indicator inputs become
+  missing, extension concepts appear for missing targets, or a reviewer
+  invalidates a mapping.
 
 Files Likely To Change Later
 
@@ -1427,14 +1608,21 @@ Start the revised Plan 2.5.1 with the classification-and-mapping pipeline:
 2. Add Gemini industry classification from latest 10-K Item 1 Business.
 3. Persist approved labels in `company_industry_labels`; reuse them during the
    annual cycle and refresh them on a new 10-K.
-4. Use approved labels to build the common + industry union target candidate set.
-5. Run Round 1 hard mapping from approved candidate raw fact names.
-6. For missing target raw facts, run Round 2 semantic mapping with pre-embedded
-   candidate vectors and on-demand company unknown fact embeddings.
-7. Persist semantic matches as review-only mapping candidates.
-8. Extend MS2.5 to print label source, target coverage, hard mapping result,
-   semantic candidates, and unknown raw facts.
-9. Use the report to approve additional mappings deliberately.
+4. Use approved labels to build the common + industry union target XBRL concept
+   candidate set.
+5. Load the approved company concept profile when it exists.
+6. Run Round 1 hard mapping from approved candidate XBRL concept names.
+7. Skip semantic discovery when the approved profile covers the required target
+   metrics.
+8. For missing target XBRL concepts, run Round 2 semantic mapping with
+   pre-embedded candidate vectors and on-demand company unknown concept
+   embeddings.
+9. Persist semantic matches as review-only mapping candidates.
+10. Extend MS2.5 to print label source, target coverage, approved company
+    concept profile reuse, hard mapping result, semantic candidates, and unknown
+    XBRL concepts.
+11. Use the report to approve additional mappings deliberately at the narrowest
+    correct scope.
 ```
 
 Do not start by building a full industry taxonomy system.

@@ -1,1 +1,0 @@
-"""Analysis quality evaluation package."""

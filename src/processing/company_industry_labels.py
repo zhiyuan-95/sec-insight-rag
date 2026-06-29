@@ -21,6 +21,7 @@ HARD_INDUSTRY_LABELS = (
 
 LABEL_STATUS_ASSIGNED = "assigned"
 LABEL_STATUS_NEEDS_REVIEW = "needs_label_review"
+LABEL_STATUS_IGNORED = "ignored"
 
 
 @dataclass(frozen=True)
@@ -36,6 +37,8 @@ class CompanyIndustryLabelAssignment:
     reviewed_at: str
     label_status: str
     notes: str = ""
+    confidence: float | None = None
+    classifier_version: str | None = None
 
 
 _ASSIGNMENTS: tuple[CompanyIndustryLabelAssignment, ...] = (

@@ -1,1 +1,0 @@
-"""Deterministic financial analytics package."""

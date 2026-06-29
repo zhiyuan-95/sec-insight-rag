@@ -16,6 +16,8 @@ stock_data.db
 /storage/
 data_store/
 experiments/storage/
+experiments/MS2_5/filings/
+experiments/MS2_5/milestone25_mapping_report_*.md
 experiments/MS3/milestone3_indicator_report_*.txt
 experiments/MS*/experiment_report*.md
 experiments/MS*/experiment_report*.txt

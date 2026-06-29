@@ -136,7 +136,7 @@ COMMON_BASE_TARGETS = (
         "ProfitLoss",
         "net_income",
         "income_statement",
-        notes="Direct standard-tag candidate from xbrl_direct_candidate_mapping.txt.",
+        notes="Standard bottom-line profit or loss tag; use as an alternate to NetIncomeLoss when reported.",
     ),
     _target(COMMON_BASE_LABEL, "ResearchAndDevelopmentExpense", "research_and_development_expense", "income_statement"),
     _target(
@@ -169,7 +169,7 @@ COMMON_BASE_TARGETS = (
         "AccountsNotesAndLoansReceivableNetCurrent",
         "accounts_receivable",
         "balance_sheet",
-        notes="Broader receivables candidate from xbrl_direct_candidate_mapping.txt; inspect if trade-only AR is required.",
+        notes="Broader current receivables tag; inspect if a trade-only accounts receivable value is required.",
     ),
     _target(COMMON_BASE_LABEL, "AccountsPayableCurrent", "accounts_payable", "balance_sheet"),
     _target(COMMON_BASE_LABEL, "AccountsPayableTradeCurrent", "accounts_payable", "balance_sheet"),
@@ -212,7 +212,7 @@ COMMON_BASE_TARGETS = (
         "PaymentsToAcquireProductiveAssets",
         "capital_expenditure",
         "cash_flow_statement",
-        notes="Broader capex candidate from xbrl_direct_candidate_mapping.txt.",
+        notes="Broader capital-expenditure tag for productive assets; inspect against PP&E-only capex needs.",
     ),
     _target(COMMON_BASE_LABEL, "DepreciationDepletionAndAmortization", "depreciation_and_amortization", "cash_flow_statement"),
     _target(

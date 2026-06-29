@@ -10,6 +10,12 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable, TYPE_CHECKING
 
+from src.analyze.industry_classification import (
+    BusinessSectionSource,
+    GEMINI_INDUSTRY_CLASSIFIER_VERSION,
+    classify_company_industry_labels,
+    stored_label_source_accessions,
+)
 from src.indicators import calculate_indicators
 from src.ingestion.companyfacts import get_companyfacts
 from src.ingestion.errors import SecIngestionError
@@ -21,6 +27,7 @@ from src.ingestion.submissions import get_company_submissions
 from src.ingestion.tickers import load_ticker_mapping, resolve_ticker_to_cik
 from src.processing.company_industry_labels import (
     CompanyIndustryLabelAssignment,
+    LABEL_STATUS_ASSIGNED,
     industry_label_assignments_for_company,
 )
 from src.processing import (
@@ -60,6 +67,8 @@ from src.storage import (
     StoredCompanyIndustryLabel,
     connect_sqlite,
 )
+from src.retrieval.errors import EmptyFilingTextError, FilingParseError
+from src.retrieval.parser import parse_filing_html
 
 if TYPE_CHECKING:
     from src.config import Settings
@@ -121,6 +130,18 @@ class _FilingPeriodSummary:
     fiscal_year: int | None
     fiscal_period: str | None
     report_date: date | None
+
+
+@dataclass(frozen=True)
+class _ApprovedCompanyConceptProfile:
+    """Approved mapping state reusable for one company ingestion."""
+
+    records: tuple[ConceptMappingRecord, ...]
+    mappings: dict[tuple[str, str], IndustryFactTarget]
+
+    @property
+    def mapping_count(self) -> int:
+        return len(self.mappings)
 
 
 def ingest_company(ticker: str, settings: Settings) -> CompanyIngestionResult:
@@ -243,25 +264,17 @@ def _ingest_company_from_sec(
         )
         if company.company_id is None:
             raise RuntimeError(f"Stored company record for CIK {cik} did not include a company_id")
-        stored_industry_labels = industry_label_repository.list_labels(
-            company.company_id
+        stored_industry_labels = _resolve_company_industry_labels(
+            repository=industry_label_repository,
+            company=company,
+            ticker=normalized_ticker,
+            cik=cik,
+            filings=filings,
+            downloaded_filings=downloaded_filings,
+            observed_concepts=(fact.concept for fact in stored_facts),
+            settings=settings,
+            warnings=warnings,
         )
-        if not stored_industry_labels:
-            industry_assignment = industry_label_assignments_for_company(
-                normalized_ticker,
-                cik,
-                sic=company.sic,
-                sic_description=company.sic_description,
-                observed_concepts=(fact.concept for fact in stored_facts),
-            )
-            _persist_industry_labels(
-                industry_label_repository,
-                company.company_id,
-                industry_assignment,
-            )
-            stored_industry_labels = industry_label_repository.list_labels(
-                company.company_id
-            )
         industry_labels = tuple(
             label.industry_label for label in stored_industry_labels
         )
@@ -306,18 +319,17 @@ def _ingest_company_from_sec(
             if filing.filing_id is not None
         }
 
-        approved_mapping_rows = concept_mapping_repository.list_for_company(
+        approved_profile = _load_approved_company_concept_profile(
+            concept_mapping_repository,
             cik,
             industry_labels,
-            status=MAPPING_STATUS_APPROVED,
         )
-        approved_mappings = _approved_mapping_targets(approved_mapping_rows)
-        approved_mapping_count = len(approved_mappings)
-        catalog_mappings = mapping_candidates_by_key(industry_labels)
-        mapping_names = {
-            key: target.metric_name
-            for key, target in {**catalog_mappings, **approved_mappings}.items()
-        }
+        approved_mappings = approved_profile.mappings
+        approved_mapping_count = approved_profile.mapping_count
+        mapping_names = _deterministic_mapping_names(
+            industry_labels,
+            approved_profile,
+        )
         targets = canonical_metric_targets(industry_labels)
         missing_targets = missing_metric_targets(stored_facts, targets, mapping_names)
         should_extract_inline = bool(missing_targets) and (
@@ -498,6 +510,145 @@ def _refresh_company_indicators(
     return stored_indicator_count, active_indicator_count
 
 
+def _resolve_company_industry_labels(
+    *,
+    repository: CompanyIndustryLabelRepository,
+    company: CompanyRecord,
+    ticker: str,
+    cik: str,
+    filings: tuple[FilingMetadata, ...],
+    downloaded_filings: tuple[Path | None, ...],
+    observed_concepts: Iterable[str],
+    settings: Settings,
+    warnings: list[str],
+) -> tuple[StoredCompanyIndustryLabel, ...]:
+    if company.company_id is None:
+        raise RuntimeError(f"Stored company record for CIK {cik} did not include a company_id")
+
+    stored_labels = repository.list_labels(company.company_id)
+    gemini_api_key = (
+        settings.gemini_api_key.get_secret_value()
+        if settings.gemini_api_key is not None
+        else None
+    )
+    if gemini_api_key:
+        business_section = _latest_10k_business_section(
+            filings=filings,
+            downloaded_filings=downloaded_filings,
+            warnings=warnings,
+        )
+        if business_section is not None and _industry_classification_due(
+            stored_labels,
+            business_section.accession_number,
+        ):
+            try:
+                assignment = classify_company_industry_labels(
+                    ticker=ticker,
+                    cik=cik,
+                    company_name=company.name,
+                    business_section=business_section,
+                    sic=company.sic,
+                    sic_description=company.sic_description,
+                    api_key=gemini_api_key,
+                    model=settings.primary_chat_model,
+                )
+            except Exception as exc:
+                warnings.append(
+                    "Gemini industry classification skipped; using existing or "
+                    f"source-controlled labels: {exc}"
+                )
+            else:
+                if (
+                    assignment.label_status == LABEL_STATUS_ASSIGNED
+                    and assignment.assigned_industry_labels
+                ):
+                    _persist_industry_labels(repository, company.company_id, assignment)
+                    return repository.list_labels(company.company_id)
+                warnings.append(
+                    "Gemini industry classification did not meet the keep criteria; "
+                    "ignoring Gemini labels and using existing or source-controlled labels."
+                )
+
+    if stored_labels:
+        return stored_labels
+
+    assignment = industry_label_assignments_for_company(
+        ticker,
+        cik,
+        sic=company.sic,
+        sic_description=company.sic_description,
+        observed_concepts=observed_concepts,
+    )
+    _persist_industry_labels(
+        repository,
+        company.company_id,
+        assignment,
+    )
+    return repository.list_labels(company.company_id)
+
+
+def _industry_classification_due(
+    stored_labels: tuple[StoredCompanyIndustryLabel, ...],
+    accession_number: str,
+) -> bool:
+    if not stored_labels:
+        return True
+    gemini_labels = tuple(
+        label
+        for label in stored_labels
+        if label.classifier_version == GEMINI_INDUSTRY_CLASSIFIER_VERSION
+    )
+    if not gemini_labels:
+        return True
+    return any(
+        accession_number not in stored_label_source_accessions(label.evidence)
+        for label in gemini_labels
+    )
+
+
+def _latest_10k_business_section(
+    *,
+    filings: tuple[FilingMetadata, ...],
+    downloaded_filings: tuple[Path | None, ...],
+    warnings: list[str],
+) -> BusinessSectionSource | None:
+    candidates = sorted(
+        (
+            (filing, path)
+            for filing, path in zip(filings, downloaded_filings)
+            if filing.form.upper() == "10-K" and path is not None
+        ),
+        key=lambda item: (item[0].filing_date, item[0].accession_number),
+        reverse=True,
+    )
+    for filing, path in candidates:
+        try:
+            parsed = parse_filing_html(path, "10-K")
+        except (EmptyFilingTextError, FilingParseError) as exc:
+            warnings.append(
+                "Gemini industry classification skipped for "
+                f"{filing.accession_number}; 10-K Item 1 Business could not be parsed: {exc}"
+            )
+            continue
+        section = next(
+            (section for section in parsed.sections if section.name == "business"),
+            None,
+        )
+        if section is None or not section.text.strip():
+            warnings.append(
+                "Gemini industry classification skipped for "
+                f"{filing.accession_number}; 10-K Item 1 Business was not detected."
+            )
+            continue
+        return BusinessSectionSource(
+            accession_number=filing.accession_number,
+            filing_date=filing.filing_date,
+            local_path=str(path),
+            text=section.text,
+        )
+    return None
+
+
 def _build_local_ingestion_result(
     *,
     settings: Settings,
@@ -540,14 +691,14 @@ def _build_local_ingestion_result(
         industry_labels = tuple(
             label.industry_label for label in stored_industry_labels
         )
-        approved_mapping_rows = concept_mapping_repository.list_for_company(
+        approved_profile = _load_approved_company_concept_profile(
+            concept_mapping_repository,
             company.cik,
             industry_labels,
-            status=MAPPING_STATUS_APPROVED,
         )
-        approved_mappings = _approved_mapping_targets(approved_mapping_rows)
+        approved_mappings = approved_profile.mappings
         mapped_concepts = set(mapping_candidates_by_concept(industry_labels)) | {
-            row.concept for row in approved_mapping_rows
+            row.concept for row in approved_profile.records
         }
         stored_fact_records = raw_repository.list_fact_records(company.cik, mapped_concepts)
         active_keys = active_period_keys_from_periods(raw_repository.list_distinct_periods(company.cik))
@@ -591,7 +742,7 @@ def _build_local_ingestion_result(
         sec_checked=sec_checked,
         refresh_due_10k=refresh_due_10k,
         refresh_due_10q=refresh_due_10q,
-        approved_mapping_count=len(approved_mappings),
+        approved_mapping_count=approved_profile.mapping_count,
         industry_label_count=len(industry_labels),
     )
 
@@ -608,8 +759,9 @@ def _persist_industry_labels(
             assignment_source=assignment.assignment_source,
             assignment_reason=assignment.assignment_reason,
             status="approved",
+            confidence=assignment.confidence,
             evidence=assignment.supporting_evidence,
-            classifier_version="source_controlled_registry_v1",
+            classifier_version=assignment.classifier_version or "source_controlled_registry_v1",
             reviewed_at=assignment.reviewed_at or None,
         )
         for industry_label in assignment.assigned_industry_labels
@@ -699,6 +851,36 @@ def _approved_mapping_targets(
             notes=f"Approved persisted mapping {row.mapping_id}",
         )
     return selected
+
+
+def _load_approved_company_concept_profile(
+    repository: ConceptMappingRepository,
+    cik: str,
+    industry_labels: tuple[str, ...],
+) -> _ApprovedCompanyConceptProfile:
+    rows = repository.list_for_company(
+        cik,
+        industry_labels,
+        status=MAPPING_STATUS_APPROVED,
+    )
+    return _ApprovedCompanyConceptProfile(
+        records=rows,
+        mappings=_approved_mapping_targets(rows),
+    )
+
+
+def _deterministic_mapping_names(
+    industry_labels: tuple[str, ...],
+    approved_profile: _ApprovedCompanyConceptProfile,
+) -> dict[tuple[str, str], str]:
+    catalog_mappings = mapping_candidates_by_key(industry_labels)
+    return {
+        key: target.metric_name
+        for key, target in {
+            **catalog_mappings,
+            **approved_profile.mappings,
+        }.items()
+    }
 
 
 def _candidate_mapping_records(

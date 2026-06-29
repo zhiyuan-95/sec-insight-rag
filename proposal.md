@@ -8,9 +8,11 @@ The system will ingest SEC filings and structured XBRL facts, calculate derived 
 
 The first version will support one company ticker at a time and focus on recent 10-K and 10-Q filings and XBRL data extraction and processing.
 
+This proposal defines product scope, architecture direction, and the MVP roadmap. It is not the live repository map; use `docs/structure.md` for implemented files, current module responsibilities, generated storage locations, and verification commands.
+
 ## 2. Core System Design
 
-The backend will be organized into these main layers:
+The target backend is organized around these main layers. Some are implemented and some remain planned:
 
 ```text
 src/
@@ -38,17 +40,23 @@ src/
 
    * Normalize XBRL facts by concept, period, unit, form type, and fiscal year/quarter.
    * Preserve Inline XBRL namespace, context, dimensions, consolidation state, and source-document lineage.
-   * Store raw SEC facts without modifying the original values.
+   * Store broad raw SEC/XBRL facts without modifying the original values.
+   * Treat industry labels and target concept bundles as mapping/reporting inputs, not raw-ingestion filters.
    * Flag missing, duplicated, or ambiguous concepts instead of silently guessing.
 3. Company inspection and base metric mapping
 
    * Store local company metadata, filing metadata, and update-check state.
+   * Assign reusable hard industry labels from the latest 10-K Item 1 Business section with Gemini when configured, and reclassify when a newer 10-K changes the evidence.
+   * Select target XBRL concept sets from common base candidates plus the industry-specific candidates for the company's approved hard labels.
    * Map selected raw XBRL facts into business-friendly base metrics grouped by financial statement type.
-   * Rank unknown concepts against missing canonical metrics, store review-only candidates, and reuse only approved global, industry, or company-scoped mappings.
+   * Run deterministic catalog mapping first, then rank unknown concepts only for missing target XBRL concepts.
+   * Store semantic matches as review-only candidates; only approved global, industry, or company-scoped mappings can populate base metrics.
+   * Reuse an approved company concept profile on later ingestions when it still covers the required target metrics.
    * Preserve traceability from each base metric back to the source raw XBRL fact and filing.
 4. Derived indicator calculation
 
-   * Calculate indicators from base financial metrics, such as revenue growth, gross margin, operating margin, net margin, current ratio, debt ratio, free cash flow, and cash conversion.
+   * Calculate indicators from base financial metrics, including growth, margin, return, cash generation, liquidity, leverage, operating-efficiency, and shareholder-impact indicators.
+   * Treat `free_cash_flow` as a derived indicator from operating cash flow and capital expenditure, not as a raw fact.
    * Store formulas and source fact references so each derived metric is auditable.
 5. Financial data analysis
 
@@ -63,6 +71,7 @@ src/
    * Use built-in LlamaIndex utilities for non-reasoning retrieval tasks such as document loading, text splitting, indexing, and retrieval when available.
 7. LLM/RAG analysis and reasoning
 
+   * Use Gemini for hard industry label classification and RAG reasoning, not for approving XBRL concept-to-metric mappings.
    * Use an LLM only after structured data, financial data analysis results, and relevant filing evidence have been retrieved.
    * Generate summaries, risk explanations, performance-driver analysis, and financial thesis outputs.
    * Clearly label each statement as a reported fact, derived indicator, financial data analysis result, semantic filing analysis, or interpretation.
@@ -75,7 +84,7 @@ src/
 
    * Provide user-facing orchestration functions for multi-step backend operations.
    * Keep orchestration thin by calling ingestion, processing, storage, retrieval, analytics, and analysis modules instead of duplicating their logic.
-   * Start with `src/workflows/company_ingestion.py` for a single-company ingestion workflow.
+   * Current company ingestion orchestration lives in `src/ingestion/company.py`; add `src/workflows/company_ingestion.py` later only when a separate workflow boundary is useful.
 
 ## 3. LLM Usage and LlamaIndex Tooling Policy
 
@@ -83,28 +92,36 @@ For the current system, all LLM-based tasks will use `gemini-2.5-flash`. This ke
 
 `gemini-2.5-flash` will be used for:
 
-1. Query understanding
+1. Hard industry classification
+
+   * Classify a company into the fixed hard industry label set from the latest active 10-K Item 1 Business section.
+   * Return strict JSON with labels, confidence, reason, and evidence quotes.
+   * Reuse approved labels during the same annual filing cycle, and reclassify when a newer 10-K changes the source evidence.
+   * Fall back to common-base target concepts when classification is unavailable, malformed, or low confidence; keep only supported high-confidence Gemini labels and ignore low-confidence labels without a human approval queue.
+2. Query understanding
 
    * Convert user questions into retrieval intent.
    * Identify whether the user is asking about performance, risk, trend, comparison, or a specific financial metric.
-2. Filing-text summarization
+3. Filing-text summarization
 
    * Summarize retrieved MD&A, Risk Factors, notes, or other filing sections.
    * Keep summaries grounded in retrieved text.
-3. Evidence-grounded question answering
+4. Evidence-grounded question answering
 
    * Combine structured metrics, derived indicators, financial data analysis results, and filing excerpts into a readable answer.
    * Cite the evidence used for each major claim.
-4. Risk interpretation
+5. Risk interpretation
 
    * Explain what indicators may suggest about liquidity, leverage, margin pressure, revenue decline, cash flow weakness, or business concentration.
    * Avoid claiming certainty unless explicitly supported by the filing.
-5. Financial thesis generation
+6. Financial thesis generation
 
    * Generate a structured thesis with positive factors, negative factors, financial data analysis signals, semantic filing evidence, risks, open questions, and metrics to monitor.
-6. Explanation refinement
+7. Explanation refinement
 
    * Rewrite analysis in a clearer user-facing format while preserving evidence and labels.
+
+Gemini output may propose hard industry labels, but it must not approve XBRL concept-to-system-metric mappings. Concept mappings require deterministic catalog entries or governed approved mapping records.
 
 Non-reasoning pipeline tasks, such as document loading, text splitting, indexing, retrieval, and embedding integration, should use built-in LlamaIndex tools when available.
 
@@ -121,7 +138,7 @@ ALLOWED_CHAT_MODELS=gemini-2.5-flash
 
 Current configured services include:
 
-* `Gemini_API_KEY` for all LLM reasoning tasks.
+* `Gemini_API_KEY` for Gemini-backed hard industry classification and LLM reasoning tasks.
 * `SEC_USER_AGENT` for SEC data access.
 * Storage path settings for local databases, filings, and knowledge indexes.
 * Other API keys may remain in the config file for future expansion, but they are not required for the current MVP plan.
@@ -135,17 +152,21 @@ Use local storage for the MVP:
    * Company metadata
    * Filing metadata
    * Raw XBRL facts
+   * Reusable company hard industry labels and label evidence
+   * Governed XBRL concept mapping candidates, approvals, and rejections
    * Base financial metrics mapped from raw XBRL facts
    * Derived indicators
    * Financial data analysis results
    * Chart-ready analysis datasets
    * Filing chunks
+   * Retrieval index generation state
    * Evidence references
    * Analysis outputs
 2. Rebuildable retrieval indexes
 
    * Keep canonical filing chunks and source lineage in SQLite.
    * Use LlamaIndex-compatible local vector and keyword indexes as rebuildable retrieval artifacts for the MVP.
+   * Cache pre-embedded target XBRL concept vectors for all common-base and hard-industry catalog candidates; embed observed company unknown concepts only when semantic discovery is needed.
 3. File storage
 
    * Save downloaded filings under the configured filings directory.
@@ -178,7 +199,7 @@ POST /companies/{ticker}/ask
 
 Expected behavior:
 
-* `/ingest` calls the company ingestion workflow, retrieves SEC data, downloads filings, normalizes XBRL facts, and stores normalized raw facts. Retrieval index synchronization remains an explicit separate operation until a later workflow or API integration connects it to ingestion.
+* `/ingest` calls company ingestion orchestration, retrieves SEC data, downloads filings, normalizes broad raw XBRL facts, assigns or reuses hard industry labels, maps approved base metrics, and stores traceability. Retrieval index synchronization remains an explicit separate operation until a later workflow or API integration connects it to ingestion.
 * `/metrics` returns normalized base financial metrics.
 * `/indicators` returns calculated financial indicators and formula references.
 * `/analytics` returns deterministic financial data analysis results and chart-ready datasets.
@@ -217,7 +238,7 @@ Example distinction:
    * Implement ticker-to-CIK lookup.
    * Retrieve company submissions and companyfacts JSON.
    * Download latest 10-K and 10-Q filings.
-   * Extract common GAAP financial concepts.
+   * Normalize broad raw SEC/XBRL facts for supported filing forms instead of limiting ingestion to the mapped concept catalog.
    * Normalize periods, units, fiscal years, and form types.
    * Store facts in SQLite.
 2.5. Company registry, filing inventory, and base metric mapping
@@ -226,9 +247,13 @@ Example distinction:
    * Track latest ingested 10-K and 10-Q filing dates and next-check dates.
    * Keep `raw_xbrl_facts` as the source-of-truth table for normalized SEC/XBRL facts.
    * Supplement entity-wide companyfacts with issuer-extension and dimensional facts from active Inline XBRL filings.
-   * Persist reusable company hard-industry labels and their assignment evidence.
+   * Persist reusable company hard industry labels and assignment evidence; use Gemini classification from latest 10-K Item 1 Business when configured.
+   * Reuse approved labels during the same annual filing cycle and reclassify when a newer 10-K changes the label evidence.
+   * Select the target XBRL concept set from common base candidates plus industry-specific candidates for every approved hard label.
+   * Map selected raw XBRL facts into business-friendly base metrics by statement type through deterministic catalog entries and approved learned mappings.
+   * Derive and reuse an approved company concept profile from approved global, industry, and company-scoped mappings.
+   * Run semantic mapping only after deterministic mapping leaves missing target XBRL concepts.
    * Store semantic mapping candidates separately from approved mapping decisions; candidates must not create base metrics.
-   * Map selected raw XBRL facts into business-friendly base metrics by statement type.
    * Preserve links from each base metric back to the source filing and raw XBRL fact.
    * Do not calculate derived indicators in this milestone.
 3. Indicator engine
@@ -245,11 +270,13 @@ Example distinction:
 
    * Parse and chunk filing text.
    * Use built-in LlamaIndex tools for document loading, text splitting, indexing, and retrieval when available.
-   * Store chunk metadata and vector index records.
+   * Store canonical chunk metadata in SQLite and rebuildable local vector and keyword index artifacts under knowledge storage.
+   * Reuse unchanged retrieval generations and preserve the last complete generation when a rebuild fails.
 6. Gemini model integration
 
    * Load `gemini-2.5-flash` from configuration.
-   * Use `gemini-2.5-flash` for all current LLM reasoning, summarization, Q&A, and thesis generation tasks.
+   * Use `gemini-2.5-flash` first for hard industry label classification from 10-K Item 1 Business during ingestion.
+   * Use the same configured model for later LLM reasoning, summarization, Q&A, and thesis generation tasks.
    * Track model, provider, task type, latency, and token usage for each call.
 7. RAG analysis
 
@@ -257,7 +284,8 @@ Example distinction:
    * Generate grounded answers and company thesis summaries.
 8. FastAPI backend
 
-   * Add `src/workflows/company_ingestion.py` as a thin orchestration wrapper over the existing ingestion, processing, and storage functions.
+   * Keep current ingestion orchestration usable through `src/ingestion/company.py`.
+   * Add `src/workflows/company_ingestion.py` later if the API needs a separate thin workflow wrapper over ingestion, processing, storage, retrieval, analytics, or analysis modules.
    * Add ingestion, metrics, indicators, analytics, CSV export, analysis, and Q&A endpoints.
 9. Testing and evaluation
 
@@ -276,8 +304,12 @@ Example distinction:
 * SEC companyfacts parsing
 * Arelle-backed Inline XBRL extension extraction
 * XBRL concept normalization
-* Hard industry label assignment and target concept selection
+* Gemini hard industry classification from 10-K Item 1 Business with strict label validation
+* Hard industry label reuse, annual reclassification on a newer 10-K, and common-base fallback when Gemini labels are unavailable, invalid, or low confidence
+* Target XBRL concept selection from common base plus approved hard industry labels
+* Approved company concept profile reuse and staleness triggers
 * Semantic mapping candidate ranking and reviewed mapping promotion
+* Rejection of semantic candidates as metric sources until a mapping is approved
 * Company, filing, and base metric repository behavior
 * Raw XBRL fact to base metric mapping
 * Derived indicator formulas, skipped reasons, source lineage, and persistence
@@ -291,7 +323,9 @@ Example distinction:
 **Integration tests**:
 
 * Ingest one known ticker from saved SEC fixtures.
-* Store normalized facts, filing metadata, base metrics, and indicators in SQLite.
+* Store normalized facts, filing metadata, hard industry labels, base metrics, and indicators in SQLite.
+* With mocked Gemini output, confirm high-confidence labels change target concept selection and low-confidence output falls back to common-base targets.
+* Confirm an approved company concept profile can be reused without semantic discovery when target coverage remains intact.
 * Generate financial data analysis results from stored facts and indicators.
 * Build, reuse, and safely replace retrieval generations while preserving the last complete generation after failures.
 * Retrieve fused vector and BM25 evidence whose chunk IDs and lineage match canonical SQLite rows.
@@ -300,6 +334,9 @@ Example distinction:
 
 **Manual acceptance tests**:
 
+* Run the MS2.5 experiment and inspect label source, target XBRL concept coverage, approved company concept profile reuse, semantic candidates, unknown concepts, and annual/quarterly mapped metric tables.
+* Run the MS3 experiment and inspect yearly and quarterly derived indicator tables with skipped reasons and source metric lineage.
+* Run the MS5 retrieval experiment and inspect active filing coverage, chunk lineage, generation state, and retrieved evidence.
 * Start the FastAPI backend.
 * Ingest one company ticker.
 * Export raw facts as CSV.
@@ -329,16 +366,20 @@ or active-window corpus size changes.
 The MVP is successful if it can:
 
 1. Ingest SEC filings and XBRL facts for one ticker.
-2. Store company metadata, filing metadata, and base financial metrics with source traceability.
-3. Calculate and store useful financial indicators.
-4. Run deterministic financial data analysis over raw facts and derived indicators.
-5. Export raw facts and derived indicators as CSV.
-6. Retrieve relevant filing evidence for user questions.
-7. Use `gemini-2.5-flash` as the default LLM for explanation and analysis.
-8. Use built-in LlamaIndex tools for non-reasoning retrieval pipeline tasks when available.
-9. Produce answers that clearly distinguish fact, calculation, financial data analysis, semantic filing analysis, and interpretation.
-10. Avoid unsupported causal claims.
-11. Provide enough source references for users to verify the analysis.
+2. Store broad raw XBRL facts separately from mapped base financial metrics.
+3. Store company metadata, filing metadata, approved hard industry labels, and base financial metrics with source traceability.
+4. Select target XBRL concepts from common base plus approved hard industry labels.
+5. Reuse approved company concept profiles for normal refreshes and rerun semantic discovery only when the profile is incomplete or stale.
+6. Keep semantic mapping candidates review-only until a mapping is explicitly approved.
+7. Calculate and store useful financial indicators.
+8. Run deterministic financial data analysis over raw facts and derived indicators.
+9. Export raw facts and derived indicators as CSV.
+10. Retrieve relevant filing evidence for user questions.
+11. Use `gemini-2.5-flash` as the default LLM for hard industry classification, explanation, and analysis.
+12. Use built-in LlamaIndex tools for non-reasoning retrieval pipeline tasks when available.
+13. Produce answers that clearly distinguish fact, calculation, financial data analysis, semantic filing analysis, and interpretation.
+14. Avoid unsupported causal claims.
+15. Provide enough source references for users to verify the analysis.
 
 ## 11. Out of Scope for MVP
 
@@ -352,6 +393,8 @@ The first version will not include:
 * Investment recommendations
 * Automatic buy/sell ratings
 * Non-GAAP reconciliation beyond what is clearly available from filings
+* Automatic approval of semantic XBRL concept mappings without review
+* A broader industry taxonomy beyond the fixed hard industry label set
 
 ### Deferred indicator extensions
 
@@ -361,17 +404,3 @@ and working-capital contribution indicators. Industry-specific indicators should
 remain in separate, explicit catalogs or modules rather than being forced into
 one universal catalog. Initial deferred families include bank, insurance, REIT,
 and SaaS operating indicators.
-
-## GSTACK REVIEW REPORT
-
-| Review | Trigger | Why | Runs | Status | Findings |
-|--------|---------|-----|------|--------|----------|
-| CEO Review | `/plan-ceo-review` | Scope and strategy | 0 | Not run | Not required for this architecture-alignment review |
-| Codex Review | `/codex review` | Independent second opinion | 1 | Unavailable | Timed out after five minutes without returning findings |
-| Eng Review | `/plan-eng-review` | Architecture and tests (required) | 1 | CLEAR | 11 issues resolved, 0 critical gaps |
-| Design Review | `/plan-design-review` | UI/UX gaps | 0 | Not applicable | Backend and documentation scope only |
-| DX Review | `/plan-devex-review` | Developer experience gaps | 1 | Concerns | Score 5/10 on commit `d8d20df`; one commit before this review |
-
-**VERDICT:** ENG CLEARED - proposal and live structure are aligned for the reviewed scope.
-
-NO UNRESOLVED DECISIONS

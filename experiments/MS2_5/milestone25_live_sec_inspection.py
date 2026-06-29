@@ -8,7 +8,7 @@ import json
 import sqlite3
 import sys
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
 from typing import Any, Sequence
@@ -18,6 +18,10 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.config import Settings, load_settings
+from src.analyze.xbrl_formula_proposals import (
+    default_formula_proposal_provider_configs,
+    generate_formula_proposal,
+)
 from src.ingestion import (
     FilingNotFoundError,
     SecConfigurationError,
@@ -37,16 +41,77 @@ from src.processing.mapping_catalog import (
     mapping_candidates_by_key,
     target_facts_for_industry_labels,
 )
+from src.processing.metric_recovery import (
+    COMPONENT_AMBIGUOUS,
+    COMPONENT_ASSUMED_ZERO,
+    COMPONENT_CANDIDATE_REVIEW_REQUIRED,
+    COMPONENT_MAPPED,
+    COMPONENT_MISSING_REQUIRED,
+    DEBT_RECOVERY_FORMULAS,
+    REVIEW_CANDIDATE_REQUIRED,
+    SKIP_DUPLICATE_COMPONENT_FACTS,
+    SKIP_PERIOD_MISMATCH,
+    SKIP_UNIT_MISMATCH,
+    TARGET_DECOMPOSITION_INCOMPLETE,
+    TARGET_DERIVED_FROM_COMPONENTS,
+    TARGET_DIRECT_MAPPED,
+    MetricRecoveryResult,
+    MetricRecoverySource,
+    recover_debt_metrics,
+)
+from src.processing.formula_proposals import (
+    CACHE_STATUS_ENTRY_INVALID,
+    CACHE_STATUS_GENERATED_NEW,
+    CACHE_STATUS_REUSED_EXACT_CONTEXT,
+    CACHE_STATUS_REUSED_VALIDATION_FAILED,
+    CACHE_STATUS_UNAVAILABLE,
+    CONSENSUS_VALIDATED,
+    CONSENSUS_TARGET_ZERO,
+    PROVIDER_STATUS_FAILED,
+    PROVIDER_STATUS_NO_FORMULA,
+    PROVIDER_STATUS_PROPOSED,
+    PROVIDER_STATUS_TARGET_ZERO,
+    PROVIDER_STATUS_UNAVAILABLE,
+    VALIDATION_STATUS_VALIDATED,
+    VALIDATION_STATUS_ZERO_EVIDENCE,
+    FormulaProposalFact,
+    FormulaProposalContext,
+    FormulaProposalProviderResult,
+    FormulaProposalTarget,
+    FormulaProposalValidationResult,
+    build_formula_proposal_contexts,
+    consensus_label,
+    formula_context_fingerprint,
+    formula_context_prompt_payload,
+    load_formula_proposal_cache,
+    save_formula_proposal_cache,
+    validate_formula_proposal,
+)
 from src.storage import CompanyRepository, connect_sqlite, initialize_database
 
 EXPERIMENT_DIR = PROJECT_ROOT / "experiments" / "MS2_5"
 EXPERIMENT_STORAGE_DIR = PROJECT_ROOT / "experiments" / "storage"
 DEFAULT_DB_PATH = EXPERIMENT_STORAGE_DIR / "experiment.db"
-DEFAULT_REPORT_PATH = EXPERIMENT_DIR / "experiment_report.md"
+DEFAULT_REPORT_PREFIX = "milestone25_mapping_report"
 DEFAULT_FILINGS_DIR = EXPERIMENT_STORAGE_DIR / "filings"
 DEFAULT_EXPORTS_DIR = PROJECT_ROOT / "data" / "exports" / "ms2_5"
+FORMULA_PROPOSAL_CACHE_SUBDIR = "formula_proposals"
+FORMULA_PROPOSAL_CONTEXT_LIMIT_PER_TARGET = 1
 FORMS = ("10-K", "10-Q")
 STATUS_FOUND_MAPPED_ALTERNATE = "found_mapped_alternate"
+
+TARGET_COVERAGE_REPORT_COLUMNS = (
+    "industry_label",
+    "target_xbrl_concept",
+    "internal_metric_name",
+    "alternate_mapped_concepts",
+    "notes",
+)
+DEBT_RECOVERY_COMPONENT_POLICY = {
+    (formula.formula_name, component.component_name): component
+    for formula in DEBT_RECOVERY_FORMULAS
+    for component in formula.components
+}
 PRESENTATION_NUMBER_EXCLUDED_HEADERS = {
     "accession",
     "accession_number",
@@ -61,11 +126,13 @@ PRESENTATION_NUMBER_EXCLUDED_HEADERS = {
     "frame",
     "id",
     "local_path",
+    "mapping_id",
     "metric_id",
     "next_check_date_10k",
     "next_check_date_10q",
     "raw_fact_id",
     "sic",
+    "scope_value",
     "source_raw_fact_id",
     "start_date",
 }
@@ -140,7 +207,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         settings = _experiment_settings(args.env_file, paths)
         if not settings.sec_user_agent:
             raise SecConfigurationError("SEC_USER_AGENT is required for live SEC experiment runs")
-        run = run_experiment(ticker=ticker, settings=settings, paths=paths)
+        run = run_experiment(
+            ticker=ticker,
+            settings=settings,
+            paths=paths,
+            formula_proposals_enabled=args.formula_proposals,
+            formula_proposal_target_limit=args.formula_proposal_target_limit,
+        )
     except (SecConfigurationError, SecIngestionError, TickerNotFoundError, FilingNotFoundError, ValueError) as exc:
         run = _error_run(ticker=ticker, paths=paths, error=exc)
         _present_report(run, write_report=args.write_report, full_report=args.full_report)
@@ -163,6 +236,8 @@ def run_experiment(
     ticker: str,
     settings: Settings,
     paths: ExperimentPaths,
+    formula_proposals_enabled: bool = False,
+    formula_proposal_target_limit: int | None = None,
 ) -> ExperimentRun:
     """Run ingestion against steady experiment storage, then inspect the local session path."""
     run_timestamp = datetime.now(timezone.utc).isoformat()
@@ -176,7 +251,13 @@ def run_experiment(
     session_company_exists = bool(session_before_snapshot.get("company"))
     if session_company_exists:
         session_result = ingest_company(normalized_ticker, settings)
-        session_after_snapshot = _snapshot(paths.database, normalized_ticker)
+        session_after_snapshot = _snapshot(
+            paths.database,
+            normalized_ticker,
+            settings=settings,
+            formula_proposals_enabled=formula_proposals_enabled,
+            formula_proposal_target_limit=formula_proposal_target_limit,
+        )
         session_decision = SessionDecision(
             company_exists=True,
             status=session_result.status,
@@ -222,7 +303,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument("--ticker", required=True, help="Single company ticker to inspect.")
     parser.add_argument("--env-file", default="config.env", help="Environment file containing SEC_USER_AGENT.")
     parser.add_argument("--db-path", default=str(DEFAULT_DB_PATH), help=argparse.SUPPRESS)
-    parser.add_argument("--report-path", default=str(DEFAULT_REPORT_PATH), help=argparse.SUPPRESS)
+    parser.add_argument("--report-path", default=None, help=argparse.SUPPRESS)
     parser.add_argument("--filings-dir", default=str(DEFAULT_FILINGS_DIR), help=argparse.SUPPRESS)
     parser.add_argument("--exports-dir", default=str(DEFAULT_EXPORTS_DIR), help=argparse.SUPPRESS)
     parser.add_argument(
@@ -235,16 +316,41 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         action="store_true",
         help="Include detailed Markdown sections with compact table samples in the saved report.",
     )
+    parser.add_argument(
+        "--formula-proposals",
+        action="store_true",
+        help="Call configured model providers for report-only missing-target formula proposals.",
+    )
+    parser.add_argument(
+        "--formula-proposal-target-limit",
+        type=int,
+        default=None,
+        help="Limit missing targets sent to the formula proposal panel; omit to evaluate all.",
+    )
     return parser.parse_args(argv)
 
 
 def _paths_from_args(args: argparse.Namespace) -> ExperimentPaths:
     return ExperimentPaths(
         database=Path(args.db_path),
-        report=Path(args.report_path),
+        report=Path(args.report_path) if args.report_path else _default_report_path(args.ticker),
         filings_dir=Path(args.filings_dir),
         exports_dir=Path(args.exports_dir),
     )
+
+
+def _default_report_path(ticker: str) -> Path:
+    ticker_slug = _safe_ticker_slug(ticker)
+    return EXPERIMENT_DIR / f"{DEFAULT_REPORT_PREFIX}_{ticker_slug}.md"
+
+
+def _safe_ticker_slug(ticker: str) -> str:
+    normalized = ticker.strip().upper()
+    safe_chars = [
+        char if char.isalnum() or char in {"-", "_", "."} else "_"
+        for char in normalized
+    ]
+    return "".join(safe_chars).strip("-_.") or "UNKNOWN"
 
 
 def _experiment_settings(env_file: str, paths: ExperimentPaths) -> Settings:
@@ -274,7 +380,14 @@ def _company_exists(database: Path, ticker: str) -> bool:
         return CompanyRepository(connection).get_by_ticker(ticker) is not None
 
 
-def _snapshot(database: Path, ticker: str) -> dict[str, Any]:
+def _snapshot(
+    database: Path,
+    ticker: str,
+    *,
+    settings: Settings | None = None,
+    formula_proposals_enabled: bool = False,
+    formula_proposal_target_limit: int | None = None,
+) -> dict[str, Any]:
     if not database.exists():
         return _empty_snapshot()
 
@@ -305,6 +418,32 @@ def _snapshot(database: Path, ticker: str) -> dict[str, Any]:
             cik=cik,
             assignment=industry_assignment,
         )
+        semantic_mapping_candidates = _semantic_mapping_rows(
+            connection,
+            cik,
+            status="candidate",
+        )
+        approved_learned_mappings = _semantic_mapping_rows(
+            connection,
+            cik,
+            status="approved",
+        )
+        unknown_xbrl_concepts = _unknown_xbrl_concepts(connection, company_id, cik)
+        debt_recovery_results = _debt_recovery_results(
+            connection,
+            company_id=company_id,
+            semantic_mapping_candidates=semantic_mapping_candidates,
+        )
+        formula_proposal_snapshot = _formula_proposal_snapshot(
+            connection,
+            ticker=ticker,
+            cik=cik,
+            company_id=company_id,
+            target_raw_fact_coverage=target_raw_fact_coverage,
+            enabled=formula_proposals_enabled,
+            settings=settings,
+            target_limit=formula_proposal_target_limit,
+        )
         return {
             "company": company,
             "counts": _table_counts(connection),
@@ -316,22 +455,29 @@ def _snapshot(database: Path, ticker: str) -> dict[str, Any]:
             "found_target_facts": _target_rows_with_status(target_raw_fact_coverage, STATUS_FOUND_MAPPED),
             "missing_target_facts": _target_rows_with_status(target_raw_fact_coverage, STATUS_MISSING_TARGET),
             "found_unmapped_target_facts": _target_rows_with_status(target_raw_fact_coverage, STATUS_FOUND_UNMAPPED),
+            "debt_recovery_formula_catalog": _debt_recovery_formula_catalog_rows(),
+            "debt_recovery_summary": _debt_recovery_summary_rows(debt_recovery_results),
+            "debt_recovery_diagnostics": _debt_recovery_result_rows(debt_recovery_results),
+            "debt_recovery_components": _debt_recovery_component_rows(debt_recovery_results),
+            "formula_proposal_summary": formula_proposal_snapshot["summary"],
+            "formula_proposal_diagnostics": formula_proposal_snapshot["diagnostics"],
+            "formula_proposal_components": formula_proposal_snapshot["components"],
+            "formula_proposal_fact_pool_summary": formula_proposal_snapshot["fact_pool_summary"],
             "metric_counts_by_statement": _metric_counts_by_statement(connection, company_id),
             "metric_lineage_summary": _metric_lineage_summary(connection, company_id),
             "raw_fact_mapping_coverage": _raw_fact_mapping_coverage(connection, company_id, cik),
             "alternate_xbrl_tags": _alternate_xbrl_tags(connection, company_id),
-            "unknown_xbrl_concepts": _unknown_xbrl_concepts(connection, cik),
+            "unknown_xbrl_concepts": unknown_xbrl_concepts,
             "inline_xbrl_coverage": _inline_xbrl_coverage(connection, cik),
-            "semantic_mapping_candidates": _semantic_mapping_rows(
-                connection,
-                cik,
-                status="candidate",
+            "mapping_profile_reuse": _mapping_profile_reuse_rows(
+                assignment=industry_assignment,
+                target_raw_fact_coverage=target_raw_fact_coverage,
+                semantic_mapping_candidates=semantic_mapping_candidates,
+                approved_learned_mappings=approved_learned_mappings,
+                unknown_xbrl_concepts=unknown_xbrl_concepts,
             ),
-            "approved_learned_mappings": _semantic_mapping_rows(
-                connection,
-                cik,
-                status="approved",
-            ),
+            "semantic_mapping_candidates": semantic_mapping_candidates,
+            "approved_learned_mappings": approved_learned_mappings,
             "metric_sample": _metric_sample(connection, company_id),
             "traceability_sample": _traceability_sample(connection, company_id),
             "quality_flags": _quality_flags(connection, cik),
@@ -357,12 +503,21 @@ def _empty_snapshot() -> dict[str, Any]:
         "found_target_facts": [],
         "missing_target_facts": [],
         "found_unmapped_target_facts": [],
+        "debt_recovery_formula_catalog": _debt_recovery_formula_catalog_rows(),
+        "debt_recovery_summary": [],
+        "debt_recovery_diagnostics": [],
+        "debt_recovery_components": [],
+        "formula_proposal_summary": _formula_proposal_not_run_summary(),
+        "formula_proposal_diagnostics": [],
+        "formula_proposal_components": [],
+        "formula_proposal_fact_pool_summary": [],
         "metric_counts_by_statement": [],
         "metric_lineage_summary": [],
         "raw_fact_mapping_coverage": [],
         "alternate_xbrl_tags": [],
         "unknown_xbrl_concepts": [],
         "inline_xbrl_coverage": [],
+        "mapping_profile_reuse": [],
         "semantic_mapping_candidates": [],
         "approved_learned_mappings": [],
         "metric_sample": [],
@@ -686,6 +841,7 @@ def _target_raw_fact_coverage(
         rows.append(
             {
                 "industry_label": target.industry_label,
+                "target_xbrl_concept": f"{target.taxonomy}:{target.raw_concept}",
                 "target_raw_concept": target.raw_concept,
                 "taxonomy": target.taxonomy,
                 "internal_metric_name": target.internal_metric_name,
@@ -704,6 +860,1136 @@ def _target_raw_fact_coverage(
             }
         )
     return rows
+
+
+def _formula_proposal_snapshot(
+    connection: sqlite3.Connection,
+    *,
+    ticker: str,
+    cik: str | None,
+    company_id: int | None,
+    target_raw_fact_coverage: list[dict[str, Any]],
+    enabled: bool,
+    settings: Settings | None,
+    target_limit: int | None,
+) -> dict[str, list[dict[str, Any]]]:
+    if not enabled:
+        return {
+            "summary": _formula_proposal_not_run_summary(),
+            "diagnostics": [],
+            "components": [],
+            "fact_pool_summary": [],
+        }
+    if company_id is None or not cik:
+        return {
+            "summary": _formula_proposal_status_summary(
+                status="not_available",
+                notes="Company was not available in local storage.",
+            ),
+            "diagnostics": [],
+            "components": [],
+            "fact_pool_summary": [],
+        }
+
+    targets = _formula_proposal_targets(target_raw_fact_coverage, target_limit=target_limit)
+    fact_pool = _formula_proposal_fact_pool(
+        connection,
+        company_id=company_id,
+        cik=cik,
+        target_raw_fact_coverage=target_raw_fact_coverage,
+    )
+    fact_pool_summary = _formula_proposal_fact_pool_summary_rows(fact_pool)
+    if not targets:
+        return {
+            "summary": _formula_proposal_status_summary(
+                status="no_missing_targets",
+                notes="No missing target concepts remained after existing mapping stages.",
+            ),
+            "diagnostics": [],
+            "components": [],
+            "fact_pool_summary": fact_pool_summary,
+        }
+    if not fact_pool:
+        return {
+            "summary": _formula_proposal_status_summary(
+                status="no_eligible_raw_fact_pool",
+                notes="No numeric raw XBRL facts were available for formula proposals.",
+            ),
+            "diagnostics": [],
+            "components": [],
+            "fact_pool_summary": [],
+        }
+
+    provider_configs = _formula_proposal_provider_configs(settings)
+    cache_dir = _formula_proposal_cache_dir(settings)
+    diagnostics: list[dict[str, Any]] = []
+    components: list[dict[str, Any]] = []
+    consensus_counts: dict[str, int] = {}
+    run_provider_results: dict[str, tuple[FormulaProposalProviderResult, str, str]] = {}
+    context_count = 0
+    available_context_count = 0
+    skipped_context_count = 0
+
+    for target in targets:
+        formula_contexts = build_formula_proposal_contexts(target=target, fact_pool=fact_pool)
+        available_context_count += len(formula_contexts)
+        if len(formula_contexts) > FORMULA_PROPOSAL_CONTEXT_LIMIT_PER_TARGET:
+            skipped_context_count += len(formula_contexts) - FORMULA_PROPOSAL_CONTEXT_LIMIT_PER_TARGET
+            formula_contexts = formula_contexts[:FORMULA_PROPOSAL_CONTEXT_LIMIT_PER_TARGET]
+        if not formula_contexts:
+            diagnostics.append(_formula_proposal_no_context_row(target))
+            continue
+        for formula_context in formula_contexts:
+            context_count += 1
+            provider_results: list[FormulaProposalProviderResult] = []
+            cache_statuses: list[str] = []
+            cache_warnings: list[str] = []
+            context_hashes: list[str] = []
+            for provider in provider_configs:
+                formula_hash, fingerprint_payload = formula_context_fingerprint(
+                    target=target,
+                    context=formula_context,
+                    provider_name=provider.provider_name,
+                    model_name=provider.model_name,
+                )
+                context_hashes.append(formula_hash)
+                run_cached = run_provider_results.get(formula_hash)
+                if run_cached is not None:
+                    result, cache_status, cache_warning = run_cached
+                    provider_results.append(result)
+                    cache_statuses.append(
+                        CACHE_STATUS_REUSED_EXACT_CONTEXT
+                        if cache_status == CACHE_STATUS_GENERATED_NEW
+                        else cache_status
+                    )
+                    cache_warnings.append(cache_warning)
+                    continue
+                cached_result, cache_warning = load_formula_proposal_cache(
+                    cache_dir=cache_dir,
+                    formula_context_hash=formula_hash,
+                    target=target,
+                    provider_name=provider.provider_name,
+                    model_name=provider.model_name,
+                )
+                if cached_result is not None:
+                    provider_results.append(cached_result)
+                    cache_statuses.append(CACHE_STATUS_REUSED_EXACT_CONTEXT)
+                    cache_warnings.append(cache_warning)
+                    run_provider_results[formula_hash] = (
+                        cached_result,
+                        CACHE_STATUS_REUSED_EXACT_CONTEXT,
+                        cache_warning,
+                    )
+                    continue
+                prompt_context = formula_context_prompt_payload(
+                    context=formula_context,
+                    formula_context_hash=formula_hash,
+                )
+                result = generate_formula_proposal(
+                    ticker=ticker,
+                    cik=cik,
+                    target=target,
+                    fact_pool=list(formula_context.prompt_fact_pool),
+                    formula_context=prompt_context,
+                    provider=provider,
+                )
+                provider_results.append(result)
+                if result.provider_status in {
+                    PROVIDER_STATUS_PROPOSED,
+                    PROVIDER_STATUS_TARGET_ZERO,
+                    PROVIDER_STATUS_NO_FORMULA,
+                }:
+                    write_warning = save_formula_proposal_cache(
+                        cache_dir=cache_dir,
+                        formula_context_hash=formula_hash,
+                        fingerprint_payload=fingerprint_payload,
+                        result=result,
+                    )
+                    cache_statuses.append(CACHE_STATUS_GENERATED_NEW)
+                    result_cache_warning = cache_warning or write_warning
+                    cache_warnings.append(result_cache_warning)
+                    run_provider_results[formula_hash] = (
+                        result,
+                        CACHE_STATUS_GENERATED_NEW,
+                        result_cache_warning,
+                    )
+                elif cache_warning:
+                    cache_statuses.append(CACHE_STATUS_ENTRY_INVALID)
+                    cache_warnings.append(cache_warning)
+                    run_provider_results[formula_hash] = (
+                        result,
+                        CACHE_STATUS_ENTRY_INVALID,
+                        cache_warning,
+                    )
+                else:
+                    cache_statuses.append(CACHE_STATUS_UNAVAILABLE)
+                    cache_warnings.append("")
+                    run_provider_results[formula_hash] = (
+                        result,
+                        CACHE_STATUS_UNAVAILABLE,
+                        "",
+                    )
+            provider_results_tuple = tuple(provider_results)
+            validations = tuple(
+                validate_formula_proposal(
+                    target=target,
+                    proposal=proposal,
+                    fact_pool=formula_context.facts,
+                    statement_relationship_by_key=formula_context.statement_relationship_by_key,
+                )
+                for proposal in provider_results_tuple
+            )
+            adjusted_cache_statuses = tuple(
+                CACHE_STATUS_REUSED_VALIDATION_FAILED
+                if cache_status == CACHE_STATUS_REUSED_EXACT_CONTEXT
+                and (
+                    (
+                        proposal.provider_status == PROVIDER_STATUS_PROPOSED
+                        and validation.validation_status != VALIDATION_STATUS_VALIDATED
+                    )
+                    or (
+                        proposal.provider_status == PROVIDER_STATUS_TARGET_ZERO
+                        and validation.validation_status != VALIDATION_STATUS_ZERO_EVIDENCE
+                    )
+                )
+                else cache_status
+                for cache_status, validation, proposal in zip(cache_statuses, validations, provider_results_tuple, strict=False)
+            )
+            agreement_label = consensus_label(provider_results_tuple, validations)
+            consensus_counts[agreement_label] = consensus_counts.get(agreement_label, 0) + 1
+            diagnostics.extend(
+                _formula_proposal_diagnostic_rows(
+                    target=target,
+                    context=formula_context,
+                    proposals=provider_results_tuple,
+                    validations=validations,
+                    agreement_label=agreement_label,
+                    formula_context_hashes=tuple(context_hashes),
+                    cache_statuses=adjusted_cache_statuses,
+                    cache_warnings=tuple(cache_warnings),
+                )
+            )
+            components.extend(
+                _formula_proposal_component_rows(
+                    target=target,
+                    context=formula_context,
+                    proposals=provider_results_tuple,
+                )
+            )
+
+    return {
+        "summary": _formula_proposal_summary_rows(
+            targets=targets,
+            fact_pool=fact_pool,
+            diagnostics=diagnostics,
+            consensus_counts=consensus_counts,
+            target_limit=target_limit,
+            context_count=context_count,
+            available_context_count=available_context_count,
+            skipped_context_count=skipped_context_count,
+            cache_dir=cache_dir,
+        ),
+        "diagnostics": diagnostics,
+        "components": components,
+        "fact_pool_summary": fact_pool_summary,
+    }
+
+
+def _formula_proposal_not_run_summary() -> list[dict[str, Any]]:
+    return _formula_proposal_status_summary(
+        status="not_run",
+        notes="Enable with --formula-proposals to call the report-only model panel.",
+    )
+
+
+def _formula_proposal_status_summary(*, status: str, notes: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "evidence_item": "formula proposal model panel",
+            "value": status,
+            "notes": notes,
+        }
+    ]
+
+
+def _formula_proposal_targets(
+    target_raw_fact_coverage: list[dict[str, Any]],
+    *,
+    target_limit: int | None,
+) -> tuple[FormulaProposalTarget, ...]:
+    rows = [
+        row
+        for row in target_raw_fact_coverage
+        if row.get("status") == STATUS_MISSING_TARGET
+    ]
+    if target_limit is not None and target_limit > 0:
+        rows = rows[:target_limit]
+    targets: list[FormulaProposalTarget] = []
+    for row in rows:
+        targets.append(
+            FormulaProposalTarget(
+                target_metric_name=str(row.get("internal_metric_name") or ""),
+                target_xbrl_concept=str(row.get("target_xbrl_concept") or ""),
+                taxonomy=str(row.get("taxonomy") or ""),
+                concept=str(row.get("target_raw_concept") or ""),
+                statement_type=str(row.get("statement_type") or ""),
+                industry_label=str(row.get("industry_label") or ""),
+                notes=str(row.get("notes") or ""),
+            )
+        )
+    return tuple(targets)
+
+
+def _formula_proposal_fact_pool(
+    connection: sqlite3.Connection,
+    *,
+    company_id: int,
+    cik: str,
+    target_raw_fact_coverage: list[dict[str, Any]],
+) -> tuple[FormulaProposalFact, ...]:
+    target_status_by_key = {
+        (str(row.get("taxonomy") or ""), str(row.get("target_raw_concept") or "")): str(row.get("status") or "")
+        for row in target_raw_fact_coverage
+    }
+    approved_alternate_keys = {
+        (str(row.get("taxonomy") or ""), str(row.get("observed_raw_concept") or ""))
+        for row in _semantic_mapping_rows(connection, cik, status="approved")
+    }
+    rows = _fetch_all(
+        connection,
+        """
+        SELECT
+            f.id AS raw_fact_id,
+            f.taxonomy,
+            f.concept,
+            COALESCE(f.label, '') AS label,
+            f.value_numeric,
+            f.unit,
+            f.period_type,
+            f.fiscal_year,
+            f.fiscal_period,
+            f.start_date,
+            f.end_date,
+            f.form,
+            f.filed_date,
+            f.accession_number,
+            COALESCE(m.metric_name, '') AS mapped_metric_name,
+            COALESCE(m.statement_type, '') AS mapped_statement_type
+        FROM raw_xbrl_facts AS f
+        LEFT JOIN financial_metrics AS m
+            ON m.raw_fact_id = f.id AND m.company_id = ?
+        WHERE f.cik = ?
+          AND f.value_numeric IS NOT NULL
+          AND (f.is_numeric IS NULL OR f.is_numeric = 1)
+        ORDER BY f.taxonomy, f.concept, f.fiscal_year DESC, f.fiscal_period DESC, f.accession_number
+        """,
+        [company_id, cik],
+    )
+    facts: list[FormulaProposalFact] = []
+    for row in rows:
+        value = _parse_decimal_text(str(row.get("value_numeric") or ""))
+        if value is None:
+            continue
+        taxonomy = str(row.get("taxonomy") or "")
+        concept = str(row.get("concept") or "")
+        facts.append(
+            FormulaProposalFact(
+                raw_fact_id=int(row["raw_fact_id"]),
+                taxonomy=taxonomy,
+                concept=concept,
+                label=str(row.get("label") or ""),
+                value_numeric=value,
+                unit=str(row.get("unit") or ""),
+                period_type=str(row.get("period_type") or ""),
+                fiscal_year=row.get("fiscal_year"),
+                fiscal_period=row.get("fiscal_period"),
+                accession_number=str(row.get("accession_number") or ""),
+                form=str(row.get("form") or ""),
+                start_date=_date_from_text(row.get("start_date")),
+                end_date=_date_from_text(row.get("end_date")),
+                filed_date=_date_from_text(row.get("filed_date")),
+                mapping_status=_formula_fact_mapping_status(
+                    taxonomy=taxonomy,
+                    concept=concept,
+                    mapped_metric_name=str(row.get("mapped_metric_name") or ""),
+                    target_status_by_key=target_status_by_key,
+                    approved_alternate_keys=approved_alternate_keys,
+                ),
+                mapped_metric_name=str(row.get("mapped_metric_name") or ""),
+                mapped_statement_type=str(row.get("mapped_statement_type") or ""),
+            )
+        )
+    return tuple(facts)
+
+
+def _formula_fact_mapping_status(
+    *,
+    taxonomy: str,
+    concept: str,
+    mapped_metric_name: str,
+    target_status_by_key: dict[tuple[str, str], str],
+    approved_alternate_keys: set[tuple[str, str]],
+) -> str:
+    key = (taxonomy, concept)
+    if target_status_by_key.get(key) == STATUS_FOUND_MAPPED:
+        return "found_target"
+    if target_status_by_key.get(key) == STATUS_FOUND_UNMAPPED:
+        return "found_unmapped_target"
+    if key in approved_alternate_keys:
+        return "approved_alternate"
+    if mapped_metric_name:
+        return "mapped_base_metric"
+    return "unknown_unmapped"
+
+
+def _formula_proposal_prompt_fact_pool(
+    fact_pool: tuple[FormulaProposalFact, ...],
+) -> list[dict[str, object]]:
+    return [
+        {
+            "taxonomy": row["taxonomy"],
+            "concept": row["concept"],
+            "label": row["label"],
+            "mapping_statuses": row["mapping_statuses"],
+            "mapped_metric_names": row["mapped_metric_names"],
+            "fact_rows": row["fact_rows"],
+            "units": row["units"],
+            "period_types": row["period_types"],
+            "forms": row["forms"],
+            "latest_fiscal_year": row["latest_fiscal_year"],
+            "fiscal_periods": row["fiscal_periods"],
+            "sample_raw_fact_ids": row["sample_raw_fact_ids"],
+        }
+        for row in _formula_proposal_fact_pool_summary_rows(fact_pool)
+    ]
+
+
+def _formula_proposal_fact_pool_summary_rows(
+    fact_pool: tuple[FormulaProposalFact, ...],
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], list[FormulaProposalFact]] = {}
+    for fact in fact_pool:
+        grouped.setdefault((fact.taxonomy, fact.concept), []).append(fact)
+    rows: list[dict[str, Any]] = []
+    for (taxonomy, concept), facts in sorted(grouped.items()):
+        rows.append(
+            {
+                "taxonomy": taxonomy,
+                "concept": concept,
+                "label": next((fact.label for fact in facts if fact.label), ""),
+                "mapping_statuses": _join_values(sorted({fact.mapping_status for fact in facts})),
+                "mapped_metric_names": _join_values(sorted({fact.mapped_metric_name for fact in facts if fact.mapped_metric_name})),
+                "fact_rows": len(facts),
+                "units": _join_values(sorted({fact.unit for fact in facts if fact.unit})),
+                "period_types": _join_values(sorted({fact.period_type for fact in facts if fact.period_type})),
+                "forms": _join_values(sorted({fact.form for fact in facts if fact.form})),
+                "latest_fiscal_year": max((fact.fiscal_year for fact in facts if fact.fiscal_year is not None), default=""),
+                "fiscal_periods": _join_values(sorted({fact.fiscal_period for fact in facts if fact.fiscal_period})),
+                "sample_raw_fact_ids": _join_values(tuple(fact.raw_fact_id for fact in facts[:5])),
+                "sample_accessions": _join_values(tuple(dict.fromkeys(fact.accession_number for fact in facts if fact.accession_number))[:3]),
+            }
+        )
+    return rows
+
+
+def _formula_proposal_fact_pool_by_key(
+    fact_pool: tuple[FormulaProposalFact, ...],
+) -> dict[tuple[str, str], list[FormulaProposalFact]]:
+    grouped: dict[tuple[str, str], list[FormulaProposalFact]] = {}
+    for fact in fact_pool:
+        grouped.setdefault(fact.concept_key, []).append(fact)
+    return grouped
+
+
+def _formula_proposal_provider_configs(settings: Settings | None):
+    return default_formula_proposal_provider_configs(
+        gemini_api_key=_secret_value(getattr(settings, "gemini_api_key", None)),
+        openai_api_key=_secret_value(getattr(settings, "openai_api_key", None)),
+        gemini_model=str(getattr(settings, "gemini_formula_proposal_model", "") or "gemini-2.5-flash"),
+        openai_model=str(getattr(settings, "openai_formula_proposal_model", "") or "gpt-4.1-mini"),
+    )
+
+
+def _formula_proposal_cache_dir(settings: Settings | None) -> Path:
+    base_dir = getattr(settings, "knowledge_storage_dir", None) if settings is not None else None
+    if base_dir is None:
+        base_path = PROJECT_ROOT / "data_store" / "knowledge"
+    else:
+        base_path = Path(base_dir)
+        if not base_path.is_absolute():
+            base_path = PROJECT_ROOT / base_path
+    return base_path / FORMULA_PROPOSAL_CACHE_SUBDIR
+
+
+def _secret_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    getter = getattr(value, "get_secret_value", None)
+    if callable(getter):
+        secret = getter()
+        return secret.strip() if secret and secret.strip() else None
+    text = str(value).strip()
+    return text or None
+
+
+def _formula_proposal_no_context_row(target: FormulaProposalTarget) -> dict[str, Any]:
+    return {
+        "target_metric_name": target.target_metric_name,
+        "target_xbrl_concept": target.target_xbrl_concept,
+        "target_primary_statement": target.statement_type,
+        "context_id": "",
+        "period_context": "",
+        "provider_name": "",
+        "model_name": "",
+        "provider_status": "not_requested",
+        "target_is_zero": "",
+        "formula_expression": "",
+        "components": "",
+        "confidence": "",
+        "validation_status": "not_applicable",
+        "validation_skip_reason": "no_eligible_period_context",
+        "agreement_label": "",
+        "cache_status": CACHE_STATUS_UNAVAILABLE,
+        "formula_context_hash": "",
+        "common_period_units": "",
+        "matched_raw_fact_ids": "",
+        "matched_accession_numbers": "",
+        "invalid_components": "",
+        "circular_components": "",
+        "reason": "No period-scoped raw fact context was available for this target statement.",
+        "uncertainty": "",
+        "error": "",
+        "cache_warning": "",
+        "prompt_version": "",
+    }
+
+
+def _format_formula_period_context(period_context: dict[str, object]) -> str:
+    fiscal_year = period_context.get("fiscal_year") or ""
+    fiscal_period = period_context.get("fiscal_period") or ""
+    period_type = period_context.get("period_type") or ""
+    unit = period_context.get("unit") or ""
+    start_date = period_context.get("start_date") or ""
+    end_date = period_context.get("end_date") or ""
+    forms = _join_values(period_context.get("forms") or ())
+    accessions = _join_values(period_context.get("accession_numbers") or ())
+    date_part = f"{start_date}->{end_date}" if start_date or end_date else ""
+    return " | ".join(
+        part
+        for part in (
+            f"{fiscal_year} {fiscal_period}".strip(),
+            str(period_type),
+            str(unit),
+            str(date_part),
+            forms,
+            accessions,
+        )
+        if part
+    )
+
+
+def _formula_proposal_diagnostic_rows(
+    *,
+    target: FormulaProposalTarget,
+    context: FormulaProposalContext,
+    proposals: tuple[FormulaProposalProviderResult, ...],
+    validations: tuple[FormulaProposalValidationResult, ...],
+    agreement_label: str,
+    formula_context_hashes: tuple[str, ...],
+    cache_statuses: tuple[str, ...],
+    cache_warnings: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    period_context = _format_formula_period_context(context.period_context)
+    for proposal, validation, formula_hash, cache_status, cache_warning in zip(
+        proposals,
+        validations,
+        formula_context_hashes,
+        cache_statuses,
+        cache_warnings,
+        strict=False,
+    ):
+        rows.append(
+            {
+                "target_metric_name": target.target_metric_name,
+                "target_xbrl_concept": target.target_xbrl_concept,
+                "target_primary_statement": context.target_primary_statement,
+                "context_id": context.context_id,
+                "period_context": period_context,
+                "provider_name": proposal.provider_name,
+                "model_name": proposal.model_name,
+                "provider_status": proposal.provider_status,
+                "target_is_zero": _yes_no(proposal.target_is_zero),
+                "formula_expression": proposal.formula_expression,
+                "components": _formula_component_summary(proposal),
+                "confidence": f"{proposal.confidence:.2f}",
+                "validation_status": validation.validation_status,
+                "validation_skip_reason": validation.skip_reason,
+                "agreement_label": agreement_label,
+                "cache_status": cache_status,
+                "formula_context_hash": formula_hash[:16],
+                "common_period_units": _join_values(validation.common_period_units),
+                "matched_raw_fact_ids": _join_values(validation.matched_raw_fact_ids),
+                "matched_accession_numbers": _join_values(validation.matched_accession_numbers),
+                "invalid_components": _join_values(validation.invalid_components),
+                "circular_components": _join_values(validation.circular_components),
+                "reason": proposal.reason,
+                "uncertainty": proposal.uncertainty,
+                "error": proposal.error,
+                "cache_warning": cache_warning,
+                "prompt_version": proposal.prompt_version,
+            }
+        )
+    return rows
+
+
+def _formula_proposal_component_rows(
+    *,
+    target: FormulaProposalTarget,
+    context: FormulaProposalContext,
+    proposals: tuple[FormulaProposalProviderResult, ...],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    fact_pool_by_key = _formula_proposal_fact_pool_by_key(context.facts)
+    period_context = _format_formula_period_context(context.period_context)
+    for proposal in proposals:
+        for component in proposal.components:
+            key = (component.taxonomy.strip().lower(), component.concept.strip().lower())
+            facts = fact_pool_by_key.get(key, [])
+            rows.append(
+                {
+                    "target_metric_name": target.target_metric_name,
+                    "target_xbrl_concept": target.target_xbrl_concept,
+                    "target_primary_statement": context.target_primary_statement,
+                    "context_id": context.context_id,
+                    "period_context": period_context,
+                    "provider_name": proposal.provider_name,
+                    "component_name": component.component_name,
+                    "operator": component.operator,
+                    "component_xbrl_concept": f"{component.taxonomy}:{component.concept}",
+                    "statement_relationship": context.statement_relationship_by_key.get(key, ""),
+                    "mapping_statuses": _join_values(sorted({fact.mapping_status for fact in facts})),
+                    "mapped_metric_names": _join_values(sorted({fact.mapped_metric_name for fact in facts if fact.mapped_metric_name})),
+                    "mapped_statement_types": _join_values(sorted({fact.mapped_statement_type for fact in facts if fact.mapped_statement_type})),
+                    "raw_fact_rows": len(facts),
+                    "units": _join_values(sorted({fact.unit for fact in facts if fact.unit})),
+                    "period_types": _join_values(sorted({fact.period_type for fact in facts if fact.period_type})),
+                    "sample_raw_fact_ids": _join_values(tuple(fact.raw_fact_id for fact in facts[:5])),
+                    "role": component.role,
+                    "reason": component.reason,
+                }
+            )
+    return rows
+
+
+def _formula_proposal_summary_rows(
+    *,
+    targets: tuple[FormulaProposalTarget, ...],
+    fact_pool: tuple[FormulaProposalFact, ...],
+    diagnostics: list[dict[str, Any]],
+    consensus_counts: dict[str, int],
+    target_limit: int | None,
+    context_count: int,
+    available_context_count: int,
+    skipped_context_count: int,
+    cache_dir: Path,
+) -> list[dict[str, Any]]:
+    provider_requests = sum(1 for row in diagnostics if row.get("provider_name"))
+    proposed = sum(row.get("provider_status") == PROVIDER_STATUS_PROPOSED for row in diagnostics)
+    target_zero = sum(row.get("provider_status") == PROVIDER_STATUS_TARGET_ZERO for row in diagnostics)
+    no_formula = sum(row.get("provider_status") == PROVIDER_STATUS_NO_FORMULA for row in diagnostics)
+    unavailable = sum(row.get("provider_status") == PROVIDER_STATUS_UNAVAILABLE for row in diagnostics)
+    failed = sum(row.get("provider_status") == PROVIDER_STATUS_FAILED for row in diagnostics)
+    validated = sum(row.get("validation_status") == VALIDATION_STATUS_VALIDATED for row in diagnostics)
+    zero_evidence_validated = sum(row.get("validation_status") == VALIDATION_STATUS_ZERO_EVIDENCE for row in diagnostics)
+    consensus_validated = consensus_counts.get(CONSENSUS_VALIDATED, 0)
+    consensus_target_zero = consensus_counts.get(CONSENSUS_TARGET_ZERO, 0)
+    cache_reused = sum(
+        row.get("cache_status") in {CACHE_STATUS_REUSED_EXACT_CONTEXT, CACHE_STATUS_REUSED_VALIDATION_FAILED}
+        for row in diagnostics
+    )
+    cache_generated = sum(row.get("cache_status") == CACHE_STATUS_GENERATED_NEW for row in diagnostics)
+    cache_unavailable = sum(row.get("cache_status") == CACHE_STATUS_UNAVAILABLE for row in diagnostics)
+    cache_invalid = sum(row.get("cache_status") == CACHE_STATUS_ENTRY_INVALID for row in diagnostics)
+    limit_note = f"target limit applied: {target_limit}" if target_limit and target_limit > 0 else "all missing targets evaluated"
+    return [
+        {
+            "evidence_item": "formula proposal model panel",
+            "value": "run",
+            "notes": "Report-only evidence; no recovered metrics were persisted.",
+        },
+        {
+            "evidence_item": "missing targets sent to formula panel",
+            "value": len(targets),
+            "notes": limit_note,
+        },
+        {
+            "evidence_item": "eligible raw fact pool rows",
+            "value": len(fact_pool),
+            "notes": "Numeric raw SEC/XBRL facts, including found targets, mapped metrics, alternates, and unknown facts.",
+        },
+        {
+            "evidence_item": "period-scoped formula contexts",
+            "value": context_count,
+            "notes": (
+                "Representative contexts evaluated; "
+                f"available={available_context_count}; "
+                f"skipped_by_cap={skipped_context_count}; "
+                f"cap_per_target={FORMULA_PROPOSAL_CONTEXT_LIMIT_PER_TARGET}."
+            ),
+        },
+        {
+            "evidence_item": "provider proposal requests",
+            "value": provider_requests,
+            "notes": "Configured providers per missing target and representative period context.",
+        },
+        {
+            "evidence_item": "formula proposal cache",
+            "value": f"reused={cache_reused}; generated={cache_generated}; unavailable={cache_unavailable}; invalid={cache_invalid}",
+            "notes": str(cache_dir),
+        },
+        {
+            "evidence_item": "formula proposals returned",
+            "value": proposed,
+            "notes": f"target_zero={target_zero}; no_formula={no_formula}; unavailable={unavailable}; failed={failed}",
+        },
+        {
+            "evidence_item": "validated formula proposal rows",
+            "value": validated,
+            "notes": "Validation checks component membership, circular use, unit/period compatibility, and duplicates.",
+        },
+        {
+            "evidence_item": "zero-target proposal rows",
+            "value": target_zero,
+            "notes": (
+                f"validated_zero_evidence={zero_evidence_validated}; "
+                "validation checks cited zero-evidence facts are in the same-period raw fact pool."
+            ),
+        },
+        {
+            "evidence_item": "model-consensus validated targets",
+            "value": consensus_validated,
+            "notes": "At least two providers returned the same validated component signature.",
+        },
+        {
+            "evidence_item": "model-consensus zero-target decisions",
+            "value": consensus_target_zero,
+            "notes": "At least two providers returned an evidence-backed zero-target decision.",
+        },
+    ]
+
+
+def _formula_component_summary(proposal: FormulaProposalProviderResult) -> str:
+    return _join_values(
+        tuple(
+            f"{component.operator} {component.taxonomy}:{component.concept}"
+            for component in proposal.components
+        )
+    )
+
+
+def _debt_recovery_results(
+    connection: sqlite3.Connection,
+    *,
+    company_id: int | None,
+    semantic_mapping_candidates: list[dict[str, Any]],
+) -> tuple[MetricRecoveryResult, ...]:
+    if company_id is None:
+        return ()
+    candidate_metric_names = {
+        str(row.get("metric_name"))
+        for row in semantic_mapping_candidates
+        if row.get("metric_name")
+    }
+    return recover_debt_metrics(
+        _debt_recovery_source_metrics(connection, company_id),
+        candidate_metric_names=candidate_metric_names,
+    )
+
+
+def _debt_recovery_source_metrics(
+    connection: sqlite3.Connection,
+    company_id: int,
+) -> tuple[MetricRecoverySource, ...]:
+    rows = _fetch_all(
+        connection,
+        """
+        SELECT
+            metric_id,
+            company_id,
+            accession_number,
+            raw_fact_id,
+            statement_type,
+            metric_name,
+            value_numeric,
+            unit,
+            period_type,
+            fiscal_year,
+            fiscal_period,
+            start_date,
+            end_date,
+            filing_date,
+            is_active_window
+        FROM financial_metrics
+        WHERE company_id = ?
+          AND statement_type = 'balance_sheet'
+        ORDER BY fiscal_year, fiscal_period, metric_name, accession_number
+        """,
+        [company_id],
+    )
+    metrics: list[MetricRecoverySource] = []
+    for row in rows:
+        value = _parse_decimal_text(str(row.get("value_numeric") or ""))
+        if value is None:
+            continue
+        metrics.append(
+            MetricRecoverySource(
+                metric_id=row.get("metric_id"),
+                company_id=row.get("company_id"),
+                accession_number=str(row.get("accession_number") or ""),
+                raw_fact_id=row.get("raw_fact_id"),
+                statement_type=str(row.get("statement_type") or ""),
+                metric_name=str(row.get("metric_name") or ""),
+                value_numeric=value,
+                unit=str(row.get("unit") or ""),
+                period_type=str(row.get("period_type") or ""),
+                fiscal_year=row.get("fiscal_year"),
+                fiscal_period=row.get("fiscal_period"),
+                start_date=_date_from_text(row.get("start_date")),
+                end_date=_date_from_text(row.get("end_date")),
+                filing_date=_date_from_text(row.get("filing_date")),
+                is_active_window=bool(row.get("is_active_window")),
+            )
+        )
+    return tuple(metrics)
+
+
+def _debt_recovery_formula_catalog_rows() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for formula in DEBT_RECOVERY_FORMULAS:
+        required_components = [
+            component.component_name
+            for component in formula.components
+            if component.required
+        ]
+        optional_zero_components = [
+            component.component_name
+            for component in formula.components
+            if component.zero_if_absent
+        ]
+        rows.append(
+            {
+                "target_metric_name": formula.target_metric_name,
+                "target_xbrl_concept": formula.target_xbrl_concept,
+                "formula_name": formula.formula_name,
+                "formula_expression": _debt_formula_expression(formula),
+                "required_components": _join_values(required_components),
+                "optional_zero_if_absent_components": _join_values(optional_zero_components),
+                "component_metric_names_searched": _join_values(
+                    _component_metric_search_text(component)
+                    for component in formula.components
+                ),
+            }
+        )
+    return rows
+
+
+def _debt_recovery_formula_catalog_text() -> list[str]:
+    lines = ["```text"]
+    for formula in DEBT_RECOVERY_FORMULAS:
+        required_components = [
+            component.component_name
+            for component in formula.components
+            if component.required
+        ]
+        optional_zero_components = [
+            component.component_name
+            for component in formula.components
+            if component.zero_if_absent
+        ]
+        lines.extend(
+            [
+                f"{formula.formula_name}:",
+                f"  {_debt_formula_expression(formula)}",
+                f"  required components: {_join_values(required_components) or 'none'}",
+                (
+                    "  optional zero-if-absent components: "
+                    f"{_join_values(optional_zero_components) or 'none'}"
+                ),
+                "",
+            ]
+        )
+    if lines[-1] == "":
+        lines.pop()
+    lines.append("```")
+    return lines
+
+
+def _debt_formula_expression(formula: Any) -> str:
+    terms = [_component_formula_term(component) for component in formula.components]
+    return f"{formula.target_metric_name} = {' + '.join(terms)}"
+
+
+def _component_formula_term(component: Any) -> str:
+    metric_names = " or ".join(component.metric_names)
+    if component.zero_if_absent:
+        return f"{metric_names} (optional zero-if-absent)"
+    return metric_names
+
+
+def _component_metric_search_text(component: Any) -> str:
+    return f"{component.component_name}: {' or '.join(component.metric_names)}"
+
+
+def _debt_recovery_summary_rows(results: tuple[MetricRecoveryResult, ...]) -> list[dict[str, Any]]:
+    if not results:
+        return [
+            {
+                "evidence_item": "debt recovery diagnostics",
+                "value": "none",
+                "notes": "No active mapped debt target or component metrics were available.",
+            }
+        ]
+    recoverable = sum(
+        result.target_recovery_status in {TARGET_DIRECT_MAPPED, TARGET_DERIVED_FROM_COMPONENTS}
+        for result in results
+    )
+    incomplete = sum(result.target_recovery_status == TARGET_DECOMPOSITION_INCOMPLETE for result in results)
+    ambiguous = sum(
+        result.skip_reason in {SKIP_DUPLICATE_COMPONENT_FACTS, SKIP_UNIT_MISMATCH, SKIP_PERIOD_MISMATCH}
+        for result in results
+    )
+    assumed_zero = sum(len(result.assumed_zero_components) for result in results)
+    candidate_review = sum(result.review_status == REVIEW_CANDIDATE_REQUIRED for result in results)
+    return [
+        {
+            "evidence_item": "debt recovery targets evaluated",
+            "value": len(results),
+            "notes": "DebtCurrent and DebtNoncurrent report-only diagnostics across active periods.",
+        },
+        {
+            "evidence_item": "recoverable debt target cases",
+            "value": recoverable,
+            "notes": "Includes direct mapped targets and component-derived report-only values.",
+        },
+        {
+            "evidence_item": "unrecoverable debt target cases",
+            "value": incomplete,
+            "notes": "Required component, period, unit, duplicate, or candidate-review gap remains.",
+        },
+        {
+            "evidence_item": "ambiguous debt recovery cases",
+            "value": ambiguous,
+            "notes": "Duplicate same-period facts, unit mismatch, or period mismatch blocked recovery.",
+        },
+        {
+            "evidence_item": "assumed-zero debt components",
+            "value": assumed_zero,
+            "notes": "Optional components allowed by formula policy and absent after active-period inspection.",
+        },
+        {
+            "evidence_item": "candidate-review-only debt cases",
+            "value": candidate_review,
+            "notes": "Semantic candidates remain review-only and do not create recovered values.",
+        },
+    ]
+
+
+def _debt_recovery_result_rows(results: tuple[MetricRecoveryResult, ...]) -> list[dict[str, Any]]:
+    return [
+        {
+            "target_metric_name": result.target_metric_name,
+            "target_xbrl_concept": result.target_xbrl_concept,
+            "fiscal_year": result.fiscal_year or "",
+            "fiscal_period": result.fiscal_period or "",
+            "period_type": result.period_type,
+            "target_recovery_status": result.target_recovery_status,
+            "formula_name": result.formula_name or "",
+            "formula_version": result.formula_version,
+            "calculated_value": _report_decimal(result.value_numeric),
+            "unit": result.unit or "",
+            "source_metric_ids": _join_values(result.source_metric_ids),
+            "source_raw_fact_ids": _join_values(result.source_raw_fact_ids),
+            "source_accession_numbers": _join_values(result.source_accession_numbers),
+            "assumed_zero_components": _join_values(result.assumed_zero_components),
+            "missing_required_components": _join_values(result.missing_required_components),
+            "review_status": result.review_status,
+            "skip_reason": result.skip_reason or "",
+            "notes": _debt_recovery_note(result),
+        }
+        for result in results
+    ]
+
+
+def _debt_recovery_component_rows(results: tuple[MetricRecoveryResult, ...]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for result in results:
+        for component in result.components:
+            policy = DEBT_RECOVERY_COMPONENT_POLICY.get(
+                (result.formula_name or "", component.component_name)
+            )
+            rows.append(
+                {
+                    "target_metric_name": result.target_metric_name,
+                    "fiscal_year": result.fiscal_year or "",
+                    "fiscal_period": result.fiscal_period or "",
+                    "formula_name": result.formula_name or "",
+                    "component_name": component.component_name,
+                    "component_required": _yes_no(policy.required) if policy is not None else "",
+                    "zero_if_absent": _yes_no(policy.zero_if_absent) if policy is not None else "",
+                    "component_availability": _component_availability(component.component_status),
+                    "component_status": component.component_status,
+                    "candidate_metric_names": _join_values(component.candidate_metric_names),
+                    "component_value": _report_decimal(component.value_numeric),
+                    "unit": component.unit or "",
+                    "source_metric_ids": _join_values(component.source_metric_ids),
+                    "source_raw_fact_ids": _join_values(component.source_raw_fact_ids),
+                    "source_accession_numbers": _join_values(component.source_accession_numbers),
+                    "coverage_proof": _join_values(component.coverage_proof),
+                    "skip_reason": component.skip_reason or "",
+                    "notes": component.notes,
+                }
+            )
+    return rows
+
+
+def _component_availability(component_status: str) -> str:
+    if component_status == COMPONENT_MAPPED:
+        return "found mapped component"
+    if component_status == COMPONENT_ASSUMED_ZERO:
+        return "not found; optional component assumed zero"
+    if component_status == COMPONENT_MISSING_REQUIRED:
+        return "not found; required component missing"
+    if component_status == COMPONENT_CANDIDATE_REVIEW_REQUIRED:
+        return "candidate only; not approved for recovery"
+    if component_status == COMPONENT_AMBIGUOUS:
+        return "found but ambiguous; not used"
+    return component_status
+
+
+def _debt_recovery_note(result: MetricRecoveryResult) -> str:
+    if result.target_recovery_status == TARGET_DIRECT_MAPPED:
+        return "Direct mapped base metric; no recovery needed."
+    if result.target_recovery_status == TARGET_DERIVED_FROM_COMPONENTS:
+        if result.assumed_zero_components:
+            return "Report-only recovered value; optional components were assumed zero with coverage proof."
+        return "Report-only recovered value from mapped component metrics."
+    if result.review_status == REVIEW_CANDIDATE_REQUIRED:
+        return "Only review-pending candidate evidence is available; no recovered value created."
+    if result.skip_reason:
+        return "Recovery skipped with explicit reason; no recovered value created."
+    return ""
+
+
+def _mapping_profile_reuse_rows(
+    *,
+    assignment: CompanyIndustryLabelAssignment,
+    target_raw_fact_coverage: list[dict[str, Any]],
+    semantic_mapping_candidates: list[dict[str, Any]],
+    approved_learned_mappings: list[dict[str, Any]],
+    unknown_xbrl_concepts: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Summarize mapping reuse and semantic-discovery evidence for the report."""
+    industry_labels = assignment.assigned_industry_labels
+    catalog_mappings = mapping_candidates_by_key(industry_labels)
+    missing_targets = [
+        row
+        for row in target_raw_fact_coverage
+        if row.get("status") == STATUS_MISSING_TARGET
+    ]
+    found_targets = [
+        row
+        for row in target_raw_fact_coverage
+        if row.get("status") in {STATUS_FOUND_MAPPED, STATUS_FOUND_MAPPED_ALTERNATE}
+    ]
+    found_unmapped = [
+        row
+        for row in target_raw_fact_coverage
+        if row.get("status") == STATUS_FOUND_UNMAPPED
+    ]
+    missing_metric_names = sorted(
+        {
+            str(row.get("internal_metric_name"))
+            for row in missing_targets
+            if row.get("internal_metric_name")
+        }
+    )
+    return [
+        {
+            "evidence_item": "approved hard industry labels",
+            "value": _join(tuple(industry_labels)),
+            "evidence_source": assignment.assignment_source or "not available",
+            "notes": (
+                f"status={assignment.label_status or 'not available'}; "
+                f"reason={assignment.assignment_reason or 'not available'}"
+            ),
+        },
+        {
+            "evidence_item": "target XBRL concepts selected",
+            "value": len(target_raw_fact_coverage),
+            "evidence_source": "src/processing/mapping_catalog.py",
+            "notes": (
+                f"{len(found_targets)} found/mapped; "
+                f"{len(found_unmapped)} found_unmapped; "
+                f"{len(missing_targets)} missing"
+            ),
+        },
+        {
+            "evidence_item": "approved company concept profile reuse",
+            "value": _yes_no(bool(approved_learned_mappings)),
+            "evidence_source": "xbrl_concept_mappings approved rows",
+            "notes": (
+                f"{len(approved_learned_mappings)} approved mappings "
+                f"({_scope_count_summary(approved_learned_mappings)}); "
+                f"{len(catalog_mappings)} source-controlled catalog concepts selected"
+            ),
+        },
+        {
+            "evidence_item": "semantic discovery status",
+            "value": _semantic_discovery_status(
+                missing_targets=missing_targets,
+                semantic_mapping_candidates=semantic_mapping_candidates,
+                unknown_xbrl_concepts=unknown_xbrl_concepts,
+            ),
+            "evidence_source": "xbrl_concept_mappings candidate rows",
+            "notes": (
+                f"{len(semantic_mapping_candidates)} candidates awaiting review; "
+                f"{len(missing_metric_names)} missing target metrics: "
+                f"{_join(tuple(missing_metric_names))}"
+            ),
+        },
+        {
+            "evidence_item": "mapping expansion review pool",
+            "value": len(unknown_xbrl_concepts),
+            "evidence_source": "raw_xbrl_facts minus approved/catalog mappings",
+            "notes": "unknown concepts remain raw evidence until a mapping is approved",
+        },
+    ]
+
+
+def _semantic_discovery_status(
+    *,
+    missing_targets: list[dict[str, Any]],
+    semantic_mapping_candidates: list[dict[str, Any]],
+    unknown_xbrl_concepts: list[dict[str, Any]],
+) -> str:
+    if semantic_mapping_candidates:
+        return "not skipped; review-only semantic candidates are stored"
+    if not missing_targets:
+        return "skipped; target coverage left no missing target concepts"
+    if not unknown_xbrl_concepts:
+        return "skipped; no unknown observed XBRL concepts were available"
+    return "no stored candidates; missing targets and unknown concepts need review"
+
+
+def _scope_count_summary(rows: list[dict[str, Any]]) -> str:
+    if not rows:
+        return "none"
+    counts: dict[str, int] = {}
+    for row in rows:
+        scope = str(row.get("scope_type") or "unknown")
+        counts[scope] = counts.get(scope, 0) + 1
+    return ", ".join(f"{scope}={count}" for scope, count in sorted(counts.items()))
 
 
 def _target_coverage_status(observed_rows: int, mapped_rows: int) -> str:
@@ -743,13 +2029,11 @@ def _metric_counts_by_statement(connection: sqlite3.Connection, company_id: int 
     )
 
 
-def _raw_fact_mapping_coverage(
+def _supported_mapping_context(
     connection: sqlite3.Connection,
-    company_id: int | None,
-    cik: str | None,
-) -> list[dict[str, Any]]:
-    if company_id is None or not cik:
-        return []
+    company_id: int,
+    cik: str,
+) -> tuple[dict[tuple[str, str], Any], list[dict[str, Any]], set[tuple[str, str]]]:
     industry_labels = tuple(
         str(row["industry_label"])
         for row in _fetch_all(
@@ -769,6 +2053,21 @@ def _raw_fact_mapping_coverage(
         for row in approved_mapping_rows
     }
     supported_keys = set(catalog_mappings) | approved_keys
+    return catalog_mappings, approved_mapping_rows, supported_keys
+
+
+def _raw_fact_mapping_coverage(
+    connection: sqlite3.Connection,
+    company_id: int | None,
+    cik: str | None,
+) -> list[dict[str, Any]]:
+    if company_id is None or not cik:
+        return []
+    catalog_mappings, approved_mapping_rows, supported_keys = _supported_mapping_context(
+        connection,
+        company_id,
+        cik,
+    )
     raw_groups = _fetch_all(
         connection,
         """
@@ -940,13 +2239,17 @@ def _alternate_xbrl_tags(connection: sqlite3.Connection, company_id: int | None)
     return rows
 
 
-def _unknown_xbrl_concepts(connection: sqlite3.Connection, cik: str | None) -> list[dict[str, Any]]:
-    if not cik:
+def _unknown_xbrl_concepts(
+    connection: sqlite3.Connection,
+    company_id: int | None,
+    cik: str | None,
+) -> list[dict[str, Any]]:
+    if company_id is None or not cik:
         return []
-    concept_clause = _concept_in_clause()
-    return _fetch_all(
+    _, _, supported_keys = _supported_mapping_context(connection, company_id, cik)
+    rows = _fetch_all(
         connection,
-        f"""
+        """
         SELECT
             concept AS raw_xbrl_concept,
             COALESCE(MAX(label), '') AS label,
@@ -958,34 +2261,16 @@ def _unknown_xbrl_concepts(connection: sqlite3.Connection, cik: str | None) -> l
             MAX(filed_date) AS latest_filed_date
         FROM raw_xbrl_facts AS f
         WHERE f.cik = ?
-          AND f.concept NOT IN ({concept_clause})
-          AND NOT EXISTS (
-              SELECT 1
-              FROM xbrl_concept_mappings AS mapping
-              WHERE mapping.taxonomy = f.taxonomy
-                AND mapping.concept = f.concept
-                AND mapping.status = 'approved'
-                AND (
-                    mapping.scope_type = 'global'
-                    OR (mapping.scope_type = 'company' AND mapping.scope_value = ?)
-                    OR (
-                        mapping.scope_type = 'industry'
-                        AND mapping.scope_value IN (
-                            SELECT industry_label
-                            FROM company_industry_labels
-                            WHERE company_id = (
-                                SELECT company_id FROM companies WHERE cik = ?
-                            )
-                              AND status = 'approved'
-                        )
-                    )
-                )
-          )
         GROUP BY f.taxonomy, f.concept
         ORDER BY raw_fact_rows DESC, raw_xbrl_concept
         """,
-        [cik, *_base_metric_concepts(), cik, cik],
+        [cik],
     )
+    return [
+        row
+        for row in rows
+        if (str(row["taxonomy"]), str(row["raw_xbrl_concept"])) not in supported_keys
+    ]
 
 
 def _inline_xbrl_coverage(
@@ -1022,7 +2307,7 @@ def _semantic_mapping_rows(
 ) -> list[dict[str, Any]]:
     if not cik:
         return []
-    return _fetch_all(
+    rows = _fetch_all(
         connection,
         """
         SELECT
@@ -1036,6 +2321,7 @@ def _semantic_mapping_rows(
             scope_value,
             status,
             match_method,
+            COALESCE(evidence_json, '{}') AS evidence_json,
             COALESCE(reviewed_by, '') AS reviewed_by,
             COALESCE(reviewed_at, '') AS reviewed_at
         FROM xbrl_concept_mappings
@@ -1058,14 +2344,77 @@ def _semantic_mapping_rows(
         """,
         [status, cik, cik],
     )
+    rendered_rows: list[dict[str, Any]] = []
+    for row in rows:
+        evidence = _mapping_evidence(row.pop("evidence_json", "{}"))
+        target_taxonomy = str(evidence.get("target_candidate_taxonomy") or "")
+        target_concept = str(evidence.get("target_candidate_xbrl_concept") or "")
+        rendered_rows.append(
+            {
+                **row,
+                "observed_xbrl_concept": (
+                    f"{row['taxonomy']}:{row['observed_raw_concept']}"
+                    if row.get("taxonomy") and row.get("observed_raw_concept")
+                    else ""
+                ),
+                "target_candidate_xbrl_concept": (
+                    f"{target_taxonomy}:{target_concept}"
+                    if target_taxonomy and target_concept
+                    else target_concept
+                ),
+                "embedding_granularity": evidence.get("embedding_granularity") or "",
+                "semantic_similarity": evidence.get("semantic_similarity") or row.get("confidence") or "",
+                "requires_review": _evidence_bool(evidence.get("requires_review")),
+                "target_candidate_industry_labels": _join(
+                    tuple(
+                        str(label)
+                        for label in _evidence_sequence(
+                            evidence.get("target_candidate_industry_labels")
+                        )
+                    )
+                ),
+                "observed_label": evidence.get("observed_label") or "",
+                "observed_period_types": _join(
+                    tuple(
+                        str(period_type)
+                        for period_type in _evidence_sequence(
+                            evidence.get("observed_period_types")
+                        )
+                    )
+                ),
+            }
+        )
+    return rendered_rows
 
 
-def _concept_in_clause() -> str:
-    return ", ".join("?" for _ in BASE_METRIC_MAPPINGS)
+def _mapping_evidence(raw_value: Any) -> dict[str, Any]:
+    if isinstance(raw_value, dict):
+        return raw_value
+    try:
+        parsed = json.loads(str(raw_value or "{}"))
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
-def _base_metric_concepts() -> tuple[str, ...]:
-    return tuple(sorted(BASE_METRIC_MAPPINGS))
+def _evidence_sequence(value: Any) -> tuple[Any, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, (list, tuple)):
+        return tuple(value)
+    return (value,)
+
+
+def _evidence_bool(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "yes", "1"}:
+            return "yes"
+        if normalized in {"false", "no", "0"}:
+            return "no"
+    return _yes_no(bool(value))
 
 
 def _coverage_note(mapped_count: int, total_count: int) -> str:
@@ -1291,10 +2640,30 @@ def format_lineage_report(run: ExperimentRun) -> str:
     ]
     lines.extend(["", "Company Industry Labels:"])
     lines.extend(_markdown_table(run.session_after_snapshot.get("company_industry_labels") or []))
+    lines.extend(["", "Approved Company Concept Profile Reuse And Semantic Discovery:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("mapping_profile_reuse") or []))
     lines.extend(["", "Raw Fact Mapping Coverage (Highlighted):"])
     lines.extend(_markdown_table(run.session_after_snapshot.get("raw_fact_mapping_coverage") or []))
-    lines.extend(["", "Target Raw Fact Coverage:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("target_raw_fact_coverage") or []))
+    lines.extend(["", "Target XBRL Concept Coverage:"])
+    lines.extend(_markdown_table(_target_coverage_report_rows(run.session_after_snapshot)))
+    lines.extend(["", "LLM Formula Proposal Diagnostics Summary:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("formula_proposal_summary") or []))
+    lines.extend(["", "LLM Formula Proposal Diagnostics:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("formula_proposal_diagnostics") or []))
+    lines.extend(["", "LLM Formula Proposal Component Evidence:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("formula_proposal_components") or []))
+    lines.extend(["", "Eligible Formula Proposal Raw Fact Pool:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("formula_proposal_fact_pool_summary") or []))
+    lines.extend(["", "Debt Recovery Formula Catalog:"])
+    lines.extend(_debt_recovery_formula_catalog_text())
+    lines.extend(["", "Debt Recovery Formula Catalog Details:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("debt_recovery_formula_catalog") or []))
+    lines.extend(["", "Debt Recovery Diagnostics Summary:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("debt_recovery_summary") or []))
+    lines.extend(["", "Debt Recovery Diagnostics:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("debt_recovery_diagnostics") or []))
+    lines.extend(["", "Debt Recovery Component Evidence:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("debt_recovery_components") or []))
     lines.extend(["", "Found Target Facts:"])
     lines.extend(_markdown_table(run.session_after_snapshot.get("found_target_facts") or []))
     lines.extend(["", "Missing Target Facts:"])
@@ -1340,6 +2709,14 @@ def format_lineage_report(run: ExperimentRun) -> str:
         ]
     )
     return "\n".join(lines)
+
+
+def _target_coverage_report_rows(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = snapshot.get("target_raw_fact_coverage") or []
+    return [
+        {column: row.get(column, "") for column in TARGET_COVERAGE_REPORT_COLUMNS}
+        for row in rows
+    ]
 
 
 def _pivot_metric_rows(rows: list[dict[str, Any]], *, annual: bool) -> list[dict[str, Any]]:
@@ -1520,13 +2897,6 @@ def format_report(run: ExperimentRun, *, report_output: str = "file") -> str:
     lines = [
         "# Milestone 2.5 Live SEC Experiment Report",
         "",
-        "## Human Question",
-        "",
-        "For a company I choose, what does Plan 2.5 ingestion do during setup",
-        "and during the next already-ingested session: local existence, refresh",
-        "due status, SEC update check, newly ingested filings, next check dates,",
-        "and stored evidence?",
-        "",
         "## Run Context",
         "",
     ]
@@ -1560,10 +2930,18 @@ def format_report(run: ExperimentRun, *, report_output: str = "file") -> str:
             }
         )
     )
-    lines.extend(_snapshot_sections(run.setup_snapshot))
 
     lines.extend(["", "## Already-Ingested Session Check", ""])
     lines.extend(_session_decision_sections(run))
+    lines.extend(["", "## Inspection Samples", ""])
+    lines.extend(["### Compact financial_metrics Sample", ""])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("metric_sample") or []))
+    lines.extend(["", "### Compact Traceability Sample", ""])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("traceability_sample") or []))
+    quality_flags = run.session_after_snapshot.get("quality_flags") or ()
+    if quality_flags:
+        lines.extend(["", "### Raw Fact Quality Flags", ""])
+        lines.extend(f"- {flag}" for flag in quality_flags)
     return "\n".join(lines)
 
 
@@ -1584,15 +2962,29 @@ def format_saved_report(run: ExperimentRun, *, full_report: bool = False) -> str
             detailed_lines = detailed_lines[2:]
         lines.extend([""])
         lines.extend(detailed_lines)
-    lines.extend(
-        [
-            "",
-            "```text",
-            format_lineage_report(run),
-            "```",
-        ]
-    )
+    lines.extend(["", "## Evidence Locations", ""])
+    lines.extend(_saved_report_evidence_locations(run))
+    if not full_report:
+        lines.extend(
+            [
+                "",
+                "## Detailed Evidence",
+                "",
+                "Detailed lineage tables are omitted from the compact report. Use `--full-report` for the Markdown appendix, or inspect the SQLite database and CSV exports listed above.",
+            ]
+        )
+        return "\n".join(lines)
+    lines.extend(["", "```text", format_lineage_report(run), "```"])
     return "\n".join(lines)
+
+
+def _saved_report_evidence_locations(run: ExperimentRun) -> list[str]:
+    return [
+        f"- SQLite database: `{run.paths.database}`",
+        f"- CSV exports: `{run.paths.exports_dir}`",
+        f"- Filing downloads: `{run.paths.filings_dir}`",
+        f"- Report file: `{run.paths.report}`",
+    ]
 
 
 def format_compact_report(run: ExperimentRun, *, full_report: bool = False) -> str:
@@ -1628,8 +3020,12 @@ def format_compact_report(run: ExperimentRun, *, full_report: bool = False) -> s
     lines.extend(_compact_active_window(run.session_after_snapshot, indent="  "))
     lines.extend(["", "Raw Fact Mapping Coverage"])
     lines.extend(_compact_raw_fact_mapping_coverage(run.session_after_snapshot, indent="  "))
-    lines.extend(["", "Target Raw Fact Coverage"])
+    lines.extend(["", "Target XBRL Concept Coverage"])
     lines.extend(_compact_target_raw_fact_coverage(run.session_after_snapshot, indent="  "))
+    lines.extend(["", "LLM Formula Proposal Diagnostics"])
+    lines.extend(_compact_formula_proposals(run.session_after_snapshot, indent="  "))
+    lines.extend(["", "Debt Recovery Diagnostics"])
+    lines.extend(_compact_debt_recovery(run.session_after_snapshot, indent="  "))
     lines.extend(["", "Adaptive XBRL Mapping"])
     lines.extend(_compact_adaptive_mapping(run.session_after_snapshot, indent="  "))
     lines.extend(["", "Base Metrics After Session"])
@@ -1725,8 +3121,6 @@ def _session_decision_sections(run: ExperimentRun) -> list[str]:
     lines.extend(_markdown_table([_filing_evidence_row(filing) for filing in decision.new_filings]))
     lines.extend(["", "### Stored Row Deltas During Session", ""])
     lines.extend(_before_after_counts(run.session_before_snapshot, run.session_after_snapshot))
-    lines.extend(["", "### Stored Evidence After Session", ""])
-    lines.extend(_snapshot_sections(run.session_after_snapshot))
     return lines
 
 
@@ -1863,90 +3257,71 @@ def _compact_target_raw_fact_coverage(snapshot: dict[str, Any], *, indent: str) 
     return lines
 
 
+def _compact_debt_recovery(snapshot: dict[str, Any], *, indent: str) -> list[str]:
+    rows = snapshot.get("debt_recovery_summary") or []
+    diagnostics = snapshot.get("debt_recovery_diagnostics") or []
+    if not rows:
+        return [f"{indent}none"]
+    lines = []
+    for row in rows:
+        value = row.get("value")
+        lines.append(
+            f"{indent}{row.get('evidence_item')}: "
+            f"{_format_presentation_number('' if value is None else value)}"
+        )
+    skipped = [
+        str(row.get("skip_reason"))
+        for row in diagnostics
+        if row.get("skip_reason")
+    ]
+    if skipped:
+        lines.append(f"{indent}skip reasons: {_join_values(tuple(sorted(set(skipped))))}")
+    return lines
+
+
+def _compact_formula_proposals(snapshot: dict[str, Any], *, indent: str) -> list[str]:
+    rows = snapshot.get("formula_proposal_summary") or []
+    diagnostics = snapshot.get("formula_proposal_diagnostics") or []
+    if not rows:
+        return [f"{indent}none"]
+    lines = []
+    for row in rows:
+        value = row.get("value")
+        lines.append(
+            f"{indent}{row.get('evidence_item')}: "
+            f"{_format_presentation_number('' if value is None else value)}"
+        )
+    failures = [
+        f"{row.get('provider_name')}={row.get('provider_status')}"
+        for row in diagnostics
+        if row.get("provider_status") in {PROVIDER_STATUS_UNAVAILABLE, PROVIDER_STATUS_FAILED}
+    ]
+    if failures:
+        lines.append(f"{indent}provider issues: {_join_values(tuple(sorted(set(failures))))}")
+    return lines
+
+
 def _compact_adaptive_mapping(snapshot: dict[str, Any], *, indent: str) -> list[str]:
     inline_rows = snapshot.get("inline_xbrl_coverage") or []
     candidates = snapshot.get("semantic_mapping_candidates") or []
     approved = snapshot.get("approved_learned_mappings") or []
+    profile_rows = {
+        row.get("evidence_item"): row
+        for row in snapshot.get("mapping_profile_reuse") or []
+    }
+    discovery = profile_rows.get("semantic discovery status", {})
+    profile = profile_rows.get("approved company concept profile reuse", {})
     return [
+        f"{indent}approved company concept profile reused: "
+        f"{profile.get('value') or 'not available'}",
         f"{indent}Inline XBRL facts stored: "
         f"{_format_presentation_number(sum(int(row.get('raw_fact_rows') or 0) for row in inline_rows))}",
+        f"{indent}semantic discovery status: "
+        f"{discovery.get('value') or 'not available'}",
         f"{indent}semantic candidates awaiting review: "
         f"{_format_presentation_number(len(candidates))}",
         f"{indent}approved learned mappings: {_format_presentation_number(len(approved))}",
     ]
-
-
-def _snapshot_sections(snapshot: dict[str, Any]) -> list[str]:
-    lines: list[str] = ["", "### Company State", ""]
-    lines.extend(_markdown_table([snapshot["company"]] if snapshot["company"] else []))
-    lines.extend(["", "### Company Industry Labels", ""])
-    lines.extend(_markdown_table(snapshot["company_industry_labels"]))
-    lines.extend(["", "### Filing Inventory", ""])
-    lines.extend(_markdown_table(snapshot["filings"][:8]))
-    lines.extend(["", "### Raw Fact And Metric Counts", ""])
-    lines.extend(_count_table(snapshot))
-    lines.extend(["", "### Raw Fact Mapping Coverage", ""])
-    lines.extend(_markdown_table(snapshot["raw_fact_mapping_coverage"]))
-    lines.extend(["", "### Target Raw Fact Coverage", ""])
-    lines.extend(_markdown_table(snapshot["target_raw_fact_coverage"]))
-    lines.extend(["", "### Found Target Facts", ""])
-    lines.extend(_markdown_table(snapshot["found_target_facts"]))
-    lines.extend(["", "### Missing Target Facts", ""])
-    lines.extend(_markdown_table(snapshot["missing_target_facts"]))
-    lines.extend(["", "### Found But Unmapped Target Facts", ""])
-    lines.extend(_markdown_table(snapshot["found_unmapped_target_facts"]))
-    lines.extend(["", "### Inline XBRL Extension Coverage", ""])
-    lines.extend(_markdown_table(snapshot["inline_xbrl_coverage"]))
-    lines.extend(["", "### Semantic Mapping Candidates (Review Required)", ""])
-    lines.extend(_markdown_table(snapshot["semantic_mapping_candidates"]))
-    lines.extend(["", "### Approved Learned XBRL Mappings", ""])
-    lines.extend(_markdown_table(snapshot["approved_learned_mappings"]))
-    lines.extend(["", "### Active Window", ""])
-    lines.extend(_active_window_lines(snapshot))
-    lines.extend(["", "### Financial Metric Data Lineage View", ""])
-    lines.extend(
-        [
-            "This table summarizes raw XBRL concepts, system mappings, and",
-            "financial_metrics availability. Annual and quarterly XBRL metric",
-            "tables are written to the financial metric lineage text section.",
-            "",
-        ]
-    )
-    lines.extend(_markdown_table(snapshot["metric_lineage_summary"]))
-    lines.extend(["", "### Alternate SEC/XBRL Tags For Same Business Metric", ""])
-    lines.extend(_markdown_table(snapshot["alternate_xbrl_tags"]))
-    lines.extend(["", "### Unknown SEC/XBRL Concepts Not Mapped To Base Metrics", ""])
-    lines.extend(_markdown_table(snapshot["unknown_xbrl_concepts"]))
-    lines.extend(["", "### Compact financial_metrics Sample", ""])
-    lines.extend(_markdown_table(snapshot["metric_sample"]))
-    lines.extend(["", "### Compact Traceability Sample", ""])
-    lines.extend(_markdown_table(snapshot["traceability_sample"]))
-    if snapshot["quality_flags"]:
-        lines.extend(["", "### Raw Fact Quality Flags", ""])
-        lines.extend(f"- {flag}" for flag in snapshot["quality_flags"])
-    return lines
-
-
-def _count_table(snapshot: dict[str, Any]) -> list[str]:
-    counts = snapshot["counts"]
-    rows = [{"table": table, "rows": count} for table, count in counts.items()]
-    return _markdown_table(rows)
-
-
-def _active_window_lines(snapshot: dict[str, Any]) -> list[str]:
-    rows = [
-        {
-            "form": form_type,
-            "active filings": snapshot["active_filings_by_form"].get(form_type, 0),
-            "local accessions": _join(snapshot["filings_by_form"].get(form_type, ())),
-        }
-        for form_type in FORMS
-    ]
-    lines = _markdown_table(rows)
-    if snapshot["metric_counts_by_statement"]:
-        lines.extend(["", "Metric counts by statement:", ""])
-        lines.extend(_markdown_table(snapshot["metric_counts_by_statement"]))
-    return lines
 
 
 def _before_after_counts(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
@@ -2140,7 +3515,12 @@ def _markdown_cell(header: str, value: Any) -> str:
 
 
 def _should_format_presentation_number(header: str) -> bool:
-    return header.lower() not in PRESENTATION_NUMBER_EXCLUDED_HEADERS
+    normalized_header = header.lower()
+    if normalized_header in PRESENTATION_NUMBER_EXCLUDED_HEADERS:
+        return False
+    if normalized_header.endswith(("_id", "_ids", "_hash")):
+        return False
+    return "accession" not in normalized_header
 
 
 def _format_presentation_number(value: Any) -> str:
@@ -2151,10 +3531,16 @@ def _format_presentation_number(value: Any) -> str:
     absolute_value = abs(decimal_value)
     for factor, suffix in PRESENTATION_NUMBER_SUFFIXES:
         if absolute_value >= factor:
-            scaled_value = (decimal_value / factor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            try:
+                scaled_value = (decimal_value / factor).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            except InvalidOperation:
+                return text
             return f"{scaled_value:.2f}{suffix}"
     if decimal_value != decimal_value.to_integral_value():
-        rounded_value = decimal_value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        try:
+            rounded_value = decimal_value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        except InvalidOperation:
+            return text
         return f"{rounded_value:.2f}"
     return text
 
@@ -2170,6 +3556,26 @@ def _parse_decimal_text(value: str) -> Decimal | None:
     if not decimal_value.is_finite():
         return None
     return decimal_value
+
+
+def _date_from_text(value: object) -> date | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _report_decimal(value: Decimal | None) -> str:
+    return "" if value is None else str(value)
+
+
+def _join_values(values: Sequence[object]) -> str:
+    return ", ".join(str(value) for value in values if value is not None and str(value) != "") or ""
 
 
 def _join(values: Sequence[str]) -> str:
