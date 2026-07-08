@@ -51,6 +51,7 @@ src/
    * Map selected raw XBRL facts into business-friendly base metrics grouped by financial statement type.
    * Run deterministic catalog mapping first, then rank unknown concepts only for missing target XBRL concepts.
    * Store semantic matches as review-only candidates; only approved global, industry, or company-scoped mappings can populate base metrics.
+   * Resolve unresolved mapping coverage at the internal-metric level before review, so an LLM or reviewer chooses among a semantic candidate, a formula from raw concepts, a zero-target decision, or no evidence for one metric at a time.
    * Reuse an approved company concept profile on later ingestions when it still covers the required target metrics.
    * Preserve traceability from each base metric back to the source raw XBRL fact and filing.
 4. Derived indicator calculation
@@ -254,6 +255,7 @@ Example distinction:
    * Derive and reuse an approved company concept profile from approved global, industry, and company-scoped mappings.
    * Run semantic mapping only after deterministic mapping leaves missing target XBRL concepts.
    * Store semantic mapping candidates separately from approved mapping decisions; candidates must not create base metrics.
+   * Present missing coverage as one internal-metric resolution choice rather than separate decisions for each target tag.
    * Preserve links from each base metric back to the source filing and raw XBRL fact.
    * Do not calculate derived indicators in this milestone.
 3. Indicator engine

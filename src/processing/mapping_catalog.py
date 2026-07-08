@@ -12,6 +12,7 @@ COMMON_BASE_LABEL = "Common Base"
 STATUS_FOUND_MAPPED = "found_mapped"
 STATUS_FOUND_UNMAPPED = "found_unmapped"
 STATUS_MISSING_TARGET = "missing_target"
+STATUS_FOUND_MAPPED_ALTERNATE = "found_mapped_alternate"
 
 
 @dataclass(frozen=True)

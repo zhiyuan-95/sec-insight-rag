@@ -67,6 +67,9 @@ This experiment covers:
   supporting evidence, classifier version, confidence, and label status
 - target raw fact coverage for the assigned hard industry labels, including
   found, missing, and found-but-unmapped target facts
+- metric-first coverage resolution that groups target tags, approved
+  alternates, semantic candidates, and formula/zero diagnostics into one
+  reviewer or LLM choice surface per internal metric
 - alternate SEC/XBRL tags that map to the same internal business metric
 - unknown SEC/XBRL concepts not currently mapped to base financial metrics
 - Inline XBRL extension and dimensional fact coverage
@@ -78,13 +81,16 @@ This experiment covers:
   after hard mapping and semantic mapping, using period-scoped raw fact pools
   that include found targets, mapped base metrics, approved alternates, and
   unknown/unmapped raw facts, with target-compatible unit filtering,
-  statement-first prompting, one representative context per target, and
-  exact-context cache reuse
+  statement-first prompting, active-period context coverage, and exact-context
+  cache reuse for identical target/model/raw-concept pools
 - report-only debt recovery diagnostics for missing `debt_current` and
   `debt_noncurrent`, including component statuses, assumed-zero components,
   skip reasons, formula versions, and source metric/raw fact IDs
-- saved compact report with appended annual and quarterly XBRL metric evidence,
-  with source rows still available in SQLite and CSV exports
+- saved Plan 2.5 target mapping report with a compact summary, mapped/missing
+  target metric status with common-base versus industry-special classification,
+  semantic candidates for missing metrics split into 10-K and 10-Q active-window
+  subsections, and proposed formula rows split into 10-K and 10-Q active-window
+  subsections with taxonomy prefixes removed from displayed concept values
 
 This experiment does not cover derived indicators, deterministic analytics,
 retrieval indexes, Gemini calls, RAG answers, frontend behavior, durable
@@ -121,11 +127,12 @@ report body to the terminal.
 `experiments/storage/experiment.db` should persist across runs and across
 milestone experiments. The CSV exports should overwrite stable paths on each
 run.
-Detailed run-path sections should be added to the saved report only when the
-user asks for them with `--full-report`. These sections should show run context,
-session deltas, and compact samples without repeating the full mapping and
-lineage tables. `--write-report` is accepted only as a compatibility flag
-because the report is now always saved.
+The default saved report should show the compact metric-first decision path.
+`--full-report` is kept as a CLI compatibility flag, but the saved report keeps
+the same decision-focused section shape instead of appending diagnostic
+appendices.
+`--write-report` is accepted only as a compatibility flag because the report is
+now always saved.
 
 ## Data Mode
 
@@ -171,24 +178,38 @@ Detailed saved report run:
 uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER --full-report
 ```
 
-Report-only LLM formula proposal run:
+Default report run with report-only LLM formula proposals:
 
 ```text
-uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER --full-report --formula-proposals
+uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER
 ```
 
-Use `--formula-proposal-target-limit N` for a capped live-provider smoke test.
-The formula proposal panel evaluates one representative period context per
-missing target to keep live provider calls bounded; the full eligible raw fact
-pool is still shown in the report/export evidence.
+Use `--no-formula-proposals` to skip provider calls for a cheaper report-only
+mapping run. Use `--formula-proposal-target-limit N` for a capped live-provider
+smoke test.
+The formula proposal panel evaluates active 10-K and 10-Q filing periods for
+each missing metric. It sends each provider one request per distinct metric,
+unit, period type, form, statement bucket set, and raw concept pool. When
+multiple active periods expose the same pool, one model recommendation is shown
+with period coverage for all matching periods. When active periods expose
+different raw concept pools, the report can show different period-scoped formula
+recommendations. The full eligible active-period raw fact pool remains
+available in SQLite and CSV export evidence.
 
 Rules:
 
 - exactly one ticker is accepted per run
 - the compact summary is saved to `milestone25_mapping_report_<TICKER>.md` by default
 - the report body is not printed to the terminal
-- `--full-report` includes detailed run context, session deltas, and compact
-  samples in `milestone25_mapping_report_<TICKER>.md`
+- while formula proposals run, the terminal prints process progress: how many
+  missing targets were selected, which missing metric/statement is being
+  handled, each period context, and the final context count
+- after formula proposals complete, the terminal prints final recommendation
+  progress: the final recommendation model, each grouped recommendation request,
+  the period option contexts covered by that request, option counts by type, and
+  selected/no-recommendation/unavailable/failed completion counts
+- `--full-report` is accepted for compatibility; it does not add old
+  target-level, provider-level, raw-fact, or unknown-concept appendices
 - `--write-report` is accepted for compatibility; the report is already saved
 - `prewarm_target_embeddings.py` precomputes target XBRL concept candidate
   vectors for common-base and every hard-industry bundle
@@ -218,230 +239,83 @@ Supporting CSV artifacts:
 data/exports/ms2_5/
 ```
 
-Financial metric lineage section:
+## Saved Report Shape
+
+The saved report should be compact, intuitive, and metric-first. The reader
+should see the mapping decision surface directly, without provider-level cache
+diagnostics, raw-fact appendices, or unrelated lineage tables.
+
+Sections:
+
+0. Compact Summary
+0A. XBRL Concepts Provided By Period
+1. Target Metrics Mapping Status
+2. Semantic Candidates For Missing Targets
+3. Proposed Formulas For Formula Recommendations
+4. Final Recommendations For Missing Targets
+
+Section 0A presents the count of distinct selected XBRL concepts provided to
+formula generation for each period, deduped across provider/model calls. It
+uses a yearly table for 10-K and a year-by-quarter matrix for 10-Q.
+Section 1 lists every target metric, marks it as mapped or missing, and labels
+the metric source as common base or the actual hard-industry label name.
+Section 1 is sorted by metric type and uses this column order: Metric type,
+Metric, Statement, Mapping status, Mapped target concepts, Coverage detail,
+Approved alternates, Target XBRL concepts checked. Section 2 lists semantic
+candidates only for missing target metrics, omits the target-concept column, and
+splits rows into 10-K and 10-Q active-window subsections with period coverage.
+When all active periods are covered, period coverage is abbreviated as a start
+and end range such as `active 10-K periods: 2021 FY - 2025 FY` or
+`active 10-Q periods: 2023 Q1 - 2026 Q2`. Section 3 lists proposed formula
+evidence only for missing target metrics and splits rows into 10-K and 10-Q
+active-window subsections. Agreement rows should collapse when the full
+provider/formula decision set is the same. When providers disagree for a period,
+show separate provider rows instead of putting multiple provider formulas in the
+same Formula cell. Provider-specific disagreement rows may still collapse across
+periods when the same provider gives the same formula. Section 3 should not
+include Target concept, Components, or recommendation columns; final choice
+language belongs in Section 4. Section 3 period context should show only compact filing periods:
+10-K rows use years such as `2023` or `2023-2025`, and 10-Q rows use
+year-quarter labels such as `2021 q1` or `2021 q1 - 2021 q3`; omit raw suffixes
+such as period type, unit, and form. 10-Q report labels should not show Q4.
+If a formula is too long for the Formula column, the Formula cell should show
+an annotation such as `[F1]`, and the full formula should be listed under the
+table in a Formula annotations block.
+Section 4 is the period-level final recommendation section, split into 10-K
+and 10-Q subsections. Each row represents one missing metric for one period
+group and shows the semantic candidate, proposed formula evidence, and possible
+zero evidence that apply to that same period group. A separate final
+recommendation LLM call chooses exactly one option from those supplied choices:
+one proposed formula, the semantic candidate, `0`, or no recommendation when
+the evidence is insufficient. Periods with the same metric, statement, and
+identical option set should share one final recommendation call, then expand the
+selected answer back to each covered period. When those recommended solutions
+and the final choice are identical across periods, Section 4 should collapse
+them into one row and compact the Period context like Section 3.
+Formula evidence should show only formula text, without provider/model source
+details. Final recommendation should show the selected recommendation value
+itself: the formula text, the semantic candidate, or `0` for zero-target
+recommendations. If the final model is unavailable, fails, or chooses an
+invalid option, the row should show `needs_review`. When Section 3 annotated a
+selected formula, Section 4 should reuse that annotation instead of reprinting
+the long formula. Displayed concept values should omit taxonomy prefixes such
+as `us-gaap:` or `custom:`.
+
+The compact summary should include setup ingestion duration and unchanged-company
+reuse duration as evidence for the local MVP performance expectations. It should
+not add automatic pass/fail labels.
+
+The report should use reader-facing status labels:
 
 ```text
-experiments/MS2_5/milestone25_mapping_report_<TICKER>.md
+mapped
+covered_by_approved_alternate
+needs_review
+no_evidence
 ```
 
-The compact saved report should show the operational decision path first:
-whether the company is local, whether an update check is due this session,
-whether SEC was checked, whether new filing data was ingested, and the next
-10-K/10-Q check dates after the session. It should then show source-controlled
-hard industry label assignment, target raw fact coverage, formula proposal
-summary, debt recovery summary, adaptive mapping summary, base metric counts,
-and evidence locations. Full rows should remain available in
-`experiments/storage/experiment.db` and CSV exports. If `--full-report` is used,
-the saved report should append detailed run context, compact table samples, and
-the full financial metric lineage appendix, including mapping coverage, formula
-proposal diagnostics, debt recovery diagnostics, alternate/unknown SEC/XBRL tag
-evidence, and annual/quarterly pivoted metric tables.
-
-## Compact Saved Report Shape
-
-The default saved report should fit a quick review:
-
-```text
-Milestone 2.5 Plan 2.5 Ingestion Examination
-
-Run Context
-  ticker:
-  run timestamp:
-  mode:
-  SEC_USER_AGENT configured:
-  report output:
-
-Initial Setup Ingestion
-  company existed before setup:
-  setup status:
-  SEC checked during setup:
-  CIK:
-  company name:
-
-Already-Ingested Session Check
-  company in system:
-  update check needed this session:
-  10-K check due:
-  10-Q check due:
-  SEC update check performed:
-  SEC result:
-  new filings ingested this session:
-  next 10-K check date after session:
-  next 10-Q check date after session:
-
-Stored Rows After Session
-  companies:
-  filings:
-  raw_xbrl_facts:
-  financial_metrics:
-
-Active Window After Session
-  10-K:
-  10-Q:
-
-Company Industry Labels
-  assigned labels:
-  label status:
-  assignment source:
-  assignment reason:
-
-Target Raw Fact Coverage
-  target concepts checked:
-  found_mapped:
-  missing_target:
-  found_unmapped:
-
-Base Metrics After Session
-
-Source And Export Warnings
-
-More Detail
-```
-
-## Detailed Markdown Report Shape
-
-The detailed Markdown report should focus on setup ingestion plus the
-already-ingested session decision.
-
-### Setup Ingestion
-
-Purpose:
-
-Show what the system creates when the chosen ticker is missing from the
-persistent isolated experiment database, and what it reuses when the ticker is
-already present from an earlier experiment run.
-
-Evidence to present:
-
-- run timestamp
-- chosen ticker
-- SEC mode
-- `SEC_USER_AGENT` presence, without printing the value
-- experiment database path
-- report path
-- CSV export directory
-- company existed before setup: yes or no
-- company registry row sample
-- filings grouped by form type
-- latest 10-K filing date
-- latest 10-Q filing date
-- `next_check_date_10k`
-- `next_check_date_10q`
-- raw fact count
-- base metric count
-- raw fact mapping coverage summary
-- company industry label assignment and supporting evidence
-- target raw fact coverage, including found, missing, and found-but-unmapped
-  target concepts
-- alternate SEC/XBRL tags for the same business metric
-- unknown SEC/XBRL concepts not mapped into `financial_metrics`
-- active-window counts for 10-K and 10-Q
-- compact `financial_metrics` sample
-- metric-level data lineage view showing raw XBRL concepts, system mappings,
-  `financial_metrics` row counts, active-row counts, and inactive context rows
-- compact metric traceability sample
-- appended financial metric lineage section in `milestone25_mapping_report_<TICKER>.md`
-
-### Already-Ingested Session Check
-
-Purpose:
-
-Show what the workflow decides when the same ticker already exists in local
-storage.
-
-Evidence to present:
-
-- company in local storage: yes or no
-- 10-K and 10-Q refresh due flags
-- next check dates before the session
-- whether SEC was contacted
-- whether new filing data was ingested
-- newly ingested filing form, accession, filing date, fiscal period, and local
-  path
-- next check dates after the session
-- stored row count deltas during the session
-
-## Proposed Detailed Markdown Report Outline
-
-```text
-# Milestone 2.5 Live SEC Experiment Report
-
-## Human Question
-
-## Run Context
-  ticker:
-  run timestamp:
-  database:
-  report output:
-  report:
-  csv export directory:
-  SEC_USER_AGENT configured:
-
-## Setup Ingestion
-
-### Company State
-
-### Filing Inventory
-
-### Raw Fact And Metric Counts
-
-### Raw Fact Mapping Coverage
-
-### Company Industry Labels
-
-### Target Raw Fact Coverage
-
-### Found Target Facts
-
-### Missing Target Facts
-
-### Found But Unmapped Target Facts
-
-### Active Window
-
-### Financial Metric Data Lineage View
-
-### Alternate SEC/XBRL Tags For Same Business Metric
-
-### Compact financial_metrics Sample
-
-### Compact Traceability Sample
-
-## Already-Ingested Session Check
-
-### New Filings Ingested During Session
-
-### Stored Row Deltas During Session
-
-### Stored Evidence After Session
-
-```
-
-## Required Report Sections
-
-1. Human question
-2. Run context
-3. Setup ingestion
-4. Already-ingested session check
-5. Company registry samples
-6. Filing inventory samples
-7. Raw fact and base metric counts
-8. Raw fact mapping coverage
-9. Persisted company industry labels
-10. Target raw fact coverage
-11. Found, missing, and found-but-unmapped target facts
-12. Active-window counts
-13. Financial metric data lineage view
-14. Inline XBRL extension coverage
-15. Semantic mapping candidates awaiting review
-16. Approved learned XBRL mappings
-17. Alternate SEC/XBRL tags for the same business metric
-18. Compact `financial_metrics` sample
-19. Compact traceability sample
-20. Annual XBRL financial metrics
-21. Quarterly XBRL financial metrics
-22. Unknown SEC/XBRL concepts not mapped to base financial metrics
-23. Full evidence artifact paths
+The internal resolver may still use `needs_llm_resolution`, but the report
+should say `needs_review` so the LLM does not sound like the final approver.
 
 ## Implementation Guidance
 
@@ -453,6 +327,9 @@ Evidence to present:
   label assignments. Do not infer labels silently from observed raw facts.
 - Reuse `src/processing/mapping_catalog.py` for approved mapping candidates and
   target raw fact coverage.
+- Reuse `src/processing/metric_coverage.py` to collapse tag-level evidence into
+  one metric-level review row before asking an LLM or reviewer to choose among
+  semantic candidate, formula-from-raw-concepts, zero-target, or no-evidence.
 - Reuse `src/ingestion/inline_xbrl.py` and Arelle for active filing extension
   taxonomy loading; keep normalization in `src/processing/inline_xbrl.py`.
 - Reuse `src/processing/semantic_mapping.py` only to generate review candidates.
@@ -464,7 +341,10 @@ Evidence to present:
   calls in `src/analyze/xbrl_formula_proposals.py`, and period context
   construction, target-compatible unit filtering, exact-cache reuse, and deterministic validation in
   `src/processing/formula_proposals.py`. The provider panel is Gemini plus
-  OpenAI `gpt-4.1-mini`.
+  OpenAI `gpt-4.1-mini`. The Section 4 final recommendation step is a separate
+  OpenAI call using `OPENAI_FINAL_RECOMMENDATION_MODEL`, defaulting to
+  `gpt-5.5`, and it has its own exact-context cache under
+  `data_store/knowledge/final_recommendations/`.
 - Treat LLM formula proposals as report-only evidence. Do not approve mappings,
   persist recovered values, or feed indicators from model confidence or model
   agreement. A model may also return a report-only zero-target decision when
@@ -483,15 +363,14 @@ Evidence to present:
 - Do not write to `stock_data.db`.
 - Do not delete or reset `experiments/storage/experiment.db` at startup.
 - Do not print secrets or the actual `SEC_USER_AGENT` value.
-- Keep the default saved report compact and point to the SQLite database, CSV
-  exports, filing downloads, and optional detailed sections.
-- Append the financial metric data lineage view to
-  `milestone25_mapping_report_<TICKER>.md`.
-- Save the compact report to `milestone25_mapping_report_<TICKER>.md` by
-  default without printing the report body to the terminal.
-- Include detailed run context, session deltas, and compact samples in
-  `milestone25_mapping_report_<TICKER>.md` only when `--full-report` is present;
-  do not repeat the full mapping and lineage tables.
+- Keep the default saved report compact, metric-first, and limited to the
+  requested mapping evidence tables.
+- Save the compact Plan 2.5 target mapping report to
+  `milestone25_mapping_report_<TICKER>.md` by default without printing the
+  report body to the terminal.
+- Keep target-level, provider-level, raw-fact, unknown-concept, validation,
+  cache, and component diagnostic tables out of the saved Markdown report.
+  Source rows remain available in SQLite and CSV exports.
 - Accept `--write-report` as a compatibility flag, not as a separate output
   mode.
 - Store Decimal-compatible numeric text values as they come from the storage
@@ -508,20 +387,15 @@ raw_xbrl_facts
 financial_metrics
 ```
 
-The report should also list the generated CSV exports under:
+Generated CSV exports remain under:
 
 ```text
 data/exports/ms2_5/
 ```
 
-The lineage text section should include two pivoted XBRL metric tables:
-
-- Annual XBRL Financial Metrics: `metric_name`, `statement_type`, then one
-  column per fiscal year.
-- Quarterly XBRL Financial Metrics: `metric_name`, `statement_type`, then one
-  column per fiscal quarter.
-
-Each table should show the stored financial metric values in period columns.
+The saved report should use Markdown tables for the compact summary, target
+metric mapping status, semantic candidates for missing targets, and proposed
+formulas for formula recommendations.
 Table cells should be padded to the column width so headers and values align in
 the text report.
 Numeric report values should use presentation-only abbreviations where useful:
@@ -531,12 +405,11 @@ values below `1K` should be rounded to two decimal places. Stored SQLite values
 and CSV exports should remain unmodified.
 When multiple distinct values remain for one metric-period cell, the report
 should keep them visible in the cell instead of silently dropping them.
-The lineage text section should also highlight raw fact mapping coverage,
-persisted hard industry labels, target raw fact coverage, Inline XBRL extension
-coverage, semantic candidates, approved learned mappings, observed alternate
-tags, and unknown concepts. Unknown concepts should appear after the quarterly
-XBRL metric table, and Full Evidence paths should appear after the XBRL metric
-tables.
+Detailed target raw fact coverage, provider-level formula diagnostics, formula
+component evidence, raw fact mapping coverage, persisted hard industry labels,
+Inline XBRL extension coverage, approved learned mappings, observed alternate
+tags, and unknown concepts should remain inspectable through SQLite and CSV
+exports rather than appended to the saved Markdown report.
 
 ## Edge Cases To Present
 
@@ -575,7 +448,8 @@ inspect:
 - which hard industry labels are assigned and why
 - which target raw facts were expected, found, missing, or found but unmapped
 - which base metrics can be traced back to raw XBRL facts
-- where to inspect annual and quarterly XBRL metric evidence
+- where to inspect target-level, provider-level, raw-fact, and unknown-concept
+  evidence
 - where to open the full SQLite database and CSV exports
 
 The experiment should stop at presentation. The human reviewer decides whether

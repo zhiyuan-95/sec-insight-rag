@@ -42,6 +42,7 @@ def test_load_settings_defaults_missing_optional_values(tmp_path: Path) -> None:
     assert settings.knowledge_storage_dir == Path("data_store/knowledge")
     assert settings.primary_chat_model == DEFAULT_CHAT_MODEL
     assert settings.allowed_chat_models == [DEFAULT_CHAT_MODEL]
+    assert settings.openai_final_recommendation_model == "gpt-5.5"
 
 
 def test_load_settings_accepts_comma_separated_allowed_models(tmp_path: Path) -> None:
@@ -54,6 +55,23 @@ def test_load_settings_accepts_comma_separated_allowed_models(tmp_path: Path) ->
     settings = load_settings(env_file)
 
     assert settings.allowed_chat_models == [DEFAULT_CHAT_MODEL]
+
+
+def test_load_settings_accepts_final_recommendation_model_override(tmp_path: Path) -> None:
+    env_file = tmp_path / "config.env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "SEC_USER_AGENT=Example Agent contact@example.com",
+                "OPENAI_FINAL_RECOMMENDATION_MODEL=gpt-5.5",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(env_file)
+
+    assert settings.openai_final_recommendation_model == "gpt-5.5"
 
 
 def test_load_settings_rejects_unsupported_chat_model(tmp_path: Path) -> None:

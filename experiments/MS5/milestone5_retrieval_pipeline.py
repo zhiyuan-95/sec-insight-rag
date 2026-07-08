@@ -31,6 +31,7 @@ class QueryRun:
     """Retrieved evidence and timing for one experiment query."""
 
     query: str
+    timing_label: str
     evidence: tuple[RetrievedEvidence, ...]
     elapsed_seconds: float
 
@@ -47,6 +48,9 @@ def main() -> int:
     report_path.parent.mkdir(parents=True, exist_ok=True)
     settings = load_settings()
     captured_output = io.StringIO()
+    embedding_model_cached_before_sync = _embedding_model_cached_before_sync(
+        settings.knowledge_storage_dir,
+    )
 
     try:
         with _captured_dependency_output(captured_output, verbose=args.verbose):
@@ -56,8 +60,17 @@ def main() -> int:
                 force_rebuild=args.force_rebuild,
             )
             query_runs = tuple(
-                _run_query(ticker, query, settings)
-                for query in args.query
+                _run_query(
+                    ticker,
+                    query,
+                    settings,
+                    timing_label=(
+                        "initial cold-query duration"
+                        if index == 0
+                        else "subsequent warm-query duration"
+                    ),
+                )
+                for index, query in enumerate(args.query)
             )
         report = _render_report(
             mode=args.mode,
@@ -68,6 +81,7 @@ def main() -> int:
             embedding_model=settings.retrieval_embedding_model,
             chunk_size=settings.retrieval_chunk_size,
             chunk_overlap=settings.retrieval_chunk_overlap,
+            embedding_model_cached_before_sync=embedding_model_cached_before_sync,
             captured_output=captured_output.getvalue(),
         )
         report_path.write_text(report, encoding="utf-8")
@@ -128,14 +142,29 @@ def _redirect_output(output: io.StringIO):
         yield
 
 
-def _run_query(ticker: str, query: str, settings: object) -> QueryRun:
+def _run_query(
+    ticker: str,
+    query: str,
+    settings: object,
+    *,
+    timing_label: str,
+) -> QueryRun:
     started = time.perf_counter()
     evidence = retrieve_filing_evidence(ticker, query, settings)
     return QueryRun(
         query=query,
+        timing_label=timing_label,
         evidence=evidence,
         elapsed_seconds=time.perf_counter() - started,
     )
+
+
+def _embedding_model_cached_before_sync(knowledge_storage: Path) -> bool:
+    cache_dir = knowledge_storage / "model_cache" / "fastembed"
+    try:
+        return cache_dir.exists() and any(cache_dir.iterdir())
+    except OSError:
+        return False
 
 
 def _render_report(
@@ -148,6 +177,7 @@ def _render_report(
     embedding_model: str,
     chunk_size: int,
     chunk_overlap: int,
+    embedding_model_cached_before_sync: bool,
     captured_output: str,
 ) -> str:
     lines = [
@@ -162,6 +192,7 @@ def _render_report(
         f"  database: {database_path}",
         f"  knowledge_storage: {knowledge_storage}",
         f"  embedding_model: {embedding_model}",
+        f"  embedding_model_cached_before_sync: {'yes' if embedding_model_cached_before_sync else 'no'}",
         f"  chunk_size: {chunk_size}",
         f"  chunk_overlap: {chunk_overlap}",
         "",
@@ -169,9 +200,9 @@ def _render_report(
         f"  status: {sync_result.status}",
         f"  generation_id: {sync_result.generation_id}",
         f"  artifact_path: {sync_result.artifact_path}",
-        f"  active_filings: {sync_result.filing_count}",
-        f"  chunks: {sync_result.chunk_count}",
-        f"  sync_seconds: {sync_result.elapsed_seconds:.3f}",
+        f"  active_filing_count: {sync_result.filing_count}",
+        f"  chunk_count: {sync_result.chunk_count}",
+        f"  retrieval_synchronization_duration_seconds: {sync_result.elapsed_seconds:.3f}",
         "",
         "Filing And Section Coverage:",
     ]
@@ -203,7 +234,8 @@ def _render_report(
             [
                 "",
                 f"Query: {query_run.query}",
-                f"Retrieval Time: {query_run.elapsed_seconds:.3f} seconds",
+                f"Timing Label: {query_run.timing_label}",
+                f"{query_run.timing_label}: {query_run.elapsed_seconds:.3f} seconds",
                 "",
                 "Top Retrieved Evidence:",
             ]

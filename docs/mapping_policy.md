@@ -49,6 +49,10 @@ Raw fact ingestion should remain broad. Metric mapping should remain selective.
 - semantic mapping candidate: a possible mapping suggested by vector
   similarity. It requires review and must not populate `financial_metrics`
   automatically.
+- metric coverage resolution: a metric-level review packet that combines target
+  tag coverage, approved alternates, semantic candidates, and formula/zero
+  diagnostics so the next reviewer or LLM choice is about one internal metric,
+  not each raw target tag.
 - missing target XBRL concept: a target or candidate XBRL concept expected for
   the company's approved industry labels but not found after deterministic
   mapping.
@@ -64,6 +68,9 @@ Raw fact ingestion should remain broad. Metric mapping should remain selective.
   raw XBRL fact -> approved mapping -> system financial metric.
 - semantic review flow: unknown XBRL concept -> semantic mapping candidate ->
   reviewed approved mapping.
+- metric resolution review flow: missing internal metric -> one evidence packet
+  -> reviewer/LLM chooses semantic candidate, formula from raw concepts, zero
+  target, or no evidence -> approved decision before any persisted metric use.
 
 ## Broad Raw Ingestion
 
@@ -214,6 +221,25 @@ confidence, method, scope, and evidence. They do not create
 `rejected`. Approved mappings may use global, industry, or company scope and
 become deterministic inputs on later ingestion runs.
 
+Unresolved coverage should be reviewed at the internal-metric level. The metric
+coverage resolver groups all target tags for one metric and presents one review
+surface with:
+
+1. existing mapped target evidence
+2. approved alternate concept coverage
+3. semantic candidates from Round 2
+4. formula-from-raw-concepts diagnostics
+5. zero-target diagnostics with affirmative same-period evidence
+6. no-evidence cases
+
+The LLM or reviewer may recommend one unresolved path, but only a reviewed
+mapping can populate `financial_metrics`. Formula and zero-target choices are
+review evidence unless a separate reviewed decision type is explicitly added.
+Formula-from-raw-concepts evidence should be generated once per unresolved
+metric and distinct active-window raw concept pool. If multiple 10-K or 10-Q
+periods expose the same pool, the same model recommendation should be shown with
+period coverage instead of triggering another provider request for each period.
+
 The governing rule is:
 
 ```text
@@ -289,20 +315,18 @@ company-level metrics.
 
 The MS2.5 report should show:
 
-- source-controlled company industry labels
-- assignment source, reason, supporting evidence, and status
-- raw fact mapping coverage
-- target raw fact coverage
-- target facts found in `raw_xbrl_facts`
-- target facts missing from `raw_xbrl_facts`
-- target facts found but not mapped into `financial_metrics`
-- unknown SEC/XBRL concepts that remain raw-only evidence
-- Inline XBRL extension and dimensional fact coverage
-- semantic mapping candidates awaiting review
-- approved learned mappings and their scope
-- exact target tags that are absent but whose canonical metric is recovered by
-  an approved alternate concept
-- report-only formula or zero-target decisions for missing targets when the
-  enabled LLM panel finds supporting same-period raw-fact evidence
+- a compact summary of the run and review-only boundary
+- every target metric marked as mapped or missing, with common-base versus
+  industry-special classification
+- semantic mapping candidates only for missing target metrics, split into 10-K
+  and 10-Q active-window sections with period coverage
+- proposed formula or zero rows only for missing target metrics, split into 10-K
+  and 10-Q active-window sections with period context
+- displayed concept values without taxonomy prefixes such as `us-gaap:` or
+  `custom:`
 
-The report presents evidence. It does not decide pass/fail.
+Detailed raw-fact coverage, company labels, Inline XBRL coverage, approved
+learned mappings, provider-level formula diagnostics, cache details, and
+unknown concepts remain available in SQLite and CSV exports. The Markdown
+report presents evidence for the later semantic/formula/zero choice. It does
+not decide pass/fail or approve mappings.

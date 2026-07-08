@@ -5,13 +5,15 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import sqlite3
 import sys
+import time
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any, Callable, Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -19,7 +21,9 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.config import Settings, load_settings
 from src.analyze.xbrl_formula_proposals import (
+    default_final_recommendation_provider_config,
     default_formula_proposal_provider_configs,
+    generate_final_recommendation,
     generate_formula_proposal,
 )
 from src.ingestion import (
@@ -35,11 +39,17 @@ from src.processing.company_industry_labels import (
     industry_label_assignments_for_company,
 )
 from src.processing.mapping_catalog import (
+    COMMON_BASE_LABEL,
     STATUS_FOUND_MAPPED,
+    STATUS_FOUND_MAPPED_ALTERNATE,
     STATUS_FOUND_UNMAPPED,
     STATUS_MISSING_TARGET,
     mapping_candidates_by_key,
     target_facts_for_industry_labels,
+)
+from src.processing.metric_coverage import (
+    metric_coverage_report_rows,
+    resolve_metric_coverage,
 )
 from src.processing.metric_recovery import (
     COMPONENT_AMBIGUOUS,
@@ -67,6 +77,14 @@ from src.processing.formula_proposals import (
     CACHE_STATUS_UNAVAILABLE,
     CONSENSUS_VALIDATED,
     CONSENSUS_TARGET_ZERO,
+    FINAL_OPTION_FORMULA,
+    FINAL_OPTION_NO_RECOMMENDATION,
+    FINAL_OPTION_SEMANTIC_CANDIDATE,
+    FINAL_OPTION_ZERO,
+    FINAL_RECOMMENDATION_STATUS_FAILED,
+    FINAL_RECOMMENDATION_STATUS_NO_OPTIONS,
+    FINAL_RECOMMENDATION_STATUS_SELECTED,
+    FINAL_RECOMMENDATION_STATUS_UNAVAILABLE,
     PROVIDER_STATUS_FAILED,
     PROVIDER_STATUS_NO_FORMULA,
     PROVIDER_STATUS_PROPOSED,
@@ -76,14 +94,18 @@ from src.processing.formula_proposals import (
     VALIDATION_STATUS_ZERO_EVIDENCE,
     FormulaProposalFact,
     FormulaProposalContext,
+    FinalRecommendationProviderResult,
     FormulaProposalProviderResult,
     FormulaProposalTarget,
     FormulaProposalValidationResult,
     build_formula_proposal_contexts,
+    final_recommendation_context_fingerprint,
     consensus_label,
     formula_context_fingerprint,
     formula_context_prompt_payload,
+    load_final_recommendation_cache,
     load_formula_proposal_cache,
+    save_final_recommendation_cache,
     save_formula_proposal_cache,
     validate_formula_proposal,
 )
@@ -96,9 +118,8 @@ DEFAULT_REPORT_PREFIX = "milestone25_mapping_report"
 DEFAULT_FILINGS_DIR = EXPERIMENT_STORAGE_DIR / "filings"
 DEFAULT_EXPORTS_DIR = PROJECT_ROOT / "data" / "exports" / "ms2_5"
 FORMULA_PROPOSAL_CACHE_SUBDIR = "formula_proposals"
-FORMULA_PROPOSAL_CONTEXT_LIMIT_PER_TARGET = 1
+FINAL_RECOMMENDATION_CACHE_SUBDIR = "final_recommendations"
 FORMS = ("10-K", "10-Q")
-STATUS_FOUND_MAPPED_ALTERNATE = "found_mapped_alternate"
 
 TARGET_COVERAGE_REPORT_COLUMNS = (
     "industry_label",
@@ -130,11 +151,23 @@ PRESENTATION_NUMBER_EXCLUDED_HEADERS = {
     "metric_id",
     "next_check_date_10k",
     "next_check_date_10q",
+    "# of concepts provided",
+    "period context",
+    "period coverage",
+    "period_context",
+    "period_coverage",
+    "q1",
+    "q2",
+    "q3",
+    "q4",
     "raw_fact_id",
     "sic",
     "scope_value",
     "source_raw_fact_id",
     "start_date",
+}
+MARKDOWN_FULL_TEXT_HEADERS = {
+    "concepts provided",
 }
 PRESENTATION_NUMBER_SUFFIXES = (
     (Decimal("1000000000000"), "T"),
@@ -142,6 +175,7 @@ PRESENTATION_NUMBER_SUFFIXES = (
     (Decimal("1000000"), "M"),
     (Decimal("1000"), "K"),
 )
+MARKDOWN_CELL_MAX_CHARS = 120
 
 
 @dataclass(frozen=True)
@@ -189,6 +223,8 @@ class ExperimentRun:
     company_existed_before_setup: bool
     setup_status: str
     setup_sec_checked: bool
+    setup_duration_seconds: float | None
+    unchanged_company_reuse_duration_seconds: float | None
     setup_snapshot: dict[str, Any]
     session_before_snapshot: dict[str, Any]
     session_after_snapshot: dict[str, Any]
@@ -211,8 +247,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             ticker=ticker,
             settings=settings,
             paths=paths,
-            formula_proposals_enabled=args.formula_proposals,
+            formula_proposals_enabled=args.formula_proposals_enabled,
             formula_proposal_target_limit=args.formula_proposal_target_limit,
+            formula_progress=print,
         )
     except (SecConfigurationError, SecIngestionError, TickerNotFoundError, FilingNotFoundError, ValueError) as exc:
         run = _error_run(ticker=ticker, paths=paths, error=exc)
@@ -236,27 +273,36 @@ def run_experiment(
     ticker: str,
     settings: Settings,
     paths: ExperimentPaths,
-    formula_proposals_enabled: bool = False,
+    formula_proposals_enabled: bool = True,
     formula_proposal_target_limit: int | None = None,
+    formula_progress: Callable[[str], None] | None = None,
 ) -> ExperimentRun:
     """Run ingestion against steady experiment storage, then inspect the local session path."""
     run_timestamp = datetime.now(timezone.utc).isoformat()
     normalized_ticker = _normalize_ticker(ticker)
 
     company_existed_before_setup = _company_exists(paths.database, normalized_ticker)
+    setup_started = time.perf_counter()
     setup_result = ingest_company(normalized_ticker, settings)
+    setup_duration_seconds = time.perf_counter() - setup_started
     setup_snapshot = _snapshot(paths.database, normalized_ticker)
 
     session_before_snapshot = setup_snapshot
     session_company_exists = bool(session_before_snapshot.get("company"))
+    unchanged_company_reuse_duration_seconds: float | None = None
     if session_company_exists:
+        session_started = time.perf_counter()
         session_result = ingest_company(normalized_ticker, settings)
+        session_duration_seconds = time.perf_counter() - session_started
+        if session_result.status == "reused_local":
+            unchanged_company_reuse_duration_seconds = session_duration_seconds
         session_after_snapshot = _snapshot(
             paths.database,
             normalized_ticker,
             settings=settings,
             formula_proposals_enabled=formula_proposals_enabled,
             formula_proposal_target_limit=formula_proposal_target_limit,
+            formula_progress=formula_progress,
         )
         session_decision = SessionDecision(
             company_exists=True,
@@ -287,6 +333,8 @@ def run_experiment(
         company_existed_before_setup=company_existed_before_setup,
         setup_status=setup_result.status,
         setup_sec_checked=setup_result.sec_checked,
+        setup_duration_seconds=setup_duration_seconds,
+        unchanged_company_reuse_duration_seconds=unchanged_company_reuse_duration_seconds,
         setup_snapshot=setup_snapshot,
         session_before_snapshot=session_before_snapshot,
         session_after_snapshot=session_after_snapshot,
@@ -314,12 +362,21 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--full-report",
         action="store_true",
-        help="Include detailed Markdown sections with compact table samples in the saved report.",
+        help="Accepted for compatibility; the saved report keeps the fixed Plan 2.5 mapping shape.",
     )
-    parser.add_argument(
+    formula_group = parser.add_mutually_exclusive_group()
+    formula_group.add_argument(
         "--formula-proposals",
+        dest="formula_proposals_enabled",
         action="store_true",
-        help="Call configured model providers for report-only missing-target formula proposals.",
+        default=True,
+        help="Accepted for compatibility; formula proposals run by default.",
+    )
+    formula_group.add_argument(
+        "--no-formula-proposals",
+        dest="formula_proposals_enabled",
+        action="store_false",
+        help="Skip report-only missing-target formula proposal provider calls.",
     )
     parser.add_argument(
         "--formula-proposal-target-limit",
@@ -387,6 +444,7 @@ def _snapshot(
     settings: Settings | None = None,
     formula_proposals_enabled: bool = False,
     formula_proposal_target_limit: int | None = None,
+    formula_progress: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     if not database.exists():
         return _empty_snapshot()
@@ -421,11 +479,13 @@ def _snapshot(
         semantic_mapping_candidates = _semantic_mapping_rows(
             connection,
             cik,
+            company_id=company_id,
             status="candidate",
         )
         approved_learned_mappings = _semantic_mapping_rows(
             connection,
             cik,
+            company_id=company_id,
             status="approved",
         )
         unknown_xbrl_concepts = _unknown_xbrl_concepts(connection, company_id, cik)
@@ -443,6 +503,27 @@ def _snapshot(
             enabled=formula_proposals_enabled,
             settings=settings,
             target_limit=formula_proposal_target_limit,
+            progress=formula_progress,
+        )
+        metric_coverage_resolution = metric_coverage_report_rows(
+            resolve_metric_coverage(
+                target_coverage_rows=target_raw_fact_coverage,
+                semantic_candidate_rows=semantic_mapping_candidates,
+                formula_diagnostic_rows=formula_proposal_snapshot["diagnostics"],
+            )
+        )
+        review_snapshot = {
+            "metric_coverage_resolution": metric_coverage_resolution,
+            "semantic_mapping_candidates": semantic_mapping_candidates,
+            "formula_proposal_diagnostics": formula_proposal_snapshot["diagnostics"],
+        }
+        final_recommendation_snapshot = _final_recommendation_snapshot(
+            ticker=ticker,
+            cik=cik,
+            snapshot=review_snapshot,
+            enabled=formula_proposals_enabled,
+            settings=settings,
+            progress=formula_progress,
         )
         return {
             "company": company,
@@ -451,6 +532,7 @@ def _snapshot(
             "filings_by_form": _accessions_by_form(connection, company_id),
             "active_filings_by_form": _active_filing_counts_by_form(connection, company_id),
             "company_industry_labels": _company_industry_label_rows(company, industry_assignment),
+            "metric_coverage_resolution": metric_coverage_resolution,
             "target_raw_fact_coverage": target_raw_fact_coverage,
             "found_target_facts": _target_rows_with_status(target_raw_fact_coverage, STATUS_FOUND_MAPPED),
             "missing_target_facts": _target_rows_with_status(target_raw_fact_coverage, STATUS_MISSING_TARGET),
@@ -463,6 +545,8 @@ def _snapshot(
             "formula_proposal_diagnostics": formula_proposal_snapshot["diagnostics"],
             "formula_proposal_components": formula_proposal_snapshot["components"],
             "formula_proposal_fact_pool_summary": formula_proposal_snapshot["fact_pool_summary"],
+            "final_recommendation_summary": final_recommendation_snapshot["summary"],
+            "final_recommendation_diagnostics": final_recommendation_snapshot["diagnostics"],
             "metric_counts_by_statement": _metric_counts_by_statement(connection, company_id),
             "metric_lineage_summary": _metric_lineage_summary(connection, company_id),
             "raw_fact_mapping_coverage": _raw_fact_mapping_coverage(connection, company_id, cik),
@@ -499,6 +583,7 @@ def _empty_snapshot() -> dict[str, Any]:
         "filings_by_form": {form_type: () for form_type in FORMS},
         "active_filings_by_form": {form_type: 0 for form_type in FORMS},
         "company_industry_labels": [],
+        "metric_coverage_resolution": [],
         "target_raw_fact_coverage": [],
         "found_target_facts": [],
         "missing_target_facts": [],
@@ -511,6 +596,8 @@ def _empty_snapshot() -> dict[str, Any]:
         "formula_proposal_diagnostics": [],
         "formula_proposal_components": [],
         "formula_proposal_fact_pool_summary": [],
+        "final_recommendation_summary": _final_recommendation_not_run_summary(),
+        "final_recommendation_diagnostics": [],
         "metric_counts_by_statement": [],
         "metric_lineage_summary": [],
         "raw_fact_mapping_coverage": [],
@@ -872,6 +959,7 @@ def _formula_proposal_snapshot(
     enabled: bool,
     settings: Settings | None,
     target_limit: int | None,
+    progress: Callable[[str], None] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     if not enabled:
         return {
@@ -881,6 +969,10 @@ def _formula_proposal_snapshot(
             "fact_pool_summary": [],
         }
     if company_id is None or not cik:
+        _formula_progress(
+            progress,
+            "Formula proposal generation skipped: company is not available in local storage.",
+        )
         return {
             "summary": _formula_proposal_status_summary(
                 status="not_available",
@@ -891,6 +983,7 @@ def _formula_proposal_snapshot(
             "fact_pool_summary": [],
         }
 
+    all_targets = _formula_proposal_targets(target_raw_fact_coverage, target_limit=None)
     targets = _formula_proposal_targets(target_raw_fact_coverage, target_limit=target_limit)
     fact_pool = _formula_proposal_fact_pool(
         connection,
@@ -899,7 +992,17 @@ def _formula_proposal_snapshot(
         target_raw_fact_coverage=target_raw_fact_coverage,
     )
     fact_pool_summary = _formula_proposal_fact_pool_summary_rows(fact_pool)
+    _formula_progress_start(
+        progress,
+        all_targets=all_targets,
+        targets=targets,
+        target_limit=target_limit,
+    )
     if not targets:
+        _formula_progress(
+            progress,
+            "Formula proposal generation complete: 0 missing targets need formula recommendations.",
+        )
         return {
             "summary": _formula_proposal_status_summary(
                 status="no_missing_targets",
@@ -910,6 +1013,10 @@ def _formula_proposal_snapshot(
             "fact_pool_summary": fact_pool_summary,
         }
     if not fact_pool:
+        _formula_progress(
+            progress,
+            "Formula proposal generation skipped: no numeric active-window raw XBRL fact pool is available.",
+        )
         return {
             "summary": _formula_proposal_status_summary(
                 status="no_eligible_raw_fact_pool",
@@ -922,6 +1029,7 @@ def _formula_proposal_snapshot(
 
     provider_configs = _formula_proposal_provider_configs(settings)
     cache_dir = _formula_proposal_cache_dir(settings)
+    _formula_progress(progress, f"Formula proposal model panel: {len(provider_configs)} provider(s).")
     diagnostics: list[dict[str, Any]] = []
     components: list[dict[str, Any]] = []
     consensus_counts: dict[str, int] = {}
@@ -930,17 +1038,31 @@ def _formula_proposal_snapshot(
     available_context_count = 0
     skipped_context_count = 0
 
-    for target in targets:
+    for target_index, target in enumerate(targets, start=1):
         formula_contexts = build_formula_proposal_contexts(target=target, fact_pool=fact_pool)
         available_context_count += len(formula_contexts)
-        if len(formula_contexts) > FORMULA_PROPOSAL_CONTEXT_LIMIT_PER_TARGET:
-            skipped_context_count += len(formula_contexts) - FORMULA_PROPOSAL_CONTEXT_LIMIT_PER_TARGET
-            formula_contexts = formula_contexts[:FORMULA_PROPOSAL_CONTEXT_LIMIT_PER_TARGET]
+        _formula_progress(
+            progress,
+            f"Handling missing target {target_index}/{len(targets)}: "
+            f"{_formula_target_progress_label(target)}; "
+            f"{len(formula_contexts)} period context(s).",
+        )
         if not formula_contexts:
+            skipped_context_count += 1
+            _formula_progress(
+                progress,
+                f"  {_formula_target_progress_label(target)} has no eligible period context; skipping provider calls.",
+            )
             diagnostics.append(_formula_proposal_no_context_row(target))
             continue
-        for formula_context in formula_contexts:
+        for context_index, formula_context in enumerate(formula_contexts, start=1):
             context_count += 1
+            _formula_progress(
+                progress,
+                f"  Context {context_index}/{len(formula_contexts)}: "
+                f"{_formula_context_progress_label(formula_context)}; "
+                f"{len(provider_configs)} provider request(s).",
+            )
             provider_results: list[FormulaProposalProviderResult] = []
             cache_statuses: list[str] = []
             cache_warnings: list[str] = []
@@ -1077,6 +1199,13 @@ def _formula_proposal_snapshot(
                 )
             )
 
+    _formula_progress(
+        progress,
+        "Formula proposal generation complete: "
+        f"{len(targets)} missing target(s), "
+        f"{context_count} context(s), "
+        f"{len(diagnostics)} provider diagnostic row(s).",
+    )
     return {
         "summary": _formula_proposal_summary_rows(
             targets=targets,
@@ -1098,7 +1227,7 @@ def _formula_proposal_snapshot(
 def _formula_proposal_not_run_summary() -> list[dict[str, Any]]:
     return _formula_proposal_status_summary(
         status="not_run",
-        notes="Enable with --formula-proposals to call the report-only model panel.",
+        notes="Formula proposals were skipped for this run; omit --no-formula-proposals to call the report-only model panel.",
     )
 
 
@@ -1112,20 +1241,451 @@ def _formula_proposal_status_summary(*, status: str, notes: str) -> list[dict[st
     ]
 
 
+def _final_recommendation_snapshot(
+    *,
+    ticker: str,
+    cik: str | None,
+    snapshot: dict[str, Any],
+    enabled: bool,
+    settings: Settings | None,
+    progress: Callable[[str], None] | None = None,
+) -> dict[str, list[dict[str, Any]]]:
+    if not enabled:
+        return {
+            "summary": _final_recommendation_not_run_summary(),
+            "diagnostics": [],
+        }
+    if not cik:
+        _final_progress(progress, "Final recommendation generation skipped: company CIK is not available.")
+        return {
+            "summary": _final_recommendation_status_summary(
+                status="not_available",
+                notes="Company CIK was not available for final recommendation generation.",
+            ),
+            "diagnostics": [],
+        }
+
+    contexts = _final_recommendation_contexts(snapshot)
+    if not contexts:
+        _final_progress(
+            progress,
+            "Final recommendation generation complete: 0 period option context(s).",
+        )
+        return {
+            "summary": _final_recommendation_status_summary(
+                status="no_options",
+                notes="No period-level semantic, formula, or zero options were available.",
+            ),
+            "diagnostics": [],
+        }
+
+    provider = _final_recommendation_provider_config(settings)
+    cache_dir = _final_recommendation_cache_dir(settings)
+    _final_progress(progress, f"Final recommendation model: {provider.provider_name} ({provider.model_name}).")
+    grouped_contexts = _group_final_recommendation_contexts(contexts)
+    _final_progress(
+        progress,
+        "Final recommendation generation starting: "
+        f"{len(grouped_contexts)} grouped recommendation request(s) "
+        f"for {len(contexts)} period option context(s).",
+    )
+    diagnostics: list[dict[str, Any]] = []
+    for context_index, context in enumerate(grouped_contexts, start=1):
+        form_type = str(context["form_type"])
+        metric = str(context["metric"])
+        statement = str(context["statement"])
+        period_context = str(context["period_context"])
+        options = tuple(context["options"])
+        _final_progress(
+            progress,
+            f"Handling final recommendation {context_index}/{len(grouped_contexts)}: "
+            f"{_final_context_progress_label(metric=metric, statement=statement, period_context=period_context, options=options)}.",
+        )
+        final_hash, fingerprint_payload = final_recommendation_context_fingerprint(
+            target_metric_name=metric,
+            statement_type=statement,
+            period_context=period_context,
+            options=options,
+            provider_name=provider.provider_name,
+            model_name=provider.model_name,
+        )
+        cached_result, cache_warning = load_final_recommendation_cache(
+            cache_dir=cache_dir,
+            final_context_hash=final_hash,
+            target_metric_name=metric,
+            statement_type=statement,
+            period_context=period_context,
+            provider_name=provider.provider_name,
+            model_name=provider.model_name,
+        )
+        if cached_result is not None:
+            result = cached_result
+            cache_status = CACHE_STATUS_REUSED_EXACT_CONTEXT
+        else:
+            decision_context = {
+                "target_metric_name": metric,
+                "statement_type": statement,
+                "period_context": period_context,
+                "options": options,
+            }
+            result = generate_final_recommendation(
+                ticker=ticker,
+                cik=cik,
+                target_metric_name=metric,
+                statement_type=statement,
+                period_context=period_context,
+                decision_context=decision_context,
+                provider=provider,
+            )
+            result = _validate_final_recommendation_result(result, options=options)
+            cache_status = CACHE_STATUS_UNAVAILABLE
+            if result.provider_status in {
+                FINAL_RECOMMENDATION_STATUS_SELECTED,
+                FINAL_RECOMMENDATION_STATUS_NO_OPTIONS,
+            }:
+                write_warning = save_final_recommendation_cache(
+                    cache_dir=cache_dir,
+                    final_context_hash=final_hash,
+                    fingerprint_payload=fingerprint_payload,
+                    result=result,
+                )
+                cache_warning = cache_warning or write_warning
+                cache_status = CACHE_STATUS_GENERATED_NEW
+        for original_period_context in context["period_contexts"]:
+            diagnostics.append(
+                _final_recommendation_diagnostic_row(
+                    result=replace(result, period_context=str(original_period_context)),
+                    form_type=form_type,
+                    options=options,
+                    final_context_hash=final_hash,
+                    cache_status=cache_status,
+                    cache_warning=cache_warning,
+                )
+            )
+
+    selected = sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_SELECTED for row in diagnostics)
+    no_options = sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_NO_OPTIONS for row in diagnostics)
+    unavailable = sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_UNAVAILABLE for row in diagnostics)
+    failed = sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_FAILED for row in diagnostics)
+    _final_progress(
+        progress,
+        "Final recommendation generation complete: "
+        f"{len(grouped_contexts)} grouped recommendation request(s), "
+        f"{len(contexts)} period option context(s), "
+        f"{selected} selected, "
+        f"{no_options} no recommendation, "
+        f"{unavailable} unavailable, "
+        f"{failed} failed.",
+    )
+    return {
+        "summary": _final_recommendation_summary_rows(
+            diagnostics=diagnostics,
+            provider=provider,
+            cache_dir=cache_dir,
+        ),
+        "diagnostics": diagnostics,
+    }
+
+
+def _final_recommendation_not_run_summary() -> list[dict[str, Any]]:
+    return _final_recommendation_status_summary(
+        status="not_run",
+        notes="Final recommendations were skipped because formula proposals were skipped.",
+    )
+
+
+def _final_recommendation_status_summary(*, status: str, notes: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "evidence_item": "final recommendation model",
+            "value": status,
+            "notes": notes,
+        }
+    ]
+
+
+def _final_recommendation_contexts(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    contexts: list[dict[str, Any]] = []
+    for form_type in FORMS:
+        semantic_by_period = _semantic_options_by_metric_period(snapshot, form_type=form_type)
+        formula_by_period = _formula_recommendations_by_metric_period(
+            snapshot,
+            form_type=form_type,
+            provider_statuses={PROVIDER_STATUS_PROPOSED},
+        )
+        zero_by_period = _formula_recommendations_by_metric_period(
+            snapshot,
+            form_type=form_type,
+            provider_statuses={PROVIDER_STATUS_TARGET_ZERO},
+        )
+        keys = set(semantic_by_period) | set(formula_by_period) | set(zero_by_period)
+        for metric, statement, period_label in sorted(
+            keys,
+            key=lambda key: (
+                key[0],
+                key[1],
+                -_first_formula_period_sort_value(key[2], form_type=form_type),
+            ),
+        ):
+            options = _final_recommendation_options(
+                semantic_candidate=semantic_by_period.get((metric, statement, period_label), ""),
+                formula_recommendations=formula_by_period.get((metric, statement, period_label), []),
+                zero_recommendations=zero_by_period.get((metric, statement, period_label), []),
+            )
+            if not options:
+                continue
+            contexts.append(
+                {
+                    "form_type": form_type,
+                    "metric": metric,
+                    "statement": statement,
+                    "period_context": period_label,
+                    "period_contexts": (period_label,),
+                    "options": options,
+                }
+            )
+    return contexts
+
+
+def _group_final_recommendation_contexts(contexts: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for context in contexts:
+        form_type = str(context.get("form_type") or "")
+        metric = str(context.get("metric") or "")
+        statement = str(context.get("statement") or "")
+        options = tuple(context.get("options") or ())
+        key = (form_type, metric, statement, _final_recommendation_options_key(options))
+        if key not in grouped:
+            grouped[key] = {
+                "form_type": form_type,
+                "metric": metric,
+                "statement": statement,
+                "period_context": "",
+                "period_contexts": [],
+                "options": options,
+            }
+        grouped_context = grouped[key]
+        grouped_context["period_contexts"].extend(context.get("period_contexts") or ())
+
+    grouped_contexts: list[dict[str, Any]] = []
+    for grouped_context in grouped.values():
+        form_type = str(grouped_context.get("form_type") or "")
+        period_contexts = tuple(str(value) for value in grouped_context.get("period_contexts") or () if str(value))
+        grouped_context["period_contexts"] = period_contexts
+        grouped_context["period_context"] = _format_formula_period_labels_for_report(
+            period_contexts,
+            form_type=form_type,
+        )
+        grouped_contexts.append(grouped_context)
+    return grouped_contexts
+
+
+def _final_recommendation_options_key(options: tuple[dict[str, object], ...]) -> str:
+    return json.dumps(list(options), sort_keys=True, separators=(",", ":"), default=str)
+
+
+def _final_recommendation_options(
+    *,
+    semantic_candidate: str,
+    formula_recommendations: list[dict[str, str]],
+    zero_recommendations: list[dict[str, str]],
+) -> tuple[dict[str, object], ...]:
+    options: list[dict[str, object]] = []
+    if semantic_candidate:
+        options.append(
+            {
+                "option_id": "semantic_1",
+                "option_type": FINAL_OPTION_SEMANTIC_CANDIDATE,
+                "value": semantic_candidate,
+                "evidence": "highest semantic candidate for this metric and period",
+            }
+        )
+
+    formulas_by_value: dict[str, list[dict[str, str]]] = {}
+    for recommendation in formula_recommendations:
+        formula = str(recommendation.get("formula") or "")
+        if formula:
+            formulas_by_value.setdefault(formula, []).append(recommendation)
+    for index, (formula, recommendations) in enumerate(formulas_by_value.items(), start=1):
+        options.append(
+            {
+                "option_id": f"formula_{index}",
+                "option_type": FINAL_OPTION_FORMULA,
+                "value": formula,
+                "evidence": _final_formula_option_evidence(recommendations),
+            }
+        )
+
+    if zero_recommendations:
+        options.append(
+            {
+                "option_id": "zero_1",
+                "option_type": FINAL_OPTION_ZERO,
+                "value": "0",
+                "evidence": _final_formula_option_evidence(zero_recommendations),
+            }
+        )
+    return tuple(options)
+
+
+def _final_formula_option_evidence(recommendations: list[dict[str, str]]) -> str:
+    providers = _join_unique_texts([str(row.get("provider") or "") for row in recommendations])
+    statuses = _join_unique_texts([str(row.get("validation_status") or "") for row in recommendations])
+    confidences = _join_unique_texts([str(row.get("confidence") or "") for row in recommendations])
+    reasons = _join_unique_texts([str(row.get("reason") or "") for row in recommendations])
+    return "; ".join(
+        part
+        for part in (
+            f"providers: {providers}" if providers else "",
+            f"validation: {statuses}" if statuses else "",
+            f"confidence: {confidences}" if confidences else "",
+            f"reason: {reasons}" if reasons else "",
+        )
+        if part
+    )
+
+
+def _validate_final_recommendation_result(
+    result: FinalRecommendationProviderResult,
+    *,
+    options: tuple[dict[str, object], ...],
+) -> FinalRecommendationProviderResult:
+    if result.provider_status not in {
+        FINAL_RECOMMENDATION_STATUS_SELECTED,
+        FINAL_RECOMMENDATION_STATUS_NO_OPTIONS,
+    }:
+        return result
+    if result.selected_option_type == FINAL_OPTION_NO_RECOMMENDATION:
+        return result
+    selected = next(
+        (
+            option
+            for option in options
+            if option.get("option_id") == result.selected_option_id
+            and option.get("option_type") == result.selected_option_type
+        ),
+        None,
+    )
+    if selected is None:
+        return replace(
+            result,
+            provider_status=FINAL_RECOMMENDATION_STATUS_FAILED,
+            selected_option_type=FINAL_OPTION_NO_RECOMMENDATION,
+            selected_option_id="",
+            final_recommendation="",
+            confidence=0.0,
+            error="Final recommendation selected an option not present in the supplied options.",
+        )
+    expected_value = "0" if result.selected_option_type == FINAL_OPTION_ZERO else str(selected.get("value") or "")
+    return replace(result, final_recommendation=expected_value)
+
+
+def _final_recommendation_diagnostic_row(
+    *,
+    result: FinalRecommendationProviderResult,
+    form_type: str,
+    options: tuple[dict[str, object], ...],
+    final_context_hash: str,
+    cache_status: str,
+    cache_warning: str,
+) -> dict[str, Any]:
+    return {
+        "target_metric_name": result.target_metric_name,
+        "statement_type": result.statement_type,
+        "form_type": _normal_report_form(form_type),
+        "period_context": result.period_context,
+        "provider_name": result.provider_name,
+        "model_name": result.model_name,
+        "provider_status": result.provider_status,
+        "selected_option_type": result.selected_option_type,
+        "selected_option_id": result.selected_option_id,
+        "final_recommendation": result.final_recommendation,
+        "confidence": result.confidence,
+        "reason": result.reason,
+        "uncertainty": result.uncertainty,
+        "option_count": len(options),
+        "options": json.dumps(list(options), sort_keys=True),
+        "final_context_hash": final_context_hash,
+        "cache_status": cache_status,
+        "prompt_version": result.prompt_version,
+        "error": result.error,
+        "cache_warning": cache_warning,
+    }
+
+
+def _final_recommendation_summary_rows(
+    *,
+    diagnostics: list[dict[str, Any]],
+    provider: Any,
+    cache_dir: Path,
+) -> list[dict[str, Any]]:
+    selected = sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_SELECTED for row in diagnostics)
+    no_options = sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_NO_OPTIONS for row in diagnostics)
+    unavailable = sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_UNAVAILABLE for row in diagnostics)
+    failed = sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_FAILED for row in diagnostics)
+    return [
+        {
+            "evidence_item": "final recommendation model",
+            "value": "run",
+            "notes": f"{provider.provider_name} ({provider.model_name})",
+        },
+        {
+            "evidence_item": "final recommendation contexts",
+            "value": len(diagnostics),
+            "notes": "One context per missing metric, statement, and report period with available options.",
+        },
+        {
+            "evidence_item": "final recommendations selected",
+            "value": selected,
+            "notes": f"no_recommendation={no_options}; unavailable={unavailable}; failed={failed}",
+        },
+        {
+            "evidence_item": "final recommendation cache directory",
+            "value": str(cache_dir),
+            "notes": "Exact-context cache for report-only final recommendations.",
+        },
+    ]
+
+
 def _formula_proposal_targets(
     target_raw_fact_coverage: list[dict[str, Any]],
     *,
     target_limit: int | None,
 ) -> tuple[FormulaProposalTarget, ...]:
-    rows = [
-        row
-        for row in target_raw_fact_coverage
-        if row.get("status") == STATUS_MISSING_TARGET
-    ]
-    if target_limit is not None and target_limit > 0:
-        rows = rows[:target_limit]
+    grouped_rows: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for row in target_raw_fact_coverage:
+        if row.get("status") != STATUS_MISSING_TARGET:
+            continue
+        key = (
+            str(row.get("internal_metric_name") or ""),
+            str(row.get("statement_type") or ""),
+        )
+        grouped_rows.setdefault(key, []).append(row)
+
     targets: list[FormulaProposalTarget] = []
-    for row in rows:
+    for rows in grouped_rows.values():
+        row = rows[0]
+        target_concepts = _join_values(
+            tuple(
+                dict.fromkeys(
+                    str(item.get("target_xbrl_concept") or "")
+                    for item in rows
+                    if item.get("target_xbrl_concept")
+                )
+            )
+        )
+        industry_labels = _join_values(
+            tuple(
+                dict.fromkeys(
+                    str(item.get("industry_label") or "")
+                    for item in rows
+                    if item.get("industry_label")
+                )
+            )
+        )
+        notes = str(row.get("notes") or "")
+        if target_concepts:
+            notes = f"{notes}; missing target concepts considered: {target_concepts}".strip("; ")
         targets.append(
             FormulaProposalTarget(
                 target_metric_name=str(row.get("internal_metric_name") or ""),
@@ -1133,11 +1693,105 @@ def _formula_proposal_targets(
                 taxonomy=str(row.get("taxonomy") or ""),
                 concept=str(row.get("target_raw_concept") or ""),
                 statement_type=str(row.get("statement_type") or ""),
-                industry_label=str(row.get("industry_label") or ""),
-                notes=str(row.get("notes") or ""),
+                industry_label=industry_labels,
+                notes=notes,
             )
         )
+    if target_limit is not None and target_limit > 0:
+        targets = targets[:target_limit]
     return tuple(targets)
+
+
+def _formula_progress(
+    progress: Callable[[str], None] | None,
+    message: str,
+) -> None:
+    if progress is None:
+        return
+    progress(f"[formula proposals] {message}")
+
+
+def _final_progress(
+    progress: Callable[[str], None] | None,
+    message: str,
+) -> None:
+    if progress is None:
+        return
+    progress(f"[final recommendations] {message}")
+
+
+def _formula_progress_start(
+    progress: Callable[[str], None] | None,
+    *,
+    all_targets: tuple[FormulaProposalTarget, ...],
+    targets: tuple[FormulaProposalTarget, ...],
+    target_limit: int | None,
+) -> None:
+    if not all_targets:
+        _formula_progress(progress, "0 missing targets found for formula recommendations.")
+        return
+    limit_note = ""
+    if target_limit is not None and target_limit > 0 and len(targets) < len(all_targets):
+        limit_note = f"; handling {len(targets)} due to --formula-proposal-target-limit {target_limit}"
+    _formula_progress(
+        progress,
+        f"{len(all_targets)} missing target(s) found{limit_note}.",
+    )
+    _formula_progress(
+        progress,
+        "Missing targets selected: "
+        + "; ".join(_formula_target_progress_label(target) for target in targets),
+    )
+
+
+def _formula_target_progress_label(target: FormulaProposalTarget) -> str:
+    statement = target.statement_type or "unknown statement"
+    concept = _strip_concept_prefixes(target.target_xbrl_concept or target.concept or "")
+    concept_note = f" / target concept: {concept}" if concept else ""
+    return f"{target.target_metric_name} ({statement}){concept_note}"
+
+
+def _formula_context_progress_label(context: FormulaProposalContext) -> str:
+    period_context = context.period_context
+    fiscal_year = str(period_context.get("fiscal_year") or "").strip()
+    fiscal_period = str(period_context.get("fiscal_period") or "").strip()
+    forms = _join_values(period_context.get("forms") or ())
+    unit = str(period_context.get("unit") or "").strip()
+    period = " ".join(part for part in (fiscal_year, fiscal_period) if part).strip()
+    if not period:
+        period = str(period_context.get("period_coverage") or "").strip()
+    details = " / ".join(part for part in (period, forms, unit) if part)
+    return details or context.context_id
+
+
+def _final_context_progress_label(
+    *,
+    metric: str,
+    statement: str,
+    period_context: str,
+    options: tuple[dict[str, object], ...],
+) -> str:
+    counts: dict[str, int] = {}
+    for option in options:
+        option_type = str(option.get("option_type") or "unknown")
+        counts[option_type] = counts.get(option_type, 0) + 1
+    option_summary = ", ".join(
+        f"{option_type}={counts[option_type]}"
+        for option_type in (
+            FINAL_OPTION_FORMULA,
+            FINAL_OPTION_SEMANTIC_CANDIDATE,
+            FINAL_OPTION_ZERO,
+            FINAL_OPTION_NO_RECOMMENDATION,
+            "unknown",
+        )
+        if counts.get(option_type)
+    )
+    option_note = f"{len(options)} option(s)"
+    if option_summary:
+        option_note = f"{option_note}: {option_summary}"
+    statement_label = statement or "unknown statement"
+    period_label = period_context or "unknown period"
+    return f"{metric} ({statement_label}) / {period_label}; {option_note}"
 
 
 def _formula_proposal_fact_pool(
@@ -1170,20 +1824,27 @@ def _formula_proposal_fact_pool(
             f.fiscal_period,
             f.start_date,
             f.end_date,
-            f.form,
-            f.filed_date,
+            COALESCE(NULLIF(active.form_type, ''), f.form) AS form,
+            COALESCE(NULLIF(active.filing_date, ''), f.filed_date) AS filed_date,
             f.accession_number,
             COALESCE(m.metric_name, '') AS mapped_metric_name,
             COALESCE(m.statement_type, '') AS mapped_statement_type
         FROM raw_xbrl_facts AS f
+        INNER JOIN filings AS active
+            ON active.accession_number = f.accession_number
+           AND active.company_id = ?
+           AND active.is_active_window = 1
+           AND active.form_type IN ('10-K', '10-Q')
         LEFT JOIN financial_metrics AS m
             ON m.raw_fact_id = f.id AND m.company_id = ?
         WHERE f.cik = ?
           AND f.value_numeric IS NOT NULL
           AND (f.is_numeric IS NULL OR f.is_numeric = 1)
-        ORDER BY f.taxonomy, f.concept, f.fiscal_year DESC, f.fiscal_period DESC, f.accession_number
+          AND f.fiscal_year = active.fiscal_year
+          AND UPPER(COALESCE(f.fiscal_period, '')) = UPPER(COALESCE(active.fiscal_period, ''))
+        ORDER BY active.form_type, f.fiscal_year DESC, f.fiscal_period DESC, f.taxonomy, f.concept, f.accession_number
         """,
-        [company_id, cik],
+        [company_id, company_id, cik],
     )
     facts: list[FormulaProposalFact] = []
     for row in rows:
@@ -1310,6 +1971,13 @@ def _formula_proposal_provider_configs(settings: Settings | None):
     )
 
 
+def _final_recommendation_provider_config(settings: Settings | None):
+    return default_final_recommendation_provider_config(
+        openai_api_key=_secret_value(getattr(settings, "openai_api_key", None)),
+        openai_model=str(getattr(settings, "openai_final_recommendation_model", "") or "gpt-5.5"),
+    )
+
+
 def _formula_proposal_cache_dir(settings: Settings | None) -> Path:
     base_dir = getattr(settings, "knowledge_storage_dir", None) if settings is not None else None
     if base_dir is None:
@@ -1319,6 +1987,17 @@ def _formula_proposal_cache_dir(settings: Settings | None) -> Path:
         if not base_path.is_absolute():
             base_path = PROJECT_ROOT / base_path
     return base_path / FORMULA_PROPOSAL_CACHE_SUBDIR
+
+
+def _final_recommendation_cache_dir(settings: Settings | None) -> Path:
+    base_dir = getattr(settings, "knowledge_storage_dir", None) if settings is not None else None
+    if base_dir is None:
+        base_path = PROJECT_ROOT / "data_store" / "knowledge"
+    else:
+        base_path = Path(base_dir)
+        if not base_path.is_absolute():
+            base_path = PROJECT_ROOT / base_path
+    return base_path / FINAL_RECOMMENDATION_CACHE_SUBDIR
 
 
 def _secret_value(value: Any) -> str | None:
@@ -1365,6 +2044,7 @@ def _formula_proposal_no_context_row(target: FormulaProposalTarget) -> dict[str,
 
 
 def _format_formula_period_context(period_context: dict[str, object]) -> str:
+    period_coverage = str(period_context.get("period_coverage") or "").strip()
     fiscal_year = period_context.get("fiscal_year") or ""
     fiscal_period = period_context.get("fiscal_period") or ""
     period_type = period_context.get("period_type") or ""
@@ -1374,6 +2054,17 @@ def _format_formula_period_context(period_context: dict[str, object]) -> str:
     forms = _join_values(period_context.get("forms") or ())
     accessions = _join_values(period_context.get("accession_numbers") or ())
     date_part = f"{start_date}->{end_date}" if start_date or end_date else ""
+    if period_coverage:
+        return " | ".join(
+            part
+            for part in (
+                period_coverage,
+                str(period_type),
+                str(unit),
+                forms,
+            )
+            if part
+        )
     return " | ".join(
         part
         for part in (
@@ -1401,6 +2092,7 @@ def _formula_proposal_diagnostic_rows(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     period_context = _format_formula_period_context(context.period_context)
+    concepts_provided = _context_concepts_provided(context)
     for proposal, validation, formula_hash, cache_status, cache_warning in zip(
         proposals,
         validations,
@@ -1416,6 +2108,8 @@ def _formula_proposal_diagnostic_rows(
                 "target_primary_statement": context.target_primary_statement,
                 "context_id": context.context_id,
                 "period_context": period_context,
+                "forms": _join_values(context.period_context.get("forms") or ()),
+                "concepts_provided": concepts_provided,
                 "provider_name": proposal.provider_name,
                 "model_name": proposal.model_name,
                 "provider_status": proposal.provider_status,
@@ -1441,6 +2135,17 @@ def _formula_proposal_diagnostic_rows(
             }
         )
     return rows
+
+
+def _context_concepts_provided(context: FormulaProposalContext) -> str:
+    concepts = tuple(
+        dict.fromkeys(
+            str(row.get("concept") or "").strip()
+            for row in context.prompt_fact_pool
+            if str(row.get("concept") or "").strip()
+        )
+    )
+    return _join_values(concepts)
 
 
 def _formula_proposal_component_rows(
@@ -1519,7 +2224,7 @@ def _formula_proposal_summary_rows(
             "notes": "Report-only evidence; no recovered metrics were persisted.",
         },
         {
-            "evidence_item": "missing targets sent to formula panel",
+            "evidence_item": "missing metrics sent to formula panel",
             "value": len(targets),
             "notes": limit_note,
         },
@@ -1529,19 +2234,19 @@ def _formula_proposal_summary_rows(
             "notes": "Numeric raw SEC/XBRL facts, including found targets, mapped metrics, alternates, and unknown facts.",
         },
         {
-            "evidence_item": "period-scoped formula contexts",
+            "evidence_item": "formula concept-pool contexts",
             "value": context_count,
             "notes": (
-                "Representative contexts evaluated; "
+                "Distinct active raw-concept pools evaluated; "
                 f"available={available_context_count}; "
-                f"skipped_by_cap={skipped_context_count}; "
-                f"cap_per_target={FORMULA_PROPOSAL_CONTEXT_LIMIT_PER_TARGET}."
+                f"skipped={skipped_context_count}; "
+                "period coverage is listed when active periods share a pool."
             ),
         },
         {
             "evidence_item": "provider proposal requests",
             "value": provider_requests,
-            "notes": "Configured providers per missing target and representative period context.",
+            "notes": "Configured providers per missing metric and distinct active raw-concept pool.",
         },
         {
             "evidence_item": "formula proposal cache",
@@ -2303,6 +3008,7 @@ def _semantic_mapping_rows(
     connection: sqlite3.Connection,
     cik: str | None,
     *,
+    company_id: int | None = None,
     status: str,
 ) -> list[dict[str, Any]]:
     if not cik:
@@ -2345,10 +3051,23 @@ def _semantic_mapping_rows(
         [status, cik, cik],
     )
     rendered_rows: list[dict[str, Any]] = []
+    period_coverage_by_key = _semantic_candidate_period_coverage(
+        connection,
+        cik=cik,
+        company_id=company_id,
+        rows=rows,
+    )
     for row in rows:
         evidence = _mapping_evidence(row.pop("evidence_json", "{}"))
         target_taxonomy = str(evidence.get("target_candidate_taxonomy") or "")
         target_concept = str(evidence.get("target_candidate_xbrl_concept") or "")
+        coverage_by_form = period_coverage_by_key.get(
+            (
+                str(row.get("taxonomy") or ""),
+                str(row.get("observed_raw_concept") or ""),
+            ),
+            {},
+        )
         rendered_rows.append(
             {
                 **row,
@@ -2382,9 +3101,174 @@ def _semantic_mapping_rows(
                         )
                     )
                 ),
+                "period_coverage_10k": coverage_by_form.get("10-K", ""),
+                "period_coverage_10q": coverage_by_form.get("10-Q", ""),
             }
         )
     return rendered_rows
+
+
+def _semantic_candidate_period_coverage(
+    connection: sqlite3.Connection,
+    *,
+    cik: str,
+    company_id: int | None,
+    rows: list[dict[str, Any]],
+) -> dict[tuple[str, str], dict[str, str]]:
+    if company_id is None:
+        return {}
+    keys = tuple(
+        dict.fromkeys(
+            (
+                str(row.get("taxonomy") or ""),
+                str(row.get("observed_raw_concept") or ""),
+            )
+            for row in rows
+            if row.get("taxonomy") and row.get("observed_raw_concept")
+        )
+    )
+    if not keys:
+        return {}
+    key_clause = ", ".join("(?, ?)" for _ in keys)
+    key_params = [value for key in keys for value in key]
+    active_periods_by_form = _active_periods_by_form(connection, company_id)
+    observed_rows = _fetch_all(
+        connection,
+        f"""
+        SELECT
+            f.taxonomy,
+            f.concept,
+            active.form_type,
+            COALESCE(active.fiscal_year, f.fiscal_year) AS fiscal_year,
+            COALESCE(NULLIF(active.fiscal_period, ''), NULLIF(f.fiscal_period, '')) AS fiscal_period,
+            f.end_date,
+            f.accession_number
+        FROM raw_xbrl_facts AS f
+        INNER JOIN filings AS active
+            ON active.accession_number = f.accession_number
+           AND active.company_id = ?
+           AND active.is_active_window = 1
+        WHERE f.cik = ?
+          AND active.form_type IN ('10-K', '10-Q')
+          AND (f.taxonomy, f.concept) IN ({key_clause})
+        ORDER BY active.form_type, fiscal_year, fiscal_period, f.end_date, f.accession_number
+        """,
+        [company_id, cik, *key_params],
+    )
+    grouped: dict[tuple[str, str], dict[str, set[str]]] = {}
+    for row in observed_rows:
+        form_type = _normal_report_form(row.get("form_type"))
+        if not form_type:
+            continue
+        period_label = _active_period_label(row)
+        if not period_label:
+            continue
+        key = (str(row.get("taxonomy") or ""), str(row.get("concept") or ""))
+        grouped.setdefault(key, {}).setdefault(form_type, set()).add(period_label)
+    return {
+        key: {
+            form_type: _format_period_coverage(
+                form_type=form_type,
+                observed_periods=periods,
+                active_periods=active_periods_by_form.get(form_type, set()),
+            )
+            for form_type, periods in by_form.items()
+            if periods
+        }
+        for key, by_form in grouped.items()
+    }
+
+
+def _active_periods_by_form(
+    connection: sqlite3.Connection,
+    company_id: int,
+) -> dict[str, set[str]]:
+    rows = _fetch_all(
+        connection,
+        """
+        SELECT form_type, fiscal_year, fiscal_period, filing_date AS end_date, accession_number
+        FROM filings
+        WHERE company_id = ?
+          AND is_active_window = 1
+          AND form_type IN ('10-K', '10-Q')
+        ORDER BY form_type, fiscal_year, fiscal_period, filing_date, accession_number
+        """,
+        [company_id],
+    )
+    grouped: dict[str, set[str]] = {}
+    for row in rows:
+        form_type = _normal_report_form(row.get("form_type"))
+        if not form_type:
+            continue
+        label = _active_period_label(row)
+        if label:
+            grouped.setdefault(form_type, set()).add(label)
+    return grouped
+
+
+def _normal_report_form(value: Any) -> str:
+    text = str(value or "").strip().upper()
+    if text in {"10-K", "10-K/A"}:
+        return "10-K"
+    if text in {"10-Q", "10-Q/A"}:
+        return "10-Q"
+    return ""
+
+
+def _active_period_label(row: dict[str, Any]) -> str:
+    fiscal_year = row.get("fiscal_year")
+    fiscal_period = str(row.get("fiscal_period") or "").strip().upper()
+    if fiscal_year is not None and fiscal_period:
+        return f"{fiscal_year} {fiscal_period}"
+    end_date = str(row.get("end_date") or "").strip()
+    if end_date:
+        return end_date
+    return str(row.get("accession_number") or "").strip()
+
+
+def _format_period_coverage(
+    *,
+    form_type: str,
+    observed_periods: set[str],
+    active_periods: set[str],
+) -> str:
+    ordered_periods = _ordered_period_labels(observed_periods)
+    period_text = _join_values(ordered_periods)
+    if active_periods and observed_periods == active_periods:
+        return f"active {form_type} periods: {_period_range_text(ordered_periods)}"
+    return period_text
+
+
+def _period_range_text(ordered_periods: Sequence[str]) -> str:
+    if not ordered_periods:
+        return ""
+    if len(ordered_periods) == 1:
+        return ordered_periods[0]
+    return f"{ordered_periods[0]} - {ordered_periods[-1]}"
+
+
+def _ordered_period_labels(values: set[str]) -> tuple[str, ...]:
+    return tuple(sorted(values, key=_period_label_sort_key))
+
+
+def _period_label_sort_key(value: str) -> tuple[int, int, str]:
+    parts = str(value or "").strip().upper().split()
+    fiscal_year = _as_int(parts[0]) if parts else None
+    fiscal_period = parts[1] if len(parts) > 1 else ""
+    return (
+        fiscal_year if fiscal_year is not None else -1,
+        _report_fiscal_period_order(fiscal_period),
+        str(value),
+    )
+
+
+def _report_fiscal_period_order(value: str | None) -> int:
+    normalized = str(value or "").strip().upper()
+    if normalized == "FY":
+        return 5
+    if normalized.startswith("Q") and normalized[1:].isdigit():
+        return int(normalized[1:])
+    return 0
 
 
 def _mapping_evidence(raw_value: Any) -> dict[str, Any]:
@@ -2644,6 +3528,8 @@ def format_lineage_report(run: ExperimentRun) -> str:
     lines.extend(_markdown_table(run.session_after_snapshot.get("mapping_profile_reuse") or []))
     lines.extend(["", "Raw Fact Mapping Coverage (Highlighted):"])
     lines.extend(_markdown_table(run.session_after_snapshot.get("raw_fact_mapping_coverage") or []))
+    lines.extend(["", "Metric-First Coverage Resolution:"])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("metric_coverage_resolution") or []))
     lines.extend(["", "Target XBRL Concept Coverage:"])
     lines.extend(_markdown_table(_target_coverage_report_rows(run.session_after_snapshot)))
     lines.extend(["", "LLM Formula Proposal Diagnostics Summary:"])
@@ -2946,52 +3832,1185 @@ def format_report(run: ExperimentRun, *, report_output: str = "file") -> str:
 
 
 def format_saved_report(run: ExperimentRun, *, full_report: bool = False) -> str:
-    """Render the saved experiment report, including the former terminal summary."""
+    """Render the saved Plan 2.5 target mapping report."""
     lines = [
-        "# Milestone 2.5 Live SEC Experiment Report",
-        "",
-        "## Compact Summary",
-        "",
-        "```text",
-        format_compact_report(run, full_report=full_report),
-        "```",
+        "# Plan 2.5 Target Mapping Report",
     ]
-    if full_report:
-        detailed_lines = format_report(run, report_output="saved compact + detailed report").splitlines()
-        if detailed_lines[:2] == ["# Milestone 2.5 Live SEC Experiment Report", ""]:
-            detailed_lines = detailed_lines[2:]
-        lines.extend([""])
-        lines.extend(detailed_lines)
-    lines.extend(["", "## Evidence Locations", ""])
-    lines.extend(_saved_report_evidence_locations(run))
-    if not full_report:
+
+    lines.extend(["", "## 0. Compact Summary", ""])
+    lines.extend(_markdown_table(_saved_compact_summary_rows(run, full_report=full_report)))
+
+    lines.extend(["", "## 0A. XBRL Concepts Provided By Period", ""])
+    lines.extend(["", "### # of concepts provided from XBRL - 10-K", ""])
+    lines.extend(_markdown_table(_xbrl_concepts_provided_10k_rows(run.session_after_snapshot)))
+    lines.extend(["", "### # of concepts provided from XBRL - 10-Q", ""])
+    lines.extend(_markdown_table(_xbrl_concepts_provided_10q_rows(run.session_after_snapshot)))
+
+    lines.extend(
+        [
+            "",
+            "Boundary: semantic candidates, formulas, and zero-target recommendations are review evidence only. They do not populate `financial_metrics` or feed indicators without approval.",
+        ]
+    )
+    if run.error:
+        lines.extend(["", "Execution Warning:", run.error])
+    if run.warnings:
+        lines.extend(["", "Source And Export Warnings:"])
+        lines.extend(f"- {warning}" for warning in run.warnings)
+
+    lines.extend(["", "## 1. Target Metrics Mapping Status", ""])
+    lines.extend(_markdown_table(_target_metric_status_rows(run.session_after_snapshot)))
+
+    lines.extend(["", "## 2. Semantic Candidates For Missing Targets", ""])
+    for form_type in FORMS:
+        lines.extend(["", f"### {form_type}", ""])
         lines.extend(
-            [
-                "",
-                "## Detailed Evidence",
-                "",
-                "Detailed lineage tables are omitted from the compact report. Use `--full-report` for the Markdown appendix, or inspect the SQLite database and CSV exports listed above.",
-            ]
+            _markdown_table(
+                _semantic_candidate_rows_for_missing_targets(
+                    run.session_after_snapshot,
+                    form_type=form_type,
+                )
+            )
         )
-        return "\n".join(lines)
-    lines.extend(["", "```text", format_lineage_report(run), "```"])
+
+    formula_annotations: dict[str, str] = {}
+
+    lines.extend(["", "## 3. Proposed Formulas For Formula Recommendations", ""])
+    for form_type in FORMS:
+        lines.extend(["", f"### {form_type}", ""])
+        formula_rows = _proposed_formula_rows_for_missing_targets(
+            run.session_after_snapshot,
+            form_type=form_type,
+            formula_annotations=formula_annotations,
+        )
+        lines.extend(
+            _markdown_table(formula_rows)
+        )
+        lines.extend(_formula_annotation_lines_for_rows(formula_rows, formula_annotations))
+
+    lines.extend(["", "## 4. Final Recommendations For Missing Targets", ""])
+    for form_type in FORMS:
+        lines.extend(["", f"### {form_type}", ""])
+        lines.extend(
+            _markdown_table(
+                _final_recommendation_rows_for_missing_targets(
+                    run.session_after_snapshot,
+                    form_type=form_type,
+                    formula_annotations=formula_annotations,
+                )
+            )
+        )
     return "\n".join(lines)
 
 
-def _saved_report_evidence_locations(run: ExperimentRun) -> list[str]:
+def _saved_compact_summary_rows(run: ExperimentRun, *, full_report: bool) -> list[dict[str, Any]]:
+    snapshot = run.session_after_snapshot
+    company = snapshot.get("company") or run.setup_snapshot.get("company") or {}
+    target_status_rows = _target_metric_status_rows(snapshot)
+    semantic_rows_by_form = {
+        form_type: _semantic_candidate_rows_for_missing_targets(snapshot, form_type=form_type)
+        for form_type in FORMS
+    }
+    formula_rows_by_form = {
+        form_type: _proposed_formula_rows_for_missing_targets(snapshot, form_type=form_type)
+        for form_type in FORMS
+    }
+    formula_summary = _summary_rows_by_item(snapshot.get("formula_proposal_summary") or [])
+    final_summary = _summary_rows_by_item(snapshot.get("final_recommendation_summary") or [])
+    diagnostics = snapshot.get("formula_proposal_diagnostics") or []
+    final_diagnostics = snapshot.get("final_recommendation_diagnostics") or []
+    formula_panel = formula_summary.get("formula proposal model panel", {})
+    final_model = final_summary.get("final recommendation model", {})
+    report_output = "saved Plan 2.5 target mapping report"
+    if full_report:
+        report_output = "saved Plan 2.5 target mapping report; --full-report kept for CLI compatibility"
+    new_filings = _new_filing_summary(run.session_decision.new_filings)
     return [
-        f"- SQLite database: `{run.paths.database}`",
-        f"- CSV exports: `{run.paths.exports_dir}`",
-        f"- Filing downloads: `{run.paths.filings_dir}`",
-        f"- Report file: `{run.paths.report}`",
+        {"Item": "Ticker", "Value": run.ticker},
+        {"Item": "CIK", "Value": company.get("cik") or "not available"},
+        {"Item": "Run timestamp", "Value": run.run_timestamp},
+        {"Item": "Report output", "Value": report_output},
+        {"Item": "Setup ingestion duration seconds", "Value": _format_duration_seconds(run.setup_duration_seconds)},
+        {
+            "Item": "Unchanged-company reuse duration seconds",
+            "Value": _format_duration_seconds(run.unchanged_company_reuse_duration_seconds),
+        },
+        {"Item": "Company in system", "Value": _yes_no(run.session_decision.company_exists)},
+        {
+            "Item": "Update check needed this session",
+            "Value": _yes_no(_update_check_needed(run.session_decision)) if run.session_decision.company_exists else "not applicable",
+        },
+        {"Item": "SEC update check performed", "Value": _yes_no(run.session_decision.sec_checked)},
+        {"Item": "SEC result", "Value": _status_summary(run.session_decision)},
+        {"Item": "New filings ingested this session", "Value": new_filings},
+        {"Item": "Target metrics checked", "Value": len(target_status_rows)},
+        {"Item": "Mapped target metrics", "Value": _count_rows_with_report_value(target_status_rows, "Mapping status", "mapped")},
+        {"Item": "Missing target metrics", "Value": _count_rows_with_report_value(target_status_rows, "Mapping status", "missing")},
+        {"Item": "10-K semantic candidate rows listed", "Value": len(semantic_rows_by_form["10-K"])},
+        {"Item": "10-Q semantic candidate rows listed", "Value": len(semantic_rows_by_form["10-Q"])},
+        {"Item": "10-K proposed formula rows listed", "Value": len(formula_rows_by_form["10-K"])},
+        {"Item": "10-Q proposed formula rows listed", "Value": len(formula_rows_by_form["10-Q"])},
+        {
+            "Item": "Formula diagnostics run",
+            "Value": _yes_no(str(formula_panel.get("value") or "") == "run"),
+        },
+        {"Item": "Formula proposal contexts", "Value": len({row.get("context_id") for row in diagnostics if row.get("context_id")})},
+        {
+            "Item": "Formula proposals returned",
+            "Value": sum(row.get("provider_status") == PROVIDER_STATUS_PROPOSED for row in diagnostics),
+        },
+        {
+            "Item": "Zero-target evidence rows",
+            "Value": sum(row.get("provider_status") == PROVIDER_STATUS_TARGET_ZERO for row in diagnostics),
+        },
+        {
+            "Item": "Final recommendation model",
+            "Value": final_model.get("notes") or final_model.get("value") or "not_run",
+        },
+        {"Item": "Final recommendation contexts", "Value": len(final_diagnostics)},
+        {
+            "Item": "Final recommendations selected",
+            "Value": sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_SELECTED for row in final_diagnostics),
+        },
+        {"Item": "Recovered rows inserted into `financial_metrics`", "Value": 0},
+        {"Item": "Used by indicators", "Value": "No"},
     ]
+
+
+def _target_metric_status_rows(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    metric_type_by_metric = _metric_type_by_metric(snapshot)
+    rows: list[dict[str, Any]] = []
+    for row in snapshot.get("metric_coverage_resolution") or []:
+        metric = str(row.get("internal_metric_name") or "")
+        statement = str(row.get("statement_type") or "")
+        mapping_status = _target_metric_mapping_status(row)
+        rows.append(
+            {
+                "Metric type": metric_type_by_metric.get((metric, statement), "unknown"),
+                "Metric": metric,
+                "Statement": statement,
+                "Mapping status": mapping_status,
+                "Mapped target concepts": _strip_concept_prefixes(row.get("mapped_target_concepts") or "none"),
+                "Coverage detail": _report_coverage_status(row.get("coverage_status")),
+                "Approved alternates": _strip_concept_prefixes(row.get("approved_alternate_concepts") or "none"),
+                "Target XBRL concepts checked": _strip_concept_prefixes(row.get("target_xbrl_concepts") or "none"),
+            }
+        )
+    return sorted(
+        rows,
+        key=lambda item: (
+            str(item.get("Metric type") or ""),
+            str(item.get("Metric") or ""),
+            str(item.get("Statement") or ""),
+        ),
+    )
+
+
+def _semantic_candidate_rows_for_missing_targets(
+    snapshot: dict[str, Any],
+    *,
+    form_type: str,
+) -> list[dict[str, Any]]:
+    missing_metrics = _missing_metric_names(snapshot)
+    rows: list[dict[str, Any]] = []
+    coverage_key = _period_coverage_key(form_type)
+    for row in snapshot.get("semantic_mapping_candidates") or []:
+        metric = str(row.get("metric_name") or "")
+        if metric not in missing_metrics:
+            continue
+        period_coverage = str(row.get(coverage_key) or "")
+        if not period_coverage:
+            continue
+        rows.append(
+            {
+                "Metric": metric,
+                "Statement": row.get("statement_type") or "",
+                "Recommended concepts by semantic similarity": _strip_concept_prefixes(row.get("observed_xbrl_concept") or ""),
+                "Semantic similarity": row.get("semantic_similarity") or "",
+                "Period coverage": period_coverage,
+                "Observed label": row.get("observed_label") or "",
+                "Observed period types": row.get("observed_period_types") or "",
+            }
+        )
+    return _collapse_report_rows(
+        sorted(rows, key=_semantic_candidate_sort_key),
+        merge_columns=("Period coverage",),
+    )
+
+
+def _proposed_formula_rows_for_missing_targets(
+    snapshot: dict[str, Any],
+    *,
+    form_type: str,
+    formula_annotations: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    missing_metrics = _missing_metric_names(snapshot)
+    recommendations_by_period: dict[tuple[str, str, str], list[dict[str, str]]] = {}
+    for row in snapshot.get("formula_proposal_diagnostics") or []:
+        metric = str(row.get("target_metric_name") or "")
+        if metric not in missing_metrics:
+            continue
+        if not _diagnostic_row_matches_form(row, form_type):
+            continue
+        formula = str(row.get("formula_expression") or "").strip()
+        if not formula:
+            continue
+        if row.get("provider_status") not in {PROVIDER_STATUS_PROPOSED, PROVIDER_STATUS_TARGET_ZERO}:
+            continue
+        components = _strip_concept_prefixes(row.get("components") or "")
+        period_labels = _formula_period_labels_for_report(
+            row.get("period_context"),
+            form_type=form_type,
+        )
+        if not period_labels:
+            period_labels = (_formula_period_context_for_report(row.get("period_context"), form_type=form_type),)
+        recommendation = {
+            "provider": _provider_label(row),
+            "formula": _formula_expression_for_report(metric=metric, row=row, components=components),
+            "components": components,
+            "validation_status": str(row.get("validation_status") or ""),
+            "confidence": str(row.get("confidence") or ""),
+            "reason": str(row.get("reason") or ""),
+        }
+        statement = str(row.get("target_primary_statement") or "")
+        for period_label in period_labels:
+            recommendations_by_period.setdefault((metric, statement, period_label), []).append(recommendation)
+
+    rows: list[dict[str, Any]] = []
+    disagreement_grouped: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
+    grouped: dict[tuple[str, str, tuple[tuple[str, str, str], ...]], dict[str, Any]] = {}
+    for (metric, statement, period_label), recommendations in recommendations_by_period.items():
+        sorted_recommendations = _sorted_formula_recommendations(recommendations)
+        recommendation_formulas = {
+            (
+                recommendation["formula"],
+                recommendation["components"],
+            )
+            for recommendation in sorted_recommendations
+        }
+        if len(recommendation_formulas) > 1:
+            for recommendation in sorted_recommendations:
+                key = (
+                    metric,
+                    statement,
+                    recommendation["provider"],
+                    recommendation["formula"],
+                    recommendation["components"],
+                )
+                if key not in disagreement_grouped:
+                    disagreement_grouped[key] = {
+                        "metric": metric,
+                        "statement": statement,
+                        "period_labels": [],
+                        "recommendations": [],
+                    }
+                disagreement_grouped[key]["period_labels"].append(period_label)
+                disagreement_grouped[key]["recommendations"].append(recommendation)
+            continue
+        recommendation_signature = tuple(
+            (
+                recommendation["provider"],
+                recommendation["formula"],
+                recommendation["components"],
+            )
+            for recommendation in sorted_recommendations
+        )
+        key = (metric, statement, recommendation_signature)
+        if key not in grouped:
+            grouped[key] = {
+                "metric": metric,
+                "statement": statement,
+                "period_labels": [],
+                "recommendations": sorted_recommendations,
+            }
+        grouped[key]["period_labels"].append(period_label)
+
+    rows.extend(
+        _formula_report_row_from_period_group(
+            group,
+            form_type=form_type,
+            formula_annotations=formula_annotations,
+        )
+        for group in disagreement_grouped.values()
+    )
+    rows.extend(
+        _formula_report_row_from_period_group(
+            group,
+            form_type=form_type,
+            formula_annotations=formula_annotations,
+        )
+        for group in grouped.values()
+    )
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row.get("Metric") or ""),
+            str(row.get("Statement") or ""),
+            -_first_formula_period_sort_value(str(row.get("Period context") or ""), form_type=form_type),
+            str(row.get("Providers") or ""),
+            str(row.get("Formula") or ""),
+        ),
+    )
+
+
+def _xbrl_concepts_provided_10k_rows(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    concepts_by_period = _xbrl_concepts_provided_by_period(snapshot)
+    annual = concepts_by_period.get("10-K", {})
+    rows: list[dict[str, Any]] = []
+    for year in sorted(_year_labels_from_concept_periods(annual)):
+        concepts = annual.get(str(year), set())
+        rows.append(
+            {
+                "Year": str(year),
+                "# of concepts provided": len(concepts),
+            }
+        )
+    return rows
+
+
+def _xbrl_concepts_provided_10q_rows(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    concepts_by_period = _xbrl_concepts_provided_by_period(snapshot)
+    quarterly = concepts_by_period.get("10-Q", {})
+    years = sorted(
+        {
+            year
+            for period_label in quarterly
+            for year, _quarter in _quarter_labels_from_context(period_label)
+        }
+    )
+    quarter_columns = _quarter_columns_for_concept_counts(quarterly)
+    rows: list[dict[str, Any]] = []
+    for year in years:
+        row: dict[str, Any] = {"Year": str(year)}
+        for quarter in quarter_columns:
+            concepts = quarterly.get(_format_quarter_label((year, quarter)), set())
+            row[f"Q{quarter}"] = len(concepts) if concepts else ""
+        rows.append(row)
+    return rows
+
+
+def _xbrl_concepts_provided_by_period(snapshot: dict[str, Any]) -> dict[str, dict[str, set[str]]]:
+    missing_metrics = _missing_metric_names(snapshot)
+    concepts_by_period: dict[str, dict[str, set[str]]] = {
+        form_type: {}
+        for form_type in FORMS
+    }
+    seen_contexts: set[tuple[str, str, str, str, str]] = set()
+    for row in snapshot.get("formula_proposal_diagnostics") or []:
+        metric = str(row.get("target_metric_name") or "")
+        if metric not in missing_metrics:
+            continue
+        concepts = _concepts_provided_for_report(row.get("concepts_provided"))
+        if not concepts:
+            continue
+        statement = str(row.get("target_primary_statement") or "")
+        context_id = str(row.get("context_id") or row.get("period_context") or "")
+        concepts_key = ", ".join(concepts)
+        for form_type in FORMS:
+            if not _diagnostic_row_matches_form(row, form_type):
+                continue
+            period_labels = _formula_period_labels_for_report(
+                row.get("period_context"),
+                form_type=form_type,
+            )
+            if not period_labels:
+                period_labels = (_formula_period_context_for_report(row.get("period_context"), form_type=form_type),)
+            context_key = (form_type, metric, statement, context_id, concepts_key)
+            if context_key in seen_contexts:
+                continue
+            seen_contexts.add(context_key)
+            for period_label in period_labels:
+                if not period_label:
+                    continue
+                concepts_by_period[form_type].setdefault(period_label, set()).update(concepts)
+    return concepts_by_period
+
+
+def _concepts_provided_for_report(value: Any) -> tuple[str, ...]:
+    concepts = _split_joined_values(_strip_concept_prefixes(value or ""))
+    return tuple(dict.fromkeys(concepts))
+
+
+def _year_labels_from_concept_periods(periods: dict[str, set[str]]) -> list[int]:
+    return [
+        int(match.group(1))
+        for period_label in periods
+        for match in re.finditer(r"\b((?:19|20)\d{2})\b", period_label)
+    ]
+
+
+def _quarter_columns_for_concept_counts(periods: dict[str, set[str]]) -> list[int]:
+    observed = sorted(
+        {
+            quarter
+            for period_label in periods
+            for _year, quarter in _quarter_labels_from_context(period_label)
+        }
+    )
+    if not observed:
+        return [1, 2, 3]
+    return [quarter for quarter in (1, 2, 3, 4) if quarter in set(observed) or quarter <= 3]
+
+
+def _final_recommendation_rows_for_missing_targets(
+    snapshot: dict[str, Any],
+    *,
+    form_type: str,
+    formula_annotations: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    missing_metrics = _missing_metric_names(snapshot)
+    statement_by_metric = {
+        str(row.get("internal_metric_name") or ""): str(row.get("statement_type") or "")
+        for row in snapshot.get("metric_coverage_resolution") or []
+        if str(row.get("internal_metric_name") or "") in missing_metrics
+    }
+    semantic_by_period = _semantic_options_by_metric_period(snapshot, form_type=form_type)
+    formula_by_period = _formula_recommendations_by_metric_period(
+        snapshot,
+        form_type=form_type,
+        provider_statuses={PROVIDER_STATUS_PROPOSED},
+    )
+    zero_by_period = _formula_recommendations_by_metric_period(
+        snapshot,
+        form_type=form_type,
+        provider_statuses={PROVIDER_STATUS_TARGET_ZERO},
+    )
+    final_by_period = _final_recommendations_by_metric_period(snapshot, form_type=form_type)
+
+    rows: list[dict[str, Any]] = []
+    keys = set(semantic_by_period) | set(formula_by_period) | set(zero_by_period)
+    for metric, statement, period_label in sorted(
+        keys,
+        key=lambda key: (
+            key[0],
+            key[1],
+            -_first_formula_period_sort_value(key[2], form_type=form_type),
+        ),
+    ):
+        semantic_candidate = semantic_by_period.get((metric, statement, period_label), "")
+        formula_recommendations = formula_by_period.get((metric, statement, period_label), [])
+        zero_recommendations = zero_by_period.get((metric, statement, period_label), [])
+        final_result = final_by_period.get((metric, statement, period_label))
+        rows.append(
+            {
+                "Metric": metric,
+                "Statement": statement or statement_by_metric.get(metric, ""),
+                "Period context": period_label,
+                "Semantic candidate": semantic_candidate,
+                "Formula evidence": _recommendation_formula_summary(
+                    formula_recommendations,
+                    formula_annotations=formula_annotations,
+                ),
+                "Zero evidence": _recommendation_formula_summary(
+                    zero_recommendations,
+                    formula_annotations=formula_annotations,
+                ),
+                "Final recommendation": _final_recommendation_display(
+                    final_result,
+                    has_options=bool(semantic_candidate or formula_recommendations or zero_recommendations),
+                    formula_annotations=formula_annotations,
+                ),
+            }
+        )
+    return _collapse_final_recommendation_rows(rows, form_type=form_type)
+
+
+def _semantic_options_by_metric_period(
+    snapshot: dict[str, Any],
+    *,
+    form_type: str,
+) -> dict[tuple[str, str, str], str]:
+    missing_metrics = _missing_metric_names(snapshot)
+    best_by_period: dict[tuple[str, str, str], tuple[float, str]] = {}
+    coverage_key = _period_coverage_key(form_type)
+    for row in snapshot.get("semantic_mapping_candidates") or []:
+        metric = str(row.get("metric_name") or "")
+        if metric not in missing_metrics:
+            continue
+        period_coverage = str(row.get(coverage_key) or "")
+        if not period_coverage:
+            continue
+        similarity = _as_float(row.get("semantic_similarity"))
+        candidate = _strip_concept_prefixes(row.get("observed_xbrl_concept") or "")
+        if not candidate:
+            continue
+        option = f"{candidate} ({similarity:.2f})"
+        statement = str(row.get("statement_type") or "")
+        for period_label in _period_labels_for_report_value(period_coverage, form_type=form_type):
+            key = (metric, statement, period_label)
+            current = best_by_period.get(key)
+            if current is None or similarity > current[0]:
+                best_by_period[key] = (similarity, option)
+    return {key: option for key, (_, option) in best_by_period.items()}
+
+
+def _formula_recommendations_by_metric_period(
+    snapshot: dict[str, Any],
+    *,
+    form_type: str,
+    provider_statuses: set[str],
+) -> dict[tuple[str, str, str], list[dict[str, str]]]:
+    missing_metrics = _missing_metric_names(snapshot)
+    recommendations_by_period: dict[tuple[str, str, str], list[dict[str, str]]] = {}
+    for row in snapshot.get("formula_proposal_diagnostics") or []:
+        metric = str(row.get("target_metric_name") or "")
+        if metric not in missing_metrics:
+            continue
+        if row.get("provider_status") not in provider_statuses:
+            continue
+        if not _diagnostic_row_matches_form(row, form_type):
+            continue
+        components = _strip_concept_prefixes(row.get("components") or "")
+        recommendation = {
+            "provider": _provider_label(row),
+            "formula": _formula_expression_for_report(metric=metric, row=row, components=components),
+            "validation_status": str(row.get("validation_status") or ""),
+            "confidence": str(row.get("confidence") or ""),
+            "reason": str(row.get("reason") or ""),
+        }
+        statement = str(row.get("target_primary_statement") or "")
+        period_labels = _period_labels_for_report_value(row.get("period_context"), form_type=form_type)
+        for period_label in period_labels:
+            recommendations_by_period.setdefault((metric, statement, period_label), []).append(recommendation)
+    return {
+        key: _sorted_formula_recommendations(recommendations)
+        for key, recommendations in recommendations_by_period.items()
+    }
+
+
+def _period_labels_for_report_value(value: Any, *, form_type: str) -> tuple[str, ...]:
+    labels = _formula_period_labels_for_report(value, form_type=form_type)
+    if labels:
+        return labels
+    context = _formula_period_context_for_report(value, form_type=form_type)
+    return (context,) if context else ()
+
+
+def _recommendation_formula_summary(
+    recommendations: list[dict[str, str]],
+    *,
+    formula_annotations: dict[str, str] | None = None,
+) -> str:
+    if not recommendations:
+        return ""
+    return _join_unique_texts(
+        _formula_text_for_table(recommendation["formula"], formula_annotations=formula_annotations)
+        for recommendation in recommendations
+        if recommendation.get("formula")
+    )
+
+
+def _final_recommendations_by_metric_period(
+    snapshot: dict[str, Any],
+    *,
+    form_type: str,
+) -> dict[tuple[str, str, str], dict[str, Any]]:
+    recommendations: dict[tuple[str, str, str], dict[str, Any]] = {}
+    normalized_form = _normal_report_form(form_type)
+    for row in snapshot.get("final_recommendation_diagnostics") or []:
+        if not _final_recommendation_row_matches_form(row, form_type=form_type):
+            continue
+        period_label = _formula_period_context_for_report(row.get("period_context"), form_type=form_type)
+        if not period_label:
+            continue
+        if normalized_form == "10-Q" and "q4" in period_label.lower():
+            continue
+        metric = str(row.get("target_metric_name") or "")
+        statement = str(row.get("statement_type") or "")
+        if metric:
+            recommendations[(metric, statement, period_label)] = row
+    return recommendations
+
+
+def _final_recommendation_row_matches_form(row: dict[str, Any], *, form_type: str) -> bool:
+    normalized_form = _normal_report_form(form_type)
+    row_form = _normal_report_form(row.get("form_type"))
+    if row_form:
+        return row_form == normalized_form
+
+    forms = {_normal_report_form(value) for value in _split_joined_values(row.get("forms"))}
+    forms.discard("")
+    if forms:
+        return normalized_form in forms
+
+    period_context = str(row.get("period_context") or "")
+    has_quarter_context = bool(_quarter_labels_from_context(period_context) or _quarter_ranges_from_context(period_context))
+    if normalized_form == "10-Q":
+        return has_quarter_context
+    if normalized_form == "10-K":
+        return not has_quarter_context
+    return False
+
+
+def _final_recommendation_display(
+    result: dict[str, Any] | None,
+    *,
+    has_options: bool,
+    formula_annotations: dict[str, str] | None = None,
+) -> str:
+    if result is None:
+        return "needs_review" if has_options else ""
+    status = str(result.get("provider_status") or "")
+    selected_type = str(result.get("selected_option_type") or "")
+    value = str(result.get("final_recommendation") or "")
+    if status != FINAL_RECOMMENDATION_STATUS_SELECTED:
+        return "needs_review" if has_options else ""
+    if selected_type == FINAL_OPTION_ZERO:
+        return "0"
+    if selected_type == FINAL_OPTION_FORMULA:
+        return _formula_text_for_table(value, formula_annotations=formula_annotations)
+    if selected_type == FINAL_OPTION_SEMANTIC_CANDIDATE:
+        return _strip_concept_prefixes(value)
+    if selected_type == FINAL_OPTION_NO_RECOMMENDATION:
+        return "needs_review" if has_options else ""
+    return "needs_review" if has_options else ""
+
+
+def _collapse_final_recommendation_rows(
+    rows: list[dict[str, Any]],
+    *,
+    form_type: str,
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[tuple[str, Any], ...], dict[str, Any]] = {}
+    periods_by_key: dict[tuple[tuple[str, Any], ...], list[str]] = {}
+    for row in rows:
+        key = tuple(
+            (column, value)
+            for column, value in row.items()
+            if column != "Period context"
+        )
+        if key not in grouped:
+            grouped[key] = dict(row)
+            periods_by_key[key] = []
+        period_context = str(row.get("Period context") or "")
+        if period_context:
+            periods_by_key[key].append(period_context)
+
+    collapsed: list[dict[str, Any]] = []
+    for key, row in grouped.items():
+        row["Period context"] = _format_formula_period_labels_for_report(
+            periods_by_key.get(key, ()),
+            form_type=form_type,
+        )
+        collapsed.append(row)
+    return sorted(
+        collapsed,
+        key=lambda row: (
+            str(row.get("Metric") or ""),
+            str(row.get("Statement") or ""),
+            -_first_formula_period_sort_value(str(row.get("Period context") or ""), form_type=form_type),
+            str(row.get("Semantic candidate") or ""),
+            str(row.get("Formula evidence") or ""),
+            str(row.get("Zero evidence") or ""),
+        ),
+    )
+
+
+def _report_coverage_status(value: Any) -> str:
+    status = str(value or "unknown")
+    if status == "needs_llm_resolution":
+        return "needs_review"
+    return status
+
+
+def _target_metric_mapping_status(row: dict[str, Any]) -> str:
+    status = _report_coverage_status(row.get("coverage_status"))
+    if status in {"mapped", "covered_by_approved_alternate"}:
+        return "mapped"
+    return "missing"
+
+
+def _summary_rows_by_item(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {str(row.get("evidence_item") or ""): row for row in rows}
+
+
+def _new_filing_summary(filings: Sequence[Any]) -> str:
+    if not filings:
+        return "none"
+    return "; ".join(
+        f"{getattr(filing, 'form_type', getattr(filing, 'form', 'unknown form'))} "
+        f"accession {filing.accession_number}"
+        for filing in filings
+    )
+
+
+def _count_rows_with_report_value(rows: list[dict[str, Any]], key: str, value: str) -> int:
+    return sum(row.get(key) == value for row in rows)
+
+
+def _format_duration_seconds(value: float | None) -> str:
+    if value is None:
+        return "not applicable"
+    return f"{value:.3f}"
+
+
+def _missing_metric_names(snapshot: dict[str, Any]) -> set[str]:
+    return {
+        str(row.get("internal_metric_name") or "")
+        for row in snapshot.get("metric_coverage_resolution") or []
+        if _target_metric_mapping_status(row) == "missing"
+    }
+
+
+def _metric_type_by_metric(snapshot: dict[str, Any]) -> dict[tuple[str, str], str]:
+    grouped: dict[tuple[str, str], set[str]] = {}
+    for row in snapshot.get("target_raw_fact_coverage") or []:
+        metric = str(row.get("internal_metric_name") or "")
+        statement = str(row.get("statement_type") or "")
+        industry_label = str(row.get("industry_label") or "")
+        if not metric or not statement:
+            continue
+        grouped.setdefault((metric, statement), set()).add(industry_label)
+    return {
+        key: _metric_type_label(labels)
+        for key, labels in grouped.items()
+    }
+
+
+def _metric_type_label(labels: set[str]) -> str:
+    industry_labels = sorted(label for label in labels if label and label != COMMON_BASE_LABEL)
+    has_common = COMMON_BASE_LABEL in labels
+    if has_common and industry_labels:
+        return f"common base + {_join_values(industry_labels)}"
+    if has_common:
+        return "common base"
+    if industry_labels:
+        return _join_values(industry_labels)
+    return "unknown"
+
+
+def _period_coverage_key(form_type: str) -> str:
+    normalized = _normal_report_form(form_type)
+    if normalized == "10-K":
+        return "period_coverage_10k"
+    if normalized == "10-Q":
+        return "period_coverage_10q"
+    return ""
+
+
+def _semantic_candidate_sort_key(row: dict[str, Any]) -> tuple[str, float, str]:
+    return (
+        str(row.get("Metric") or ""),
+        -_as_float(row.get("Semantic similarity")),
+        str(row.get("Recommended concepts by semantic similarity") or ""),
+    )
+
+
+def _diagnostic_row_matches_form(row: dict[str, Any], form_type: str) -> bool:
+    normalized = _normal_report_form(form_type)
+    if not normalized:
+        return False
+    forms = {_normal_report_form(value) for value in _split_joined_values(row.get("forms"))}
+    forms.discard("")
+    if forms:
+        return normalized in forms
+    return normalized in str(row.get("period_context") or "").upper()
+
+
+def _provider_label(row: dict[str, Any]) -> str:
+    provider = str(row.get("provider_name") or "").strip()
+    model = str(row.get("model_name") or "").strip()
+    if provider and model:
+        return f"{provider} ({model})"
+    return provider or model
+
+
+def _formula_expression_for_report(
+    *,
+    metric: str,
+    row: dict[str, Any],
+    components: str,
+) -> str:
+    if row.get("provider_status") == PROVIDER_STATUS_TARGET_ZERO:
+        return f"{metric} = 0"
+    if components:
+        return f"{metric} = {_component_formula_rhs(components)}"
+    return _strip_concept_prefixes(row.get("formula_expression") or "")
+
+
+def _component_formula_rhs(components: str) -> str:
+    parts = [part.strip() for part in components.split(",") if part.strip()]
+    if parts and parts[0].startswith("+ "):
+        parts[0] = parts[0][2:]
+    return " ".join(parts)
+
+
+def _sorted_formula_recommendations(recommendations: Sequence[dict[str, str]]) -> list[dict[str, str]]:
+    unique: dict[tuple[str, str, str, str, str, str], dict[str, str]] = {}
+    for recommendation in recommendations:
+        key = (
+            recommendation.get("provider", ""),
+            recommendation.get("formula", ""),
+            recommendation.get("components", ""),
+            recommendation.get("validation_status", ""),
+            recommendation.get("confidence", ""),
+            recommendation.get("reason", ""),
+        )
+        unique.setdefault(key, dict(recommendation))
+    return sorted(
+        unique.values(),
+        key=lambda recommendation: (
+            recommendation.get("provider", ""),
+            recommendation.get("formula", ""),
+            recommendation.get("components", ""),
+        ),
+    )
+
+
+def _formula_report_row_from_period_group(
+    group: dict[str, Any],
+    *,
+    form_type: str,
+    formula_annotations: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    recommendations = group["recommendations"]
+    return {
+        "Metric": group["metric"],
+        "Statement": group["statement"],
+        "Period context": _format_formula_period_labels_for_report(
+            group["period_labels"],
+            form_type=form_type,
+        ),
+        "Providers": _join_unique_texts(recommendation["provider"] for recommendation in recommendations),
+        "Formula": _format_formula_recommendation_field(
+            recommendations,
+            "formula",
+            formula_annotations=formula_annotations,
+        ),
+        "Validation status": _join_unique_texts(
+            recommendation["validation_status"] for recommendation in recommendations
+        ),
+        "Confidence": _join_unique_texts(recommendation["confidence"] for recommendation in recommendations),
+        "Reason": _join_unique_texts(recommendation["reason"] for recommendation in recommendations),
+    }
+
+
+def _format_formula_recommendation_field(
+    recommendations: Sequence[dict[str, str]],
+    field: str,
+    *,
+    formula_annotations: dict[str, str] | None = None,
+) -> str:
+    values = tuple(dict.fromkeys(recommendation.get(field, "") for recommendation in recommendations if recommendation.get(field)))
+    if len(values) <= 1:
+        if not values:
+            return ""
+        if field == "formula":
+            return _formula_text_for_table(values[0], formula_annotations=formula_annotations)
+        return values[0]
+    return _join_unique_texts(
+        f"{recommendation['provider']}: "
+        f"{_formula_text_for_table(recommendation[field], formula_annotations=formula_annotations)}"
+        for recommendation in recommendations
+        if recommendation.get(field)
+    )
+
+
+def _formula_text_for_table(
+    formula: str,
+    *,
+    formula_annotations: dict[str, str] | None,
+) -> str:
+    if formula_annotations is None or not _should_annotate_formula(formula):
+        return formula
+    return _formula_annotation_for_text(formula, formula_annotations)
+
+
+def _should_annotate_formula(formula: str) -> bool:
+    sanitized = _sanitize_markdown_cell_text(formula)
+    return len(sanitized) > MARKDOWN_CELL_MAX_CHARS
+
+
+def _formula_annotation_for_text(formula: str, formula_annotations: dict[str, str]) -> str:
+    if formula not in formula_annotations:
+        formula_annotations[formula] = f"[F{len(formula_annotations) + 1}]"
+    return formula_annotations[formula]
+
+
+def _formula_annotation_lines_for_rows(
+    rows: list[dict[str, Any]],
+    formula_annotations: dict[str, str],
+) -> list[str]:
+    if not rows or not formula_annotations:
+        return []
+    referenced_labels = {
+        label
+        for row in rows
+        for label in formula_annotations.values()
+        if label in str(row.get("Formula") or "")
+    }
+    if not referenced_labels:
+        return []
+    formulas_by_label = {label: formula for formula, label in formula_annotations.items()}
+    lines = ["", "Formula annotations:"]
+    for label in sorted(referenced_labels, key=_formula_annotation_sort_key):
+        lines.append(f"- {label} {formulas_by_label[label]}")
+    return lines
+
+
+def _formula_annotation_sort_key(label: str) -> int:
+    match = re.fullmatch(r"\[F(\d+)\]", label)
+    if not match:
+        return 0
+    return int(match.group(1))
+
+
+def _formula_period_labels_for_report(value: Any, *, form_type: str) -> tuple[str, ...]:
+    text = str(value or "").strip()
+    if not text:
+        return ()
+    normalized_form = _normal_report_form(form_type)
+    if normalized_form == "10-Q":
+        return tuple(
+            _format_quarter_label(quarter)
+            for quarter in _report_quarter_labels_from_context(text, form_type=form_type)
+        )
+    if normalized_form == "10-K":
+        return tuple(str(year) for year in sorted(set(_year_labels_from_context(text))))
+    fallback = _context_label_text(text)
+    return (fallback,) if fallback else ()
+
+
+def _formula_period_context_for_report(value: Any, *, form_type: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    normalized_form = _normal_report_form(form_type)
+    if normalized_form == "10-Q":
+        quarter_labels = _report_quarter_labels_from_context(text, form_type=form_type)
+        if quarter_labels:
+            return _compact_quarter_labels(quarter_labels)
+    if normalized_form == "10-K":
+        year_labels = _year_labels_from_context(text)
+        if year_labels:
+            return _compact_year_labels(year_labels)
+    return _context_label_text(text)
+
+
+def _context_before_detail_separator(value: str) -> str:
+    return re.split(r"\s+[/|]\s+", value, maxsplit=1)[0].strip()
+
+
+def _context_label_text(value: str) -> str:
+    return "; ".join(
+        _context_before_detail_separator(part.strip())
+        for part in str(value or "").split(";")
+        if part.strip()
+    )
+
+
+def _year_labels_from_context(value: str) -> list[int]:
+    base = _context_label_text(value)
+    return [
+        int(match.group(1))
+        for match in re.finditer(r"\b((?:19|20)\d{2})(?:\s*FY)?\b", base, flags=re.IGNORECASE)
+    ]
+
+
+def _quarter_labels_from_context(value: str) -> list[tuple[int, int]]:
+    base = _context_label_text(value)
+    return [
+        (int(match.group(1)), int(match.group(2)))
+        for match in re.finditer(r"\b((?:19|20)\d{2})\s+Q([1-4])\b", base, flags=re.IGNORECASE)
+    ]
+
+
+def _report_quarter_labels_from_context(value: str, *, form_type: str) -> list[tuple[int, int]]:
+    quarters: set[tuple[int, int]] = set(_quarter_labels_from_context(value))
+    for start, end in _quarter_ranges_from_context(value):
+        quarters.update(_expand_quarter_range(start, end))
+    if _normal_report_form(form_type) == "10-Q":
+        quarters = {quarter for quarter in quarters if quarter[1] != 4}
+    return sorted(quarters)
+
+
+def _quarter_ranges_from_context(value: str) -> list[tuple[tuple[int, int], tuple[int, int]]]:
+    base = _context_label_text(value)
+    return [
+        (
+            (int(match.group(1)), int(match.group(2))),
+            (int(match.group(3)), int(match.group(4))),
+        )
+        for match in re.finditer(
+            r"\b((?:19|20)\d{2})\s+Q([1-4])\s*-\s*((?:19|20)\d{2})\s+Q([1-4])\b",
+            base,
+            flags=re.IGNORECASE,
+        )
+    ]
+
+
+def _expand_quarter_range(start: tuple[int, int], end: tuple[int, int]) -> list[tuple[int, int]]:
+    start_index = _quarter_index(start)
+    end_index = _quarter_index(end)
+    if end_index < start_index:
+        start_index, end_index = end_index, start_index
+    return [_quarter_from_index(index) for index in range(start_index, end_index + 1)]
+
+
+def _quarter_from_index(index: int) -> tuple[int, int]:
+    year = (index - 1) // 4
+    quarter = index - year * 4
+    return year, quarter
+
+
+def _format_formula_period_labels_for_report(labels: Sequence[str], *, form_type: str) -> str:
+    normalized_form = _normal_report_form(form_type)
+    unique_labels = tuple(dict.fromkeys(label for label in labels if label))
+    if normalized_form == "10-K":
+        years = [
+            int(match.group(1))
+            for label in unique_labels
+            for match in re.finditer(r"\b((?:19|20)\d{2})\b", label)
+        ]
+        if years:
+            return _compact_year_labels(years)
+    if normalized_form == "10-Q":
+        quarters = [
+            quarter
+            for label in unique_labels
+            for quarter in _report_quarter_labels_from_context(label, form_type=form_type)
+        ]
+        if quarters:
+            return _compact_quarter_labels(quarters)
+    return _join_unique_texts(unique_labels)
+
+
+def _first_formula_period_sort_value(value: str, *, form_type: str) -> int:
+    normalized_form = _normal_report_form(form_type)
+    if normalized_form == "10-Q":
+        quarters = set(_report_quarter_labels_from_context(value, form_type=form_type))
+        if quarters:
+            return max(_quarter_index(quarter) for quarter in quarters)
+    if normalized_form == "10-K":
+        years = _year_labels_from_context(value)
+        if years:
+            return max(years)
+    return 0
+
+
+def _compact_year_labels(years: list[int]) -> str:
+    ranges = _consecutive_ranges(sorted(set(years)))
+    return ", ".join(
+        str(start) if start == end else f"{start}-{end}"
+        for start, end in ranges
+    )
+
+
+def _compact_quarter_labels(quarters: list[tuple[int, int]]) -> str:
+    ordered = sorted(set(quarters))
+    if not ordered:
+        return ""
+    ranges: list[tuple[tuple[int, int], tuple[int, int]]] = []
+    range_start = ordered[0]
+    previous = ordered[0]
+    for current in ordered[1:]:
+        if _quarter_index(current) == _quarter_index(previous) + 1:
+            previous = current
+            continue
+        ranges.append((range_start, previous))
+        range_start = current
+        previous = current
+    ranges.append((range_start, previous))
+    return ", ".join(
+        _format_quarter_label(start)
+        if start == end
+        else f"{_format_quarter_label(start)} - {_format_quarter_label(end)}"
+        for start, end in ranges
+    )
+
+
+def _consecutive_ranges(values: list[int]) -> list[tuple[int, int]]:
+    if not values:
+        return []
+    ranges: list[tuple[int, int]] = []
+    start = values[0]
+    previous = values[0]
+    for value in values[1:]:
+        if value == previous + 1:
+            previous = value
+            continue
+        ranges.append((start, previous))
+        start = value
+        previous = value
+    ranges.append((start, previous))
+    return ranges
+
+
+def _quarter_index(value: tuple[int, int]) -> int:
+    year, quarter = value
+    return year * 4 + quarter
+
+
+def _format_quarter_label(value: tuple[int, int]) -> str:
+    year, quarter = value
+    return f"{year} q{quarter}"
+
+
+def _collapse_report_rows(
+    rows: list[dict[str, Any]],
+    *,
+    merge_columns: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    if not rows:
+        return []
+    grouped: dict[tuple[tuple[str, Any], ...], dict[str, Any]] = {}
+    merged_values: dict[tuple[tuple[str, Any], ...], dict[str, list[str]]] = {}
+    merge_set = set(merge_columns)
+    for row in rows:
+        key = tuple((column, value) for column, value in row.items() if column not in merge_set)
+        if key not in grouped:
+            grouped[key] = dict(row)
+            merged_values[key] = {
+                column: [str(row.get(column) or "")]
+                for column in merge_columns
+            }
+            continue
+        for column in merge_columns:
+            value = str(row.get(column) or "")
+            if value:
+                merged_values[key].setdefault(column, []).append(value)
+    collapsed_rows: list[dict[str, Any]] = []
+    for key, row in grouped.items():
+        for column in merge_columns:
+            row[column] = _join_unique_texts(merged_values[key].get(column, ()))
+        collapsed_rows.append(row)
+    return collapsed_rows
+
+
+def _join_unique_texts(values: Sequence[str]) -> str:
+    return "; ".join(dict.fromkeys(value for value in values if value))
+
+
+def _as_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+_CONCEPT_PREFIX_PATTERN = re.compile(r"\b[A-Za-z_][A-Za-z0-9_.-]*:([A-Za-z_][A-Za-z0-9_.-]*)")
+
+
+def _strip_concept_prefixes(value: Any) -> str:
+    return _CONCEPT_PREFIX_PATTERN.sub(r"\1", str(value or ""))
+
+
+def _split_joined_values(value: Any) -> list[str]:
+    text = str(value or "").strip()
+    if not text or text == "none":
+        return []
+    return [part.strip() for part in text.split(",") if part.strip() and part.strip() != "none"]
 
 
 def format_compact_report(run: ExperimentRun, *, full_report: bool = False) -> str:
     """Render a concise run summary for quick manual inspection."""
     setup_company = run.setup_snapshot.get("company") or {}
     session_after_company = run.session_after_snapshot.get("company") or {}
-    report_output = "saved compact + detailed report" if full_report else "saved compact report"
+    report_output = (
+        "saved Plan 2.5 target mapping report; --full-report compatibility flag accepted"
+        if full_report
+        else "saved Plan 2.5 target mapping report"
+    )
     lines = [
         "Milestone 2.5 Plan 2.5 Ingestion Examination",
         "",
@@ -3020,6 +5039,8 @@ def format_compact_report(run: ExperimentRun, *, full_report: bool = False) -> s
     lines.extend(_compact_active_window(run.session_after_snapshot, indent="  "))
     lines.extend(["", "Raw Fact Mapping Coverage"])
     lines.extend(_compact_raw_fact_mapping_coverage(run.session_after_snapshot, indent="  "))
+    lines.extend(["", "Metric-First Coverage Resolution"])
+    lines.extend(_compact_metric_coverage_resolution(run.session_after_snapshot, indent="  "))
     lines.extend(["", "Target XBRL Concept Coverage"])
     lines.extend(_compact_target_raw_fact_coverage(run.session_after_snapshot, indent="  "))
     lines.extend(["", "LLM Formula Proposal Diagnostics"])
@@ -3040,12 +5061,8 @@ def format_compact_report(run: ExperimentRun, *, full_report: bool = False) -> s
     lines.extend(
         [
             "",
-            "More Detail",
-            (
-                "  Detailed Markdown sections are included below this compact summary."
-                if full_report
-                else "  Add --full-report to include detailed Markdown sections in this saved report."
-            ),
+            "Saved Report",
+            "  milestone25_mapping_report contains compact summary, target metric status, 10-K/10-Q semantic candidates, and 10-K/10-Q proposed formulas.",
         ]
     )
     return "\n".join(lines)
@@ -3257,6 +5274,25 @@ def _compact_target_raw_fact_coverage(snapshot: dict[str, Any], *, indent: str) 
     return lines
 
 
+def _compact_metric_coverage_resolution(snapshot: dict[str, Any], *, indent: str) -> list[str]:
+    rows = snapshot.get("metric_coverage_resolution") or []
+    if not rows:
+        return [f"{indent}none"]
+    status_counts: dict[str, int] = {}
+    unresolved: list[str] = []
+    for row in rows:
+        status = str(row.get("coverage_status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        if row.get("reviewer_action") == "llm_choose_mapping_formula_or_zero":
+            unresolved.append(str(row.get("internal_metric_name") or "unknown_metric"))
+    lines = [f"{indent}internal metrics checked: {_format_presentation_number(len(rows))}"]
+    for status, count in sorted(status_counts.items()):
+        lines.append(f"{indent}{status}: {_format_presentation_number(count)}")
+    if unresolved:
+        lines.append(f"{indent}LLM resolution needed: {_join_values(tuple(sorted(set(unresolved))))}")
+    return lines
+
+
 def _compact_debt_recovery(snapshot: dict[str, Any], *, indent: str) -> list[str]:
     rows = snapshot.get("debt_recovery_summary") or []
     diagnostics = snapshot.get("debt_recovery_diagnostics") or []
@@ -3452,7 +5488,8 @@ def _markdown_table(rows: list[dict[str, Any]]) -> list[str]:
     right_aligned = {
         header
         for header in headers
-        if header not in {"metric_name", "statement_type"}
+        if _should_format_presentation_number(header)
+        and header not in {"metric_name", "statement_type"}
         and all(_is_numeric_table_cell(row[header]) for row in rendered_rows)
     }
     lines = [
@@ -3505,13 +5542,21 @@ def _is_number_text(text: str) -> bool:
 def _markdown_cell(header: str, value: Any) -> str:
     if value is None:
         return ""
-    text = str(value).replace("\r", " ").replace("\n", " ")
-    text = text.replace("|", "/")
+    text = _sanitize_markdown_cell_text(value)
     if _should_format_presentation_number(header):
         text = "; ".join(_format_presentation_number(part.strip()) for part in text.split(";"))
-    if len(text) > 120:
-        return text[:117] + "..."
+    if len(text) > MARKDOWN_CELL_MAX_CHARS and not _should_keep_full_markdown_cell(header):
+        return text[: MARKDOWN_CELL_MAX_CHARS - 3] + "..."
     return text
+
+
+def _sanitize_markdown_cell_text(value: Any) -> str:
+    text = str(value).replace("\r", " ").replace("\n", " ")
+    return text.replace("|", "/")
+
+
+def _should_keep_full_markdown_cell(header: str) -> bool:
+    return header.lower() in MARKDOWN_FULL_TEXT_HEADERS
 
 
 def _should_format_presentation_number(header: str) -> bool:
@@ -3600,6 +5645,8 @@ def _error_run(
         company_existed_before_setup=False,
         setup_status="experiment_error",
         setup_sec_checked=False,
+        setup_duration_seconds=None,
+        unchanged_company_reuse_duration_seconds=None,
         setup_snapshot=_empty_snapshot(),
         session_before_snapshot=_empty_snapshot(),
         session_after_snapshot=_empty_snapshot(),
