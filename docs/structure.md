@@ -245,8 +245,8 @@ experiments/
 - `experiments/MS2/experiment_proposal.md`: Human-inspection proposal for the Milestone 2 SEC/XBRL ingestion and normalization experiment. It defines input cases, intended terminal output, artifacts to inspect, edge cases, and expected outcomes.
 - `experiments/MS2/milestone2_ingestion_showcase.py`: Runnable Milestone 2 experiment script that prints the SEC/XBRL ingestion and normalization showcase described by the Milestone 2 proposal.
 - `experiments/storage/`: Generated shared experiment storage. Current MS2.5 live runs use `experiments/storage/experiment.db` and `experiments/storage/filings/` so later milestone experiments can inspect the same isolated state without touching `stock_data.db`.
-- `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 ingestion and mapping examination harness. It covers persistent isolated storage, update checks, active-window evidence, target metric mapping status, approved learned mappings, report-only LLM formula proposal diagnostics, saved reports, and SQLite/CSV evidence.
-- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that saves `experiments/MS2_5/milestone25_mapping_report_<TICKER>.md` without printing the report body. The saved Markdown report keeps the fixed Plan 2.5 target mapping shape: compact run summary, target metric mapping status, and report-only formula proposal evidence. `--full-report` is accepted for CLI compatibility but does not append the older full lineage appendix. The script preserves `experiments/storage/experiment.db`, writes filing downloads under `experiments/storage/filings/`, exports supporting CSVs under `data/exports/ms2_5/`, and stores formula proposal cache entries under `data_store/knowledge/formula_proposals/` unless `KNOWLEDGE_STORAGE_DIR` overrides the location.
+- `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 ingestion and mapping examination harness. It covers persistent isolated storage, update checks, active-window evidence, target metric mapping status, approved learned mappings, report-only LLM formula proposal evidence, saved reports, and SQLite/CSV evidence.
+- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that saves `experiments/MS2_5/milestone25_mapping_report_<TICKER>.md` without printing the report body. The saved Markdown report keeps the fixed Plan 2.5 target mapping shape: compact run summary, XBRL concept counts provided to formula generation, target metric mapping status, and report-only proposed formula rows split into 10-K and 10-Q subsections. Formula proposal provider calls run by default; `--no-formula-proposals` skips them, `--formula-proposals` is accepted for compatibility, and `--full-report` does not append the older full lineage appendix. The script preserves `experiments/storage/experiment.db`, writes filing downloads under `experiments/storage/filings/`, exports supporting CSVs under `data/exports/ms2_5/`, and stores formula proposal cache entries under `data_store/knowledge/formula_proposals/` unless `KNOWLEDGE_STORAGE_DIR` overrides the location.
 - `experiments/MS3/experiment_proposal.md`: Human-inspection proposal for the Milestone 3 indicator engine experiment. It defines active accession-window scope, yearly and quarterly indicator tables for the requested catalog, skipped-period reasons, formulas, and source-metric traceability output.
 - `experiments/MS3/milestone3_indicator_engine.py`: Runnable Milestone 3 experiment script that reads stored `financial_indicators` and writes a `.txt` report under `experiments/MS3` with active accession-window scope, yearly and quarterly indicator tables for the requested ticker or tickers, skipped reasons, formulas, and source traceability.
 - `experiments/MS4/experiment_proposal.md`: Human-inspection proposal for the Milestone 4 deterministic financial analytics experiment. It defines trend, comparison, gap, outlier, and chart-ready output.
@@ -386,9 +386,9 @@ Key responsibilities:
   period-scoped raw XBRL fact pools, including found target facts, mapped
   metrics, approved alternates, and unknown/unmapped facts. The MS2.5 report
   sends one representative target-unit-compatible context per target to the
-  provider panel, keeps the full eligible fact pool visible as evidence, and
-  shows target primary statement, period context, cache status, provider
-  output, component or zero-evidence facts, and deterministic validation status.
+  provider panel, summarizes the XBRL concepts provided to formula generation
+  by period, and shows compact proposed formula rows with provider, period,
+  validation status, confidence, and reason.
 - Produce report-only debt recovery diagnostics for missing `debt_current` and
   `debt_noncurrent` from already mapped component metrics, while keeping
   recovered values out of `financial_metrics` and indicators.
@@ -502,10 +502,10 @@ Current status:
 
 - Gemini hard-industry classification is implemented for ingestion label assignment.
 - Report-only XBRL formula proposal calls are implemented for the MS2.5 report
-  when explicitly enabled with the experiment flag. Formula proposal prompts
-  use representative target-unit-compatible period contexts, statement-first
-  component selection, optional evidence-backed zero-target decisions, and
-  exact context cache reuse for successful structured decisions.
+  and run by default unless skipped with `--no-formula-proposals`. Formula
+  proposal prompts use representative target-unit-compatible period contexts,
+  statement-first component selection, optional evidence-backed zero-target
+  decisions, and exact context cache reuse for successful structured decisions.
 - Gemini/RAG answer synthesis is not implemented yet.
 
 Planned responsibilities:

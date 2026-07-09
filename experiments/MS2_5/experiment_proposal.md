@@ -73,15 +73,16 @@ This experiment covers:
 - approved learned mappings with global, industry, or company scope
 - missing exact target tags whose canonical metric is recovered through an
   approved alternate concept
-- report-only LLM formula proposal diagnostics for unresolved target concepts
+- report-only LLM formula proposal evidence for unresolved target concepts
   after direct catalog and approved learned mapping, using period-scoped raw
   fact pools that include found targets, mapped base metrics, approved
   alternates, and unknown/unmapped raw facts, with target-compatible unit filtering,
   statement-first prompting, one representative context per target, and
   exact-context cache reuse
-- saved Plan 2.5 target mapping report with compact run summary, target metric
-  mapping status, and report-only formula proposal evidence; source rows remain
-  available in SQLite and CSV exports
+- saved Plan 2.5 target mapping report with compact run summary, XBRL concept
+  counts provided to formula generation, target metric mapping status, and
+  report-only formula proposal rows; source rows remain available in SQLite and
+  CSV exports
 
 This experiment does not cover derived indicators, deterministic analytics,
 retrieval indexes, Gemini calls, RAG answers, frontend behavior, durable
@@ -165,22 +166,26 @@ Compatibility detailed-flag run:
 uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER --full-report
 ```
 
-Report-only LLM formula proposal run:
+Default report run with report-only LLM formula proposals:
 
 ```text
-uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER --full-report --formula-proposals
+uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER
 ```
 
-Use `--formula-proposal-target-limit N` for a capped live-provider smoke test.
+Use `--no-formula-proposals` to skip provider calls for a cheaper mapping run.
+`--formula-proposals` is accepted for compatibility and keeps the default
+provider-call behavior. Use `--formula-proposal-target-limit N` for a capped live-provider smoke test.
 The formula proposal panel evaluates one representative period context per
-missing target to keep live provider calls bounded; the full eligible raw fact
-pool is still shown in the report/export evidence.
+missing target to keep live provider calls bounded; the saved report summarizes
+the selected XBRL concept counts instead of appending raw-fact diagnostics.
 
 Rules:
 
 - exactly one ticker is accepted per run
 - the Plan 2.5 target mapping report is saved to `milestone25_mapping_report_<TICKER>.md` by default
 - the report body is not printed to the terminal
+- formula proposal provider calls run by default and can be skipped with
+  `--no-formula-proposals`
 - `--full-report` is accepted for CLI compatibility but keeps the same fixed
   target mapping report shape
 - `--write-report` is accepted for compatibility; the report is already saved
@@ -211,10 +216,11 @@ data/exports/ms2_5/
 ```
 
 The saved Markdown report should keep the fixed Plan 2.5 target mapping shape.
-It should show the operational decision path first, then target metric mapping
-status, then formula proposal evidence. It should not include model-similarity
-mapping candidates, final recommendations, debt recovery diagnostics, annual
-metric pivots, quarterly metric pivots, or the older full lineage appendix.
+It should show the operational decision path first, then XBRL concept counts
+provided to formula generation, target metric mapping status, then formula
+proposal evidence. It should not include model-similarity mapping candidates,
+final recommendations, debt recovery diagnostics, annual metric pivots,
+quarterly metric pivots, or the older full lineage appendix.
 
 `--full-report` is accepted for CLI compatibility, but it should not change the
 saved report into the old full appendix shape.
@@ -228,6 +234,10 @@ saved report into the old full appendix shape.
   ticker, CIK, timestamp, update-check status, SEC result,
   target metrics checked, mapped/missing target metrics, formula counts
 
+## 0A. XBRL Concepts Provided By Period
+  yearly 10-K concept counts
+  year-by-quarter 10-Q concept counts
+
 ## 1. Target Metrics Mapping Status
   one row per internal metric with mapping status, mapped concepts,
   approved alternates, and target XBRL concepts checked
@@ -236,25 +246,14 @@ saved report into the old full appendix shape.
   10-K proposed formula rows
   10-Q proposed formula rows
 
-## 2A. LLM Formula Proposal Diagnostics Summary
-
-## 2B. LLM Formula Proposal Diagnostics
-
-## 2C. LLM Formula Proposal Component Evidence
-
-## 2D. Eligible Formula Proposal Raw Fact Pool
-
 ```
 
 ## Required Report Sections
 
 1. Compact summary
-2. Target metric mapping status
-3. Proposed formulas by filing form
-4. Formula proposal diagnostics summary
-5. Formula proposal diagnostics
-6. Formula proposal component evidence
-7. Eligible formula proposal raw fact pool
+2. XBRL concepts provided by period
+3. Target metric mapping status
+4. Proposed formulas by filing form
 
 ## Implementation Guidance
 
@@ -299,8 +298,9 @@ saved report into the old full appendix shape.
 - Save the fixed target mapping report to
   `milestone25_mapping_report_<TICKER>.md` by default without printing the
   report body to the terminal.
-- Keep the saved Markdown report limited to compact summary, target metric
-  mapping status, and formula proposal evidence.
+- Keep the saved Markdown report limited to compact summary, XBRL concept counts
+  provided to formula generation, target metric mapping status, and proposed
+  formula rows.
 - Accept `--full-report` as a compatibility flag; do not append the old full
   lineage report.
 - Accept `--write-report` as a compatibility flag, not as a separate output

@@ -252,8 +252,8 @@ Example distinction:
    * Select the target XBRL concept set from common base candidates plus industry-specific candidates for every approved hard label.
    * Map selected raw XBRL facts into business-friendly base metrics by statement type through deterministic catalog entries and approved learned mappings.
    * Derive and reuse an approved company concept profile from approved global, industry, and company-scoped mappings.
-   * Leave unresolved targets as missing for base metrics; optional LLM formula proposal diagnostics remain report-only.
-   * Do not create model-generated mapping candidates or promote formula diagnostics into base metrics.
+   * Leave unresolved targets as missing for base metrics; LLM formula proposal evidence remains report-only.
+   * Do not create model-generated mapping candidates or promote formula proposals into base metrics.
    * Preserve links from each base metric back to the source filing and raw XBRL fact.
    * Do not calculate derived indicators in this milestone.
 3. Indicator engine
@@ -334,7 +334,7 @@ Example distinction:
 
 **Manual acceptance tests**:
 
-* Run the MS2.5 experiment and inspect label source, target XBRL concept coverage, approved company concept profile reuse, formula proposal diagnostics, unknown concepts, and annual/quarterly mapped metric tables.
+* Run the MS2.5 experiment and inspect target metric mapping status, approved learned mapping reuse, XBRL concept counts provided to formula generation, and proposed formula rows for unresolved targets.
 * Run the MS3 experiment and inspect yearly and quarterly derived indicator tables with skipped reasons and source metric lineage.
 * Run the MS5 retrieval experiment and inspect active filing coverage, chunk lineage, generation state, and retrieved evidence.
 * Start the FastAPI backend.
@@ -370,7 +370,7 @@ The MVP is successful if it can:
 3. Store company metadata, filing metadata, approved hard industry labels, and base financial metrics with source traceability.
 4. Select target XBRL concepts from common base plus approved hard industry labels.
 5. Reuse approved company concept profiles for normal refreshes and review the profile when it is incomplete or stale.
-6. Keep formula proposal diagnostics report-only until a mapping is explicitly approved.
+6. Keep formula proposal evidence report-only until a mapping is explicitly approved.
 7. Calculate and store useful financial indicators.
 8. Run deterministic financial data analysis over raw facts and derived indicators.
 9. Export raw facts and derived indicators as CSV.

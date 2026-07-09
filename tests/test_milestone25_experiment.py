@@ -25,6 +25,7 @@ from src.storage import (
     MAPPING_STATUS_APPROVED,
     RawFactRepository,
     connect_sqlite,
+    initialize_database,
 )
 
 
@@ -116,6 +117,50 @@ def test_milestone25_experiment_reports_missing_sec_user_agent(
     assert output == ""
     assert "Execution Warning" in report
     assert "SEC_USER_AGENT is required for live SEC experiment runs" in report
+
+
+def test_milestone25_error_report_preserves_local_company_snapshot(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    experiment = _load_experiment_module()
+    database_path = tmp_path / "experiment.db"
+    with connect_sqlite(database_path) as connection:
+        initialize_database(connection)
+        CompanyRepository(connection).upsert_company(
+            CompanyRecord(cik="0000789019", name="Microsoft Corp.", ticker="TEST")
+        )
+    env_file = tmp_path / "config.env"
+    env_file.write_text("", encoding="utf-8")
+
+    exit_code = experiment.main(
+        [
+            "--ticker",
+            "TEST",
+            "--env-file",
+            str(env_file),
+            "--db-path",
+            str(database_path),
+            "--report-path",
+            str(tmp_path / "experiment_report.md"),
+            "--filings-dir",
+            str(tmp_path / "filings"),
+            "--exports-dir",
+            str(tmp_path / "exports"),
+        ]
+    )
+    output = capsys.readouterr().out
+    report = (tmp_path / "experiment_report.md").read_text(encoding="utf-8")
+
+    company_line = next(line for line in report.splitlines() if "Company in system" in line)
+    sec_result_line = next(line for line in report.splitlines() if "SEC result" in line)
+    assert exit_code == 1
+    assert output == ""
+    assert "yes" in company_line
+    assert "experiment_error" in sec_result_line
+    assert "company is not in local storage" not in report
+    assert "0000789019" in report
+    assert "789.02K" not in report
 
 
 def test_milestone25_uses_ticker_specific_default_report_path(
@@ -297,7 +342,153 @@ def test_milestone25_markdown_table_keeps_identifier_lists_as_text() -> None:
     assert raw_fact_ids in table
     assert context_hash in table
     assert "123.46M" in table
+    year_table = "\n".join(experiment._markdown_table([{"Year": "2026", "Q1": 223}]))
+    assert "2026" in year_table
+    assert "2.03K" not in year_table
     assert experiment._format_presentation_number("9" * 80) == "9" * 80
+
+
+def test_milestone25_formula_rows_include_validation_reason() -> None:
+    experiment = _load_experiment_module()
+    snapshot = {
+        "target_raw_fact_coverage": [
+            {
+                "internal_metric_name": "debt_current",
+                "statement_type": "balance_sheet",
+                "status": experiment.STATUS_MISSING_TARGET,
+                "target_xbrl_concept": "us-gaap:DebtCurrent",
+            }
+        ],
+        "formula_proposal_diagnostics": [
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "period_context": "2026 Q3 | instant | USD | ->2026-03-31 | 10-Q | test-accession",
+                "provider_status": "proposed",
+                "provider_name": "gemini",
+                "model_name": "gemini-2.5-flash",
+                "formula_expression": "debt_current = us-gaap:LongTermDebtCurrent",
+                "components": "+ us-gaap:LongTermDebtCurrent",
+                "validation_status": "validation_failed",
+                "validation_skip_reason": "formula_components_duplicate_same_period_facts",
+                "confidence": "0.95",
+                "reason": "test proposal",
+            }
+        ],
+    }
+
+    rows = experiment._proposed_formula_rows_for_missing_targets(snapshot, form_type="10-Q")
+
+    assert rows == [
+        {
+            "Metric": "debt_current",
+            "Statement": "balance_sheet",
+            "Period context": "2026 q3",
+            "Providers": "gemini (gemini-2.5-flash)",
+            "Formula": "debt_current = LongTermDebtCurrent",
+            "Validation status": "validation_failed",
+            "Validation reason": "formula_components_duplicate_same_period_facts",
+            "Confidence": "0.95",
+            "Reason": "test proposal",
+        }
+    ]
+
+
+def test_milestone25_xbrl_concepts_provided_by_period_counts_raw_facts(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    experiment = _load_experiment_module()
+    calls: list[str] = []
+    base_ingest = _fake_ingest_company(calls)
+
+    def ingest_with_extra_raw_facts(ticker: str, settings: Settings) -> SimpleNamespace:
+        result = base_ingest(ticker, settings)
+        with connect_sqlite(settings.stock_sql_db_path) as connection:
+            raw_repository = RawFactRepository(connection)
+            raw_repository.initialize()
+            raw_repository.upsert_facts(
+                [
+                    _fact(
+                        form="10-K",
+                        accession_number="test-10k",
+                        concept="Assets",
+                        label="Assets",
+                        fiscal_period="FY",
+                    ),
+                    _fact(
+                        form="10-K/A",
+                        accession_number="test-10ka",
+                        concept="Liabilities",
+                        label="Liabilities",
+                        fiscal_period="FY",
+                    ),
+                    _fact(
+                        form="10-Q",
+                        accession_number="test-10q",
+                        concept="Assets",
+                        label="Assets",
+                        fiscal_period="Q1",
+                    ),
+                    _fact(
+                        form="10-Q",
+                        accession_number="test-10q",
+                        concept="Liabilities",
+                        label="Liabilities",
+                        fiscal_period="Q1",
+                    ),
+                    _fact(
+                        form="10-Q/A",
+                        accession_number="test-10qa",
+                        concept="StockholdersEquity",
+                        label="Stockholders' equity",
+                        fiscal_period="Q2",
+                    ),
+                ]
+            )
+        return result
+
+    monkeypatch.setattr(experiment, "ingest_company", ingest_with_extra_raw_facts)
+    env_file = _env_file(tmp_path)
+
+    exit_code = experiment.main(
+        [
+            "--ticker",
+            "TEST",
+            "--no-formula-proposals",
+            "--env-file",
+            str(env_file),
+            "--db-path",
+            str(tmp_path / "experiment.db"),
+            "--report-path",
+            str(tmp_path / "experiment_report.md"),
+            "--filings-dir",
+            str(tmp_path / "filings"),
+            "--exports-dir",
+            str(tmp_path / "exports"),
+        ]
+    )
+    output = capsys.readouterr().out
+    report = (tmp_path / "experiment_report.md").read_text(encoding="utf-8")
+
+    annual_section = report.split("### # of concepts provided from XBRL - 10-K", 1)[1].split(
+        "### # of concepts provided from XBRL - 10-Q",
+        1,
+    )[0]
+    annual_row = next(line for line in annual_section.splitlines() if line.startswith("| 2025"))
+    annual_cells = [cell.strip() for cell in annual_row.strip("|").split("|")]
+    quarterly_section = report.split("### # of concepts provided from XBRL - 10-Q", 1)[1].split(
+        "Boundary:",
+        1,
+    )[0]
+    quarterly_row = next(line for line in quarterly_section.splitlines() if line.startswith("| 2025"))
+    quarterly_cells = [cell.strip() for cell in quarterly_row.strip("|").split("|")]
+
+    assert exit_code == 0
+    assert output == ""
+    assert annual_cells == ["2025", "3"]
+    assert quarterly_cells == ["2025", "2", "1", ""]
 
 
 def test_milestone25_report_shows_approved_learned_mapping_reuse(
@@ -514,17 +705,15 @@ def test_milestone25_report_shows_report_only_formula_proposals_from_found_targe
 
     assert exit_code == 0
     assert output == ""
+    assert "XBRL Concepts Provided By Period" in report
     assert "Proposed Formulas For Formula Recommendations" in report
-    assert "LLM Formula Proposal Diagnostics Summary" in report
-    assert "LLM Formula Proposal Diagnostics" in report
-    assert "LLM Formula Proposal Component Evidence" in report
-    assert "Eligible Formula Proposal Raw Fact Pool" in report
-    assert "formula proposal model panel" in report
-    assert "found_target" in report
+    assert "LLM Formula Proposal Diagnostics Summary" not in report
+    assert "LLM Formula Proposal Diagnostics" not in report
+    assert "LLM Formula Proposal Component Evidence" not in report
+    assert "Eligible Formula Proposal Raw Fact Pool" not in report
+    assert "accounts_receivable = Revenues" in report
     assert "validated_component_pool" in report
-    assert "period-scoped formula contexts" in report
-    assert "cap_per_target" in report
-    assert "generated_new" in report
+    assert "fake_provider (fake_model)" in report
     with connect_sqlite(tmp_path / "experiment.db") as connection:
         stored_recovered_metrics = connection.execute(
             """
@@ -612,10 +801,9 @@ def test_milestone25_report_shows_report_only_zero_target_proposals(
 
     assert exit_code == 0
     assert output == ""
-    assert "target_zero" in report
-    assert "target_is_zero" in report
+    assert "accounts_receivable = 0" in report
+    assert "Zero-target evidence rows" in report
     assert "validated_zero_evidence_pool" in report
-    assert "zero-target proposal rows" in report
     with connect_sqlite(tmp_path / "experiment.db") as connection:
         stored_recovered_metrics = connection.execute(
             """
@@ -704,8 +892,10 @@ def test_milestone25_formula_proposals_reuse_failed_provider_result_within_run(
     assert exit_code == 0
     assert output == ""
     assert len(provider_calls) == 1
-    assert "provider_failed" in report
-    assert "test provider failure" in report
+    assert "Formula diagnostics run" in report
+    assert "Formula proposals returned" in report
+    assert "provider_failed" not in report
+    assert "test provider failure" not in report
 
 
 def test_milestone25_report_presents_new_filings_when_sec_update_ingests_them(
@@ -1063,6 +1253,8 @@ def _fact(
     taxonomy: str = "us-gaap",
     concept: str = "Revenues",
     label: str = "Revenues",
+    fiscal_year: int = 2025,
+    fiscal_period: str = "FY",
 ) -> NormalizedFact:
     return NormalizedFact(
         cik="0000000001",
@@ -1077,8 +1269,8 @@ def _fact(
         start_date=date(2024, 1, 1),
         end_date=date(2024, 12, 31),
         period_type="duration",
-        fiscal_year=2025,
-        fiscal_period="FY",
+        fiscal_year=fiscal_year,
+        fiscal_period=fiscal_period,
         form=form,
         filed_date=date(2025, 2, 15),
         accession_number=accession_number,

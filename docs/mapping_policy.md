@@ -195,10 +195,11 @@ not write automated `candidate` mapping rows, and does not use model confidence
 to approve mappings.
 
 If target metrics remain missing after direct mapping, they remain missing for
-`financial_metrics`. The MS2.5 report can optionally ask LLM providers for
-report-only formula or zero-target diagnostics using same-period raw facts.
-Those diagnostics do not approve mappings, do not insert recovered metrics, and
-do not feed indicators.
+`financial_metrics`. The MS2.5 report asks LLM providers for report-only formula
+or zero-target diagnostics using same-period raw facts by default, unless the
+run is explicitly started with `--no-formula-proposals`. Those diagnostics do
+not approve mappings, do not insert recovered metrics, and do not feed
+indicators.
 
 When a human later approves a learned mapping, that mapping may use global,
 industry, or company scope. Future ingestion runs load it as deterministic
