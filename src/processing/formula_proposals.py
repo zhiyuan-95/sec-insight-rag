@@ -183,7 +183,7 @@ class FormulaProposalFact:
 
 @dataclass(frozen=True)
 class FormulaProposalTarget:
-    """One target still unresolved after direct and semantic mapping."""
+    """One target still unresolved after direct and approved learned mapping."""
 
     target_metric_name: str
     target_xbrl_concept: str

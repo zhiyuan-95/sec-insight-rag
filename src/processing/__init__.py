@@ -33,16 +33,12 @@ from src.processing.mapping_catalog import (
     target_facts_for_industry_labels,
 )
 from src.processing.periods import classify_period, parse_sec_date, validate_period
-from src.processing.semantic_mapping import (
+from src.processing.metric_targets import (
     CanonicalMetricTarget,
-    SemanticMappingCandidate,
-    TargetEmbeddingPrewarmResult,
     TargetConceptCandidate,
     all_canonical_metric_targets,
     canonical_metric_targets,
-    generate_semantic_mapping_candidates,
     missing_metric_targets,
-    prewarm_all_target_candidate_embeddings,
 )
 from src.processing.xbrl_normalizer import NormalizedFact, find_duplicate_facts, normalize_companyfacts, normalize_fact_entry
 
@@ -55,8 +51,6 @@ __all__ = [
     "CanonicalMetricTarget",
     "COMMON_BASE_LABEL",
     "NormalizedFact",
-    "SemanticMappingCandidate",
-    "TargetEmbeddingPrewarmResult",
     "TargetConceptCandidate",
     "CompanyIndustryLabelAssignment",
     "HARD_INDUSTRY_LABELS",
@@ -74,7 +68,6 @@ __all__ = [
     "canonical_metric_targets",
     "classify_period",
     "find_duplicate_facts",
-    "generate_semantic_mapping_candidates",
     "industry_label_assignments_for_company",
     "industry_label_evidence_for_company",
     "is_fact_in_active_window",
@@ -86,7 +79,6 @@ __all__ = [
     "normalize_fact_entry",
     "normalize_inline_xbrl_model",
     "parse_sec_date",
-    "prewarm_all_target_candidate_embeddings",
     "target_facts_for_industry_labels",
     "validate_period",
 ]

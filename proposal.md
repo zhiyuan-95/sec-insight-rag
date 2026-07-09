@@ -49,8 +49,8 @@ src/
    * Assign reusable hard industry labels from the latest 10-K Item 1 Business section with Gemini when configured, and reclassify when a newer 10-K changes the evidence.
    * Select target XBRL concept sets from common base candidates plus the industry-specific candidates for the company's approved hard labels.
    * Map selected raw XBRL facts into business-friendly base metrics grouped by financial statement type.
-   * Run deterministic catalog mapping first, then rank unknown concepts only for missing target XBRL concepts.
-   * Store semantic matches as review-only candidates; only approved global, industry, or company-scoped mappings can populate base metrics.
+   * Run direct mapping from deterministic catalog entries and approved learned mappings only.
+   * Do not generate model-similarity mapping candidates; only approved global, industry, or company-scoped mappings can populate base metrics.
    * Reuse an approved company concept profile on later ingestions when it still covers the required target metrics.
    * Preserve traceability from each base metric back to the source raw XBRL fact and filing.
 4. Derived indicator calculation
@@ -166,7 +166,7 @@ Use local storage for the MVP:
 
    * Keep canonical filing chunks and source lineage in SQLite.
    * Use LlamaIndex-compatible local vector and keyword indexes as rebuildable retrieval artifacts for the MVP.
-   * Cache pre-embedded target XBRL concept vectors for all common-base and hard-industry catalog candidates; embed observed company unknown concepts only when semantic discovery is needed.
+   * Cache report-only formula proposal contexts and provider results for unresolved target metrics when that diagnostic panel is enabled.
 3. File storage
 
    * Save downloaded filings under the configured filings directory.
@@ -252,8 +252,8 @@ Example distinction:
    * Select the target XBRL concept set from common base candidates plus industry-specific candidates for every approved hard label.
    * Map selected raw XBRL facts into business-friendly base metrics by statement type through deterministic catalog entries and approved learned mappings.
    * Derive and reuse an approved company concept profile from approved global, industry, and company-scoped mappings.
-   * Run semantic mapping only after deterministic mapping leaves missing target XBRL concepts.
-   * Store semantic mapping candidates separately from approved mapping decisions; candidates must not create base metrics.
+   * Leave unresolved targets as missing for base metrics; optional LLM formula proposal diagnostics remain report-only.
+   * Do not create model-generated mapping candidates or promote formula diagnostics into base metrics.
    * Preserve links from each base metric back to the source filing and raw XBRL fact.
    * Do not calculate derived indicators in this milestone.
 3. Indicator engine
@@ -308,8 +308,8 @@ Example distinction:
 * Hard industry label reuse, annual reclassification on a newer 10-K, and common-base fallback when Gemini labels are unavailable, invalid, or low confidence
 * Target XBRL concept selection from common base plus approved hard industry labels
 * Approved company concept profile reuse and staleness triggers
-* Semantic mapping candidate ranking and reviewed mapping promotion
-* Rejection of semantic candidates as metric sources until a mapping is approved
+* Approved learned mapping reuse
+* Rejection of model-generated formula or mapping diagnostics as metric sources until a mapping is explicitly approved
 * Company, filing, and base metric repository behavior
 * Raw XBRL fact to base metric mapping
 * Derived indicator formulas, skipped reasons, source lineage, and persistence
@@ -325,7 +325,7 @@ Example distinction:
 * Ingest one known ticker from saved SEC fixtures.
 * Store normalized facts, filing metadata, hard industry labels, base metrics, and indicators in SQLite.
 * With mocked Gemini output, confirm high-confidence labels change target concept selection and low-confidence output falls back to common-base targets.
-* Confirm an approved company concept profile can be reused without semantic discovery when target coverage remains intact.
+* Confirm an approved company concept profile can be reused when target coverage remains intact.
 * Generate financial data analysis results from stored facts and indicators.
 * Build, reuse, and safely replace retrieval generations while preserving the last complete generation after failures.
 * Retrieve fused vector and BM25 evidence whose chunk IDs and lineage match canonical SQLite rows.
@@ -334,7 +334,7 @@ Example distinction:
 
 **Manual acceptance tests**:
 
-* Run the MS2.5 experiment and inspect label source, target XBRL concept coverage, approved company concept profile reuse, semantic candidates, unknown concepts, and annual/quarterly mapped metric tables.
+* Run the MS2.5 experiment and inspect label source, target XBRL concept coverage, approved company concept profile reuse, formula proposal diagnostics, unknown concepts, and annual/quarterly mapped metric tables.
 * Run the MS3 experiment and inspect yearly and quarterly derived indicator tables with skipped reasons and source metric lineage.
 * Run the MS5 retrieval experiment and inspect active filing coverage, chunk lineage, generation state, and retrieved evidence.
 * Start the FastAPI backend.
@@ -369,8 +369,8 @@ The MVP is successful if it can:
 2. Store broad raw XBRL facts separately from mapped base financial metrics.
 3. Store company metadata, filing metadata, approved hard industry labels, and base financial metrics with source traceability.
 4. Select target XBRL concepts from common base plus approved hard industry labels.
-5. Reuse approved company concept profiles for normal refreshes and rerun semantic discovery only when the profile is incomplete or stale.
-6. Keep semantic mapping candidates review-only until a mapping is explicitly approved.
+5. Reuse approved company concept profiles for normal refreshes and review the profile when it is incomplete or stale.
+6. Keep formula proposal diagnostics report-only until a mapping is explicitly approved.
 7. Calculate and store useful financial indicators.
 8. Run deterministic financial data analysis over raw facts and derived indicators.
 9. Export raw facts and derived indicators as CSV.
@@ -393,7 +393,7 @@ The first version will not include:
 * Investment recommendations
 * Automatic buy/sell ratings
 * Non-GAAP reconciliation beyond what is clearly available from filings
-* Automatic approval of semantic XBRL concept mappings without review
+* Automatic approval of model-proposed XBRL concept mappings without review
 * A broader industry taxonomy beyond the fixed hard industry label set
 
 ### Deferred indicator extensions

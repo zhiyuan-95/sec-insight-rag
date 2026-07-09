@@ -38,8 +38,8 @@ src/ingestion/company.py
   |     -> normalize companyfacts into NormalizedFact records
   +-- src/processing/inline_xbrl.py
   |     -> normalize issuer-extension and dimensional Arelle facts
-  +-- src/processing/semantic_mapping.py
-  |     -> rank review-only mappings for missing canonical metrics
+  +-- src/processing/metric_targets.py
+  |     -> build canonical target definitions and missing-target diagnostics
   +-- src/processing/active_window.py
   |     -> select latest 5 annual and latest 12 quarterly active periods
   +-- src/processing/base_metrics.py
@@ -85,7 +85,7 @@ stock_data.db                SQLite database
   companies                  local company registry
   company_industry_labels    reusable hard-industry labels and assignment evidence
   filings                    ingested filing inventory
-  xbrl_concept_mappings      governed learned mapping candidates and decisions
+  xbrl_concept_mappings      governed approved/rejected learned mapping decisions
   financial_metrics          base metrics mapped from raw XBRL facts
   financial_indicators       derived indicators with formulas and traceability
   filing_chunks              canonical section-aware filing text chunks
@@ -245,9 +245,8 @@ experiments/
 - `experiments/MS2/experiment_proposal.md`: Human-inspection proposal for the Milestone 2 SEC/XBRL ingestion and normalization experiment. It defines input cases, intended terminal output, artifacts to inspect, edge cases, and expected outcomes.
 - `experiments/MS2/milestone2_ingestion_showcase.py`: Runnable Milestone 2 experiment script that prints the SEC/XBRL ingestion and normalization showcase described by the Milestone 2 proposal.
 - `experiments/storage/`: Generated shared experiment storage. Current MS2.5 live runs use `experiments/storage/experiment.db` and `experiments/storage/filings/` so later milestone experiments can inspect the same isolated state without touching `stock_data.db`.
-- `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 ingestion and mapping examination harness. It covers persistent isolated storage, update checks, active-window evidence, persisted industry labels, target and raw-fact coverage, Inline XBRL extensions, semantic mapping candidates, approved learned mappings, report-only LLM formula proposal diagnostics, unknown/alternate tags, financial metric lineage, saved reports, and SQLite/CSV evidence.
-- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that saves `experiments/MS2_5/milestone25_mapping_report_<TICKER>.md` without printing the report body. The default report is a compact operational summary with evidence locations. With `--full-report`, it appends detailed run context, report-only LLM formula proposal diagnostics with exact-context cache reuse, report-only debt recovery diagnostics, unknown/alternate tag evidence, and annual/quarterly pivoted metric tables. It preserves `experiments/storage/experiment.db`, writes filing downloads under `experiments/storage/filings/`, exports supporting CSVs under `data/exports/ms2_5/`, and stores formula proposal cache entries under `data_store/knowledge/formula_proposals/` unless `KNOWLEDGE_STORAGE_DIR` overrides the location.
-- `experiments/MS2_5/prewarm_target_embeddings.py`: Utility script that precomputes target XBRL concept candidate embeddings for common-base and all hard-industry catalog concepts into `data_store/knowledge/concept_mapping/target_embeddings.json`.
+- `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 ingestion and mapping examination harness. It covers persistent isolated storage, update checks, active-window evidence, target metric mapping status, approved learned mappings, report-only LLM formula proposal diagnostics, saved reports, and SQLite/CSV evidence.
+- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that saves `experiments/MS2_5/milestone25_mapping_report_<TICKER>.md` without printing the report body. The saved Markdown report keeps the fixed Plan 2.5 target mapping shape: compact run summary, target metric mapping status, and report-only formula proposal evidence. `--full-report` is accepted for CLI compatibility but does not append the older full lineage appendix. The script preserves `experiments/storage/experiment.db`, writes filing downloads under `experiments/storage/filings/`, exports supporting CSVs under `data/exports/ms2_5/`, and stores formula proposal cache entries under `data_store/knowledge/formula_proposals/` unless `KNOWLEDGE_STORAGE_DIR` overrides the location.
 - `experiments/MS3/experiment_proposal.md`: Human-inspection proposal for the Milestone 3 indicator engine experiment. It defines active accession-window scope, yearly and quarterly indicator tables for the requested catalog, skipped-period reasons, formulas, and source-metric traceability output.
 - `experiments/MS3/milestone3_indicator_engine.py`: Runnable Milestone 3 experiment script that reads stored `financial_indicators` and writes a `.txt` report under `experiments/MS3` with active accession-window scope, yearly and quarterly indicator tables for the requested ticker or tickers, skipped reasons, formulas, and source traceability.
 - `experiments/MS4/experiment_proposal.md`: Human-inspection proposal for the Milestone 4 deterministic financial analytics experiment. It defines trend, comparison, gap, outlier, and chart-ready output.
@@ -349,15 +348,15 @@ Boundary rule:
 
 ### `src/processing/`
 
-Companyfacts and Inline XBRL normalization, active-window selection, governed
-semantic candidate generation, deterministic base metric mapping, and
-report-only missing metric recovery diagnostics.
+Companyfacts and Inline XBRL normalization, active-window selection, canonical
+target coverage diagnostics, deterministic base metric mapping with approved
+learned mapping reuse, and report-only missing metric recovery diagnostics.
 
 Current files:
 
 - `xbrl_normalizer.py`: Defines `NormalizedFact`, `normalize_companyfacts`, `normalize_fact_entry`, and duplicate fact marking.
 - `inline_xbrl.py`: Converts Arelle filing models into normalized issuer-extension and dimensional raw facts without fetching SEC data or writing storage.
-- `semantic_mapping.py`: Builds canonical target definitions, prewarms and caches candidate-level target XBRL concept embeddings, and ranks review-only candidates for missing metrics.
+- `metric_targets.py`: Builds canonical target definitions from the mapping catalog and reports which canonical metrics remain missing after direct catalog and approved learned mappings.
 - `formula_proposals.py`: Builds target-unit-compatible, period-scoped, statement-bucketed raw fact contexts for report-only LLM formula proposals, computes exact reusable context fingerprints, normalizes provider responses, caches successful structured formula, zero-target, or no-formula decisions, and deterministically validates formula components or cited zero-evidence facts against the same-period raw XBRL fact pool.
 - `active_window.py`: Selects the active analysis window: latest 5 fiscal years of 10-K data and latest 12 quarters of 10-Q data.
 - `base_metrics.py`: Maps clean supported raw XBRL facts into business-friendly base metric records using catalog-backed approved mapping candidates.
@@ -381,8 +380,8 @@ Key responsibilities:
 - Preserve raw values separately from parsed numeric values.
 - Normalize CIK, taxonomy, concept, unit, periods, fiscal year/period, form, filing date, accession number, frame, and source metadata.
 - Preserve namespace URI, context ID, dimensions, consolidation state, concept balance, numeric type, and source document for Inline XBRL facts.
-- Prewarm target XBRL concept candidate embeddings for common-base and all hard-industry catalog concepts.
-- Generate candidate-level semantic mapping candidates without promoting them into base metrics.
+- Reuse approved learned mappings from `xbrl_concept_mappings` as deterministic mapping inputs when matching observed raw XBRL concepts to base metrics.
+- Leave unresolved target metrics as report evidence and optional report-only formula proposal inputs; do not generate model-similarity mapping candidates.
 - Validate report-only LLM formula proposals for all unresolved targets against
   period-scoped raw XBRL fact pools, including found target facts, mapped
   metrics, approved alternates, and unknown/unmapped facts. The MS2.5 report
@@ -412,7 +411,7 @@ Current files:
 - `database.py`: SQLite connection and schema initialization helpers.
 - `facts_repository.py`: `RawFactRepository` for normalized raw XBRL facts.
 - `industry_labels_repository.py`: `CompanyIndustryLabelRepository` for persisted company hard-industry labels and evidence.
-- `concept_mappings_repository.py`: `ConceptMappingRepository` for scoped candidate, approved, and rejected raw-concept mappings.
+- `concept_mappings_repository.py`: `ConceptMappingRepository` for scoped learned raw-concept mapping decisions.
 - `company_repository.py`: `CompanyRepository` and `CompanyRecord` for company identity and refresh state.
 - `filings_repository.py`: `FilingRepository` and `FilingRecord` for ingested filing metadata and active-window state.
 - `metrics_repository.py`: `FinancialMetricRepository` and `FinancialMetric` for mapped base financial metrics.

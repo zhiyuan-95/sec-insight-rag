@@ -30,8 +30,8 @@ Raw fact ingestion should remain broad. Metric mapping should remain selective.
 - observed XBRL concept: an XBRL concept that was actually found in a
   company's ingested filing data.
 - unknown XBRL concept: an observed XBRL concept that the system does not
-  currently map to a system financial metric and does not currently treat as a
-  target XBRL concept.
+  currently map to a system financial metric through the source-controlled
+  catalog or an approved learned mapping.
 - system financial metric: the internal metric name the system understands,
   such as `revenue`, `net_income`, `inventory`, or `operating_cash_flow`.
 - target XBRL concept: an SEC/XBRL tag that the system intentionally looks for
@@ -46,9 +46,6 @@ Raw fact ingestion should remain broad. Metric mapping should remain selective.
   company. It is built from global, industry, and company-scoped approved
   mappings after ingestion/review, and reused on later ingestions until labels
   or evidence indicate it is stale.
-- semantic mapping candidate: a possible mapping suggested by vector
-  similarity. It requires review and must not populate `financial_metrics`
-  automatically.
 - missing target XBRL concept: a target or candidate XBRL concept expected for
   the company's approved industry labels but not found after deterministic
   mapping.
@@ -56,14 +53,12 @@ Raw fact ingestion should remain broad. Metric mapping should remain selective.
 - target XBRL concept set: the union of common base candidate XBRL concepts
   plus industry-specific candidate XBRL concepts for the company's approved
   hard industry labels.
-- Round 1 hard mapping: direct deterministic matching from known candidate XBRL
-  concept names to observed XBRL concepts.
-- Round 2 semantic mapping: vector comparison between missing target XBRL
-  concept vectors and unknown company XBRL concept vectors.
-- canonical mapping flow: candidate XBRL concept -> observed XBRL concept ->
-  raw XBRL fact -> approved mapping -> system financial metric.
-- semantic review flow: unknown XBRL concept -> semantic mapping candidate ->
-  reviewed approved mapping.
+- direct mapping: deterministic matching from source-controlled catalog
+  entries and approved learned mappings to observed XBRL concepts.
+- canonical mapping flow: observed XBRL concept -> raw XBRL fact ->
+  source-controlled or approved learned mapping -> system financial metric.
+- learned mapping review flow: unknown XBRL concept -> human review ->
+  approved or rejected learned mapping.
 
 ## Broad Raw Ingestion
 
@@ -163,9 +158,9 @@ than duplicating the raw concept.
 
 Common targets plus every assigned industry bundle form a union. Duplicate raw
 aliases are collapsed by canonical metric, taxonomy, concept, and statement
-type; they are not stored as duplicate vectors or duplicate internal metrics.
-This union combines target expectations only. It must never add or merge
-numeric fact values across industry labels.
+type; they are not stored as duplicate target definitions or duplicate internal
+metrics. This union combines target expectations only. It must never add or
+merge numeric fact values across industry labels.
 
 ## Mapping Rules
 
@@ -188,36 +183,32 @@ Do not create new internal metrics only to reduce the unknown concept count.
 Only add a mapping when the raw concept has a reviewed business meaning in the
 system.
 
-## Adaptive Mapping
+## Direct And Learned Mapping
 
-Mapping runs in two rounds:
+Mapping runs through deterministic inputs only:
 
-1. Deterministic mappings from the source-controlled catalog and previously
-   approved learned mappings.
-2. Semantic candidate generation for canonical metrics still missing after the
-   deterministic round.
+1. Source-controlled catalog mappings in `src/processing/mapping_catalog.py`.
+2. Previously approved learned mappings in `xbrl_concept_mappings`.
 
-Semantic similarity is a discovery mechanism, not mapping authority. Candidate
-generation compares canonical target definitions and approved aliases with
-observed concept names, labels, and documentation. It also requires compatible
-period type and considers only numeric, consolidated facts for company-level
-metrics.
+The ingestion workflow does not generate model-similarity mapping candidates, does
+not write automated `candidate` mapping rows, and does not use model confidence
+to approve mappings.
 
-Target XBRL concept candidate vectors should be prewarmed for every common-base
-and hard-industry catalog candidate. Observed company concepts are embedded only
-when semantic discovery runs, because they depend on the actual ingested raw
-facts for that company.
+If target metrics remain missing after direct mapping, they remain missing for
+`financial_metrics`. The MS2.5 report can optionally ask LLM providers for
+report-only formula or zero-target diagnostics using same-period raw facts.
+Those diagnostics do not approve mappings, do not insert recovered metrics, and
+do not feed indicators.
 
-Candidates are stored in `xbrl_concept_mappings` with status `candidate`,
-confidence, method, scope, and evidence. They do not create
-`financial_metrics` rows. A reviewer must mark a candidate `approved` or
-`rejected`. Approved mappings may use global, industry, or company scope and
-become deterministic inputs on later ingestion runs.
+When a human later approves a learned mapping, that mapping may use global,
+industry, or company scope. Future ingestion runs load it as deterministic
+mapping state and may populate `financial_metrics` when the same observed XBRL
+concept appears again.
 
 The governing rule is:
 
 ```text
-embeddings suggest; reviewed mappings approve
+catalog and approved mappings populate metrics; diagnostics only inform review
 ```
 
 ## Approved Company Concept Profile
@@ -238,9 +229,8 @@ broad on every run. The profile only controls which observed raw facts are
 allowed to populate `financial_metrics`.
 
 Normal refreshes should load the approved company concept profile first and
-skip semantic discovery when the profile still covers the required target
-metrics. Semantic discovery should run again only when evidence says the profile
-may be incomplete or stale, for example:
+reuse it whenever the same observed concepts appear in new raw facts. Review
+the profile when evidence says it may be incomplete or stale, for example:
 
 - the approved hard industry labels changed
 - a newer 10-K causes label reclassification
@@ -266,9 +256,11 @@ not_applicable
 ```
 
 Unknown SEC/XBRL concepts are not failures by default. They are raw evidence and
-review candidates.
+review inputs.
 
-Learned mapping workflow statuses are separate:
+Learned mapping workflow statuses are separate. Automated ingestion only uses
+`approved`; `candidate` and `rejected` are for explicit review history when
+present:
 
 ```text
 candidate
@@ -298,7 +290,6 @@ The MS2.5 report should show:
 - target facts found but not mapped into `financial_metrics`
 - unknown SEC/XBRL concepts that remain raw-only evidence
 - Inline XBRL extension and dimensional fact coverage
-- semantic mapping candidates awaiting review
 - approved learned mappings and their scope
 - exact target tags that are absent but whose canonical metric is recovered by
   an approved alternate concept

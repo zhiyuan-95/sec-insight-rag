@@ -36,12 +36,10 @@ from src.processing import (
     IndustryFactTarget,
     InlineXbrlExtractionError,
     NormalizedFact,
-    SemanticMappingCandidate,
     active_accessions_for_facts,
     active_period_keys,
     active_period_keys_from_periods,
     canonical_metric_targets,
-    generate_semantic_mapping_candidates,
     mapping_candidates_by_key,
     mapping_candidates_by_concept,
     map_raw_facts_to_base_metrics,
@@ -51,7 +49,6 @@ from src.processing import (
 from src.storage import (
     MAPPING_SCOPE_COMPANY,
     MAPPING_STATUS_APPROVED,
-    MAPPING_STATUS_CANDIDATE,
     CompanyRecord,
     CompanyIndustryLabelRepository,
     CompanyRepository,
@@ -98,7 +95,6 @@ class CompanyIngestionResult:
     refresh_due_10k: bool | None = None
     refresh_due_10q: bool | None = None
     inline_xbrl_fact_count: int = 0
-    semantic_mapping_candidate_count: int = 0
     approved_mapping_count: int = 0
     industry_label_count: int = 0
 
@@ -204,7 +200,6 @@ def _ingest_company_from_sec(
     normalized_facts = normalize_companyfacts(companyfacts, concepts=None, forms=None, taxonomies=None)
     warnings = list(_collect_quality_warnings(normalized_facts))
     inline_xbrl_fact_count = 0
-    semantic_mapping_candidate_count = 0
     approved_mapping_count = 0
     industry_label_count = 0
 
@@ -349,30 +344,6 @@ def _ingest_company_from_sec(
                 stored_fact_records = raw_repository.list_fact_records(cik)
                 stored_facts = [record.fact for record in stored_fact_records]
 
-        if missing_targets:
-            candidate_facts = [
-                fact
-                for fact in stored_facts
-                if fact.accession_number in active_accessions
-            ]
-            candidates = generate_semantic_mapping_candidates(
-                candidate_facts,
-                missing_targets,
-                set(mapping_names),
-                embedding_model_name=settings.retrieval_embedding_model,
-                model_cache_dir=(
-                    settings.knowledge_storage_dir / "model_cache" / "fastembed"
-                ),
-                target_embedding_path=(
-                    settings.knowledge_storage_dir
-                    / "concept_mapping"
-                    / "target_embeddings.json"
-                ),
-            )
-            semantic_mapping_candidate_count = concept_mapping_repository.upsert_mappings(
-                _candidate_mapping_records(cik, candidates)
-            )
-
         base_metrics = map_raw_facts_to_base_metrics(
             ((record.raw_fact_id, record.fact) for record in stored_fact_records),
             active_keys,
@@ -412,7 +383,6 @@ def _ingest_company_from_sec(
         refresh_due_10k=refresh_due_10k,
         refresh_due_10q=refresh_due_10q,
         inline_xbrl_fact_count=inline_xbrl_fact_count,
-        semantic_mapping_candidate_count=semantic_mapping_candidate_count,
         approved_mapping_count=approved_mapping_count,
         industry_label_count=industry_label_count,
     )
@@ -881,28 +851,6 @@ def _deterministic_mapping_names(
             **approved_profile.mappings,
         }.items()
     }
-
-
-def _candidate_mapping_records(
-    cik: str,
-    candidates: Iterable[SemanticMappingCandidate],
-) -> tuple[ConceptMappingRecord, ...]:
-    return tuple(
-        ConceptMappingRecord(
-            taxonomy=candidate.taxonomy,
-            concept=candidate.concept,
-            namespace_uri=candidate.namespace_uri,
-            metric_name=candidate.metric_name,
-            statement_type=candidate.statement_type,
-            scope_type=MAPPING_SCOPE_COMPANY,
-            scope_value=cik,
-            status=MAPPING_STATUS_CANDIDATE,
-            confidence=candidate.confidence,
-            match_method=candidate.match_method,
-            evidence=candidate.evidence,
-        )
-        for candidate in candidates
-    )
 
 
 def _select_active_window_filings(

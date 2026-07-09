@@ -71,8 +71,9 @@ def build_xbrl_formula_proposal_prompt(
     facts_json = _json_block(fact_pool)
     return f"""You are proposing a report-only XBRL decision for a missing target financial metric.
 
-The system has already tried hard mapping and semantic mapping. Your task is not
-to approve a mapping. Your task is to decide whether the missing target can be
+The system has already tried direct catalog mapping and approved learned
+mappings. Your task is not to approve a mapping. Your task is to decide whether
+the missing target can be
 composed from raw XBRL facts already observed for this company in the supplied
 same-period context, whether the target may reasonably be zero from other
 same-period evidence, or whether neither decision is supported.

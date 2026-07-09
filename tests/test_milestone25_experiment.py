@@ -23,7 +23,6 @@ from src.storage import (
     FinancialMetricRepository,
     MAPPING_SCOPE_COMPANY,
     MAPPING_STATUS_APPROVED,
-    MAPPING_STATUS_CANDIDATE,
     RawFactRepository,
     connect_sqlite,
 )
@@ -72,14 +71,15 @@ def test_milestone25_experiment_presents_first_time_ingestion(
     assert exit_code == 0
     assert calls == ["TEST", "TEST"]
     assert output == ""
-    assert "Milestone 2.5 Plan 2.5 Ingestion Examination" in report
-    assert "Initial Setup Ingestion" in report
-    assert "Already-Ingested Session Check" in report
-    assert "company in system: yes" in report
-    assert "update check needed this session: no" in report
-    assert "SEC update check performed: no" in report
-    assert "SEC result: local data reused; no SEC request made" in report
-    assert "new filings ingested this session: none" in report
+    assert "# Plan 2.5 Target Mapping Report" in report
+    assert "## 1. Target Metrics Mapping Status" in report
+    assert "## 2. Proposed Formulas For Formula Recommendations" in report
+    assert "Company in system" in report
+    assert "Update check needed this session" in report
+    assert "SEC update check performed" in report
+    assert "local data reused; no SEC request made" in report
+    assert "New filings ingested this session" in report
+    assert "none" in report
     assert (tmp_path / "experiment.db").exists()
     assert (tmp_path / "exports" / "companies.csv").exists()
     assert (tmp_path / "exports" / "financial_metrics.csv").exists()
@@ -184,10 +184,10 @@ def test_milestone25_write_report_flag_preserves_markdown_artifact(
 
     assert exit_code == 0
     assert output == ""
-    assert "report output: saved compact report" in report
-    assert "Setup Ingestion" in report
-    assert "Already-Ingested Session Check" in report
-    assert "Evidence Locations" in report
+    assert "saved Plan 2.5 target mapping report" in report
+    assert "Target Metrics Mapping Status" in report
+    assert "Proposed Formulas For Formula Recommendations" in report
+    assert "Evidence Locations" not in report
     assert "Financial Metric Data Lineage View" not in report
     assert "Annual XBRL Financial Metrics" not in report
     assert "Phase 2" not in report
@@ -232,10 +232,10 @@ def test_milestone25_saves_warning_when_csv_export_is_locked(
 
     assert exit_code == 0
     assert output == ""
-    assert "Milestone 2.5 Plan 2.5 Ingestion Examination" in report
+    assert "# Plan 2.5 Target Mapping Report" in report
     assert "CSV export skipped for financial_metrics" in report
-    assert "Initial Setup Ingestion" in report
-    assert "Already-Ingested Session Check" in report
+    assert "Target Metrics Mapping Status" in report
+    assert "Proposed Formulas For Formula Recommendations" in report
 
 
 def test_milestone25_full_report_flag_prints_detailed_markdown(
@@ -270,12 +270,12 @@ def test_milestone25_full_report_flag_prints_detailed_markdown(
 
     assert exit_code == 0
     assert output == ""
-    assert "# Milestone 2.5 Live SEC Experiment Report" in report
-    assert "Setup Ingestion" in report
-    assert "Already-Ingested Session Check" in report
-    assert "Compact Traceability Sample" in report
-    assert "Financial Metric Data Lineage View" in report
-    assert "Annual XBRL Financial Metrics" in report
+    assert "# Plan 2.5 Target Mapping Report" in report
+    assert "--full-report kept for CLI compatibility" in report
+    assert "Target Metrics Mapping Status" in report
+    assert "Proposed Formulas For Formula Recommendations" in report
+    assert "Financial Metric Data Lineage View" not in report
+    assert "Annual XBRL Financial Metrics" not in report
 
 
 def test_milestone25_markdown_table_keeps_identifier_lists_as_text() -> None:
@@ -300,7 +300,7 @@ def test_milestone25_markdown_table_keeps_identifier_lists_as_text() -> None:
     assert experiment._format_presentation_number("9" * 80) == "9" * 80
 
 
-def test_milestone25_report_shows_profile_reuse_and_candidate_level_semantic_evidence(
+def test_milestone25_report_shows_approved_learned_mapping_reuse(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -336,36 +336,34 @@ def test_milestone25_report_shows_profile_reuse_and_candidate_level_semantic_evi
 
     assert exit_code == 0
     assert output == ""
-    assert "Approved Company Concept Profile Reuse And Semantic Discovery" in report
-    assert "approved company concept profile reuse" in report
-    assert "semantic discovery status" in report
-    assert "Target XBRL Concept Coverage" in report
-    target_coverage_section = report.split("Target XBRL Concept Coverage:", 1)[1].split(
-        "Debt Recovery Diagnostics Summary:",
+    assert "Target Metrics Mapping Status" in report
+    assert "Target XBRL concepts checked" in report
+    target_status_section = report.split("Target Metrics Mapping Status", 1)[1].split(
+        "Proposed Formulas For Formula Recommendations",
         1,
     )[0]
-    target_coverage_header = next(
-        line for line in target_coverage_section.splitlines() if line.startswith("| ")
+    target_status_header = next(
+        line for line in target_status_section.splitlines() if line.startswith("| ")
     )
-    assert [cell.strip() for cell in target_coverage_header.strip("|").split("|")] == [
-        "industry_label",
-        "target_xbrl_concept",
-        "internal_metric_name",
-        "alternate_mapped_concepts",
-        "notes",
+    assert [cell.strip() for cell in target_status_header.strip("|").split("|")] == [
+        "Metric type",
+        "Metric",
+        "Statement",
+        "Mapping status",
+        "Mapped target concepts",
+        "Coverage detail",
+        "Approved alternates",
+        "Target XBRL concepts checked",
     ]
-    assert "required_for_core" not in target_coverage_section
-    assert "unit_count" not in target_coverage_section
-    assert "target_xbrl_concept" in report
-    assert "target_candidate_xbrl_concept" in report
-    assert "target_xbrl_concept_candidate" in report
-    assert "custom:CustomerRevenueGross" in report
+    assert "required_for_core" not in target_status_section
+    assert "unit_count" not in target_status_section
+    assert "target_candidate_xbrl_concept" not in report
+    assert "target_xbrl_concept_candidate" not in report
+    assert "Mapping Candidates (Review Required):" not in report
     assert "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax" in report
     assert "## Human Question" not in report
-    assert report.count("Company Industry Labels:") == 1
-    assert report.count("Target XBRL Concept Coverage:") == 1
-    assert report.count("Semantic Mapping Candidates (Review Required):") == 1
-    assert report.count("Unknown SEC/XBRL Concepts Not Mapped To Base Metrics:") == 1
+    assert "Company Industry Labels:" not in report
+    assert "Unknown SEC/XBRL Concepts Not Mapped To Base Metrics:" not in report
     snapshot = experiment._snapshot(tmp_path / "experiment.db", "TEST")
     unknown_coverage = next(
         row
@@ -412,30 +410,8 @@ def test_milestone25_report_shows_report_only_debt_recovery_diagnostics(
 
     assert exit_code == 0
     assert output == ""
-    assert "Debt Recovery Formula Catalog:" in report
-    assert "Debt Recovery Diagnostics" in report
-    assert "Debt Recovery Diagnostics Summary:" in report
-    assert "Debt Recovery Component Evidence:" in report
-    assert "recoverable debt target cases" in report
-    assert "derived_from_components" in report
-    assert "debt_current_components" in report
-    assert (
-        "debt_current = long_term_debt_current + short_term_borrowings "
-        "(optional zero-if-absent) + finance_lease_liability_current "
-        "(optional zero-if-absent)"
-    ) in report
-    assert (
-        "debt_noncurrent = long_term_debt_noncurrent + finance_lease_liability_noncurrent "
-        "(optional zero-if-absent)"
-    ) in report
-    assert "component_required" in report
-    assert "zero_if_absent" in report
-    assert "component_availability" in report
-    assert "found mapped component" in report
-    assert "not found; optional component assumed zero" in report
-    assert "current_portion_of_long_term_debt" in report
-    assert "source_metric_ids" in report
-    assert "source_raw_fact_ids" in report
+    assert "Debt Recovery Formula Catalog:" not in report
+    assert "Debt Recovery Diagnostics Summary:" not in report
     snapshot = experiment._snapshot(tmp_path / "experiment.db", "TEST")
     current = next(
         row
@@ -538,10 +514,11 @@ def test_milestone25_report_shows_report_only_formula_proposals_from_found_targe
 
     assert exit_code == 0
     assert output == ""
-    assert "LLM Formula Proposal Diagnostics Summary:" in report
-    assert "LLM Formula Proposal Diagnostics:" in report
-    assert "LLM Formula Proposal Component Evidence:" in report
-    assert "Eligible Formula Proposal Raw Fact Pool:" in report
+    assert "Proposed Formulas For Formula Recommendations" in report
+    assert "LLM Formula Proposal Diagnostics Summary" in report
+    assert "LLM Formula Proposal Diagnostics" in report
+    assert "LLM Formula Proposal Component Evidence" in report
+    assert "Eligible Formula Proposal Raw Fact Pool" in report
     assert "formula proposal model panel" in report
     assert "found_target" in report
     assert "validated_component_pool" in report
@@ -763,13 +740,14 @@ def test_milestone25_report_presents_new_filings_when_sec_update_ingests_them(
     assert exit_code == 0
     assert calls == ["TEST", "TEST"]
     assert output == ""
-    assert "company in system: yes" in report
-    assert "update check needed this session: yes" in report
-    assert "SEC update check performed: yes" in report
-    assert "SEC result: SEC checked; new active-window filing data ingested" in report
-    assert "new filings ingested this session:" in report
-    assert "10-Q accession test-10q-new" in report
-    assert "10-Q check due: yes (next check date before session: 2020-01-01)" in report
+    assert "Company in system" in report
+    assert "Update check needed this session" in report
+    assert "SEC update check performed" in report
+    assert "SEC checked; new active-window filing data ingested" in report
+    assert "New filings ingested this session" in report
+    assert "10-Q test-10q-new" in report
+    assert "10-Q check due" in report
+    assert "next check date before session: 2020-01-01" in report
 
 
 def _fake_ingest_company(calls: list[str]):
@@ -885,6 +863,13 @@ def _fake_ingest_company_with_mapping_evidence(calls: list[str]):
                     _fact(
                         form="10-K",
                         accession_number="test-10k",
+                        taxonomy="custom",
+                        concept="CustomerRevenueApproved",
+                        label="Customer revenue approved",
+                    ),
+                    _fact(
+                        form="10-K",
+                        accession_number="test-10k",
                         concept="CustomUnmappedDisclosure",
                         label="Custom unmapped disclosure",
                     )
@@ -907,29 +892,6 @@ def _fake_ingest_company_with_mapping_evidence(calls: list[str]):
                         evidence={"reason": "approved company concept profile test"},
                         reviewed_by="tester",
                         reviewed_at="2026-01-01T00:00:00+00:00",
-                    ),
-                    ConceptMappingRecord(
-                        taxonomy="custom",
-                        concept="CustomerRevenueGross",
-                        metric_name="revenue",
-                        statement_type="income_statement",
-                        scope_type=MAPPING_SCOPE_COMPANY,
-                        scope_value="0000000001",
-                        status=MAPPING_STATUS_CANDIDATE,
-                        confidence=0.91,
-                        match_method="semantic_candidate_embedding_v2",
-                        evidence={
-                            "embedding_granularity": "target_xbrl_concept_candidate",
-                            "target_candidate_taxonomy": "us-gaap",
-                            "target_candidate_xbrl_concept": (
-                                "RevenueFromContractWithCustomerExcludingAssessedTax"
-                            ),
-                            "target_candidate_industry_labels": ["Common Base"],
-                            "observed_label": "Customer revenue gross",
-                            "observed_period_types": ["duration"],
-                            "semantic_similarity": 0.91,
-                            "requires_review": True,
-                        },
                     ),
                 )
             )
@@ -1098,13 +1060,14 @@ def _fact(
     *,
     form: str,
     accession_number: str,
+    taxonomy: str = "us-gaap",
     concept: str = "Revenues",
     label: str = "Revenues",
 ) -> NormalizedFact:
     return NormalizedFact(
         cik="0000000001",
         entity_name="Test Company",
-        taxonomy="us-gaap",
+        taxonomy=taxonomy,
         concept=concept,
         label=label,
         description=None,

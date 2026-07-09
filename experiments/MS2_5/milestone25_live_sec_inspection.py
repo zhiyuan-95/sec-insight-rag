@@ -48,7 +48,6 @@ from src.processing.metric_recovery import (
     COMPONENT_MAPPED,
     COMPONENT_MISSING_REQUIRED,
     DEBT_RECOVERY_FORMULAS,
-    REVIEW_CANDIDATE_REQUIRED,
     SKIP_DUPLICATE_COMPONENT_FACTS,
     SKIP_PERIOD_MISMATCH,
     SKIP_UNIT_MISMATCH,
@@ -418,12 +417,7 @@ def _snapshot(
             cik=cik,
             assignment=industry_assignment,
         )
-        semantic_mapping_candidates = _semantic_mapping_rows(
-            connection,
-            cik,
-            status="candidate",
-        )
-        approved_learned_mappings = _semantic_mapping_rows(
+        approved_learned_mappings = _learned_mapping_rows(
             connection,
             cik,
             status="approved",
@@ -432,7 +426,6 @@ def _snapshot(
         debt_recovery_results = _debt_recovery_results(
             connection,
             company_id=company_id,
-            semantic_mapping_candidates=semantic_mapping_candidates,
         )
         formula_proposal_snapshot = _formula_proposal_snapshot(
             connection,
@@ -472,11 +465,9 @@ def _snapshot(
             "mapping_profile_reuse": _mapping_profile_reuse_rows(
                 assignment=industry_assignment,
                 target_raw_fact_coverage=target_raw_fact_coverage,
-                semantic_mapping_candidates=semantic_mapping_candidates,
                 approved_learned_mappings=approved_learned_mappings,
                 unknown_xbrl_concepts=unknown_xbrl_concepts,
             ),
-            "semantic_mapping_candidates": semantic_mapping_candidates,
             "approved_learned_mappings": approved_learned_mappings,
             "metric_sample": _metric_sample(connection, company_id),
             "traceability_sample": _traceability_sample(connection, company_id),
@@ -518,7 +509,6 @@ def _empty_snapshot() -> dict[str, Any]:
         "unknown_xbrl_concepts": [],
         "inline_xbrl_coverage": [],
         "mapping_profile_reuse": [],
-        "semantic_mapping_candidates": [],
         "approved_learned_mappings": [],
         "metric_sample": [],
         "traceability_sample": [],
@@ -798,10 +788,6 @@ def _target_raw_fact_coverage(
             [company_id],
         )
     }
-    candidate_metrics = {
-        str(row["metric_name"])
-        for row in _semantic_mapping_rows(connection, cik, status="candidate")
-    }
     label_review_note = (
         "industry-specific targets are not included until a source-controlled label is assigned"
         if assignment.label_status == "needs_label_review"
@@ -827,12 +813,6 @@ def _target_raw_fact_coverage(
                 (
                     "canonical metric recovered through an approved alternate XBRL concept"
                     if status == STATUS_FOUND_MAPPED_ALTERNATE
-                    else ""
-                ),
-                (
-                    "semantic mapping candidates are awaiting review"
-                    if status == STATUS_MISSING_TARGET
-                    and target.internal_metric_name in candidate_metrics
                     else ""
                 ),
             )
@@ -1153,7 +1133,7 @@ def _formula_proposal_fact_pool(
     }
     approved_alternate_keys = {
         (str(row.get("taxonomy") or ""), str(row.get("observed_raw_concept") or ""))
-        for row in _semantic_mapping_rows(connection, cik, status="approved")
+        for row in _learned_mapping_rows(connection, cik, status="approved")
     }
     rows = _fetch_all(
         connection,
@@ -1592,18 +1572,12 @@ def _debt_recovery_results(
     connection: sqlite3.Connection,
     *,
     company_id: int | None,
-    semantic_mapping_candidates: list[dict[str, Any]],
 ) -> tuple[MetricRecoveryResult, ...]:
     if company_id is None:
         return ()
-    candidate_metric_names = {
-        str(row.get("metric_name"))
-        for row in semantic_mapping_candidates
-        if row.get("metric_name")
-    }
     return recover_debt_metrics(
         _debt_recovery_source_metrics(connection, company_id),
-        candidate_metric_names=candidate_metric_names,
+        candidate_metric_names=(),
     )
 
 
@@ -1760,7 +1734,6 @@ def _debt_recovery_summary_rows(results: tuple[MetricRecoveryResult, ...]) -> li
         for result in results
     )
     assumed_zero = sum(len(result.assumed_zero_components) for result in results)
-    candidate_review = sum(result.review_status == REVIEW_CANDIDATE_REQUIRED for result in results)
     return [
         {
             "evidence_item": "debt recovery targets evaluated",
@@ -1775,7 +1748,7 @@ def _debt_recovery_summary_rows(results: tuple[MetricRecoveryResult, ...]) -> li
         {
             "evidence_item": "unrecoverable debt target cases",
             "value": incomplete,
-            "notes": "Required component, period, unit, duplicate, or candidate-review gap remains.",
+            "notes": "Required component, period, unit, or duplicate gap remains.",
         },
         {
             "evidence_item": "ambiguous debt recovery cases",
@@ -1786,11 +1759,6 @@ def _debt_recovery_summary_rows(results: tuple[MetricRecoveryResult, ...]) -> li
             "evidence_item": "assumed-zero debt components",
             "value": assumed_zero,
             "notes": "Optional components allowed by formula policy and absent after active-period inspection.",
-        },
-        {
-            "evidence_item": "candidate-review-only debt cases",
-            "value": candidate_review,
-            "notes": "Semantic candidates remain review-only and do not create recovered values.",
         },
     ]
 
@@ -1874,8 +1842,6 @@ def _debt_recovery_note(result: MetricRecoveryResult) -> str:
         if result.assumed_zero_components:
             return "Report-only recovered value; optional components were assumed zero with coverage proof."
         return "Report-only recovered value from mapped component metrics."
-    if result.review_status == REVIEW_CANDIDATE_REQUIRED:
-        return "Only review-pending candidate evidence is available; no recovered value created."
     if result.skip_reason:
         return "Recovery skipped with explicit reason; no recovered value created."
     return ""
@@ -1885,11 +1851,10 @@ def _mapping_profile_reuse_rows(
     *,
     assignment: CompanyIndustryLabelAssignment,
     target_raw_fact_coverage: list[dict[str, Any]],
-    semantic_mapping_candidates: list[dict[str, Any]],
     approved_learned_mappings: list[dict[str, Any]],
     unknown_xbrl_concepts: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Summarize mapping reuse and semantic-discovery evidence for the report."""
+    """Summarize direct mapping and learned-mapping reuse evidence for the report."""
     industry_labels = assignment.assigned_industry_labels
     catalog_mappings = mapping_candidates_by_key(industry_labels)
     missing_targets = [
@@ -1935,7 +1900,7 @@ def _mapping_profile_reuse_rows(
             ),
         },
         {
-            "evidence_item": "approved company concept profile reuse",
+            "evidence_item": "approved learned mapping reuse",
             "value": _yes_no(bool(approved_learned_mappings)),
             "evidence_source": "xbrl_concept_mappings approved rows",
             "notes": (
@@ -1945,17 +1910,12 @@ def _mapping_profile_reuse_rows(
             ),
         },
         {
-            "evidence_item": "semantic discovery status",
-            "value": _semantic_discovery_status(
-                missing_targets=missing_targets,
-                semantic_mapping_candidates=semantic_mapping_candidates,
-                unknown_xbrl_concepts=unknown_xbrl_concepts,
-            ),
-            "evidence_source": "xbrl_concept_mappings candidate rows",
+            "evidence_item": "missing target metrics for formula review",
+            "value": len(missing_metric_names),
+            "evidence_source": "target raw fact coverage",
             "notes": (
-                f"{len(semantic_mapping_candidates)} candidates awaiting review; "
-                f"{len(missing_metric_names)} missing target metrics: "
-                f"{_join(tuple(missing_metric_names))}"
+                "Missing targets are handled by report-only formula proposal "
+                f"diagnostics when enabled: {_join(tuple(missing_metric_names))}"
             ),
         },
         {
@@ -1965,22 +1925,6 @@ def _mapping_profile_reuse_rows(
             "notes": "unknown concepts remain raw evidence until a mapping is approved",
         },
     ]
-
-
-def _semantic_discovery_status(
-    *,
-    missing_targets: list[dict[str, Any]],
-    semantic_mapping_candidates: list[dict[str, Any]],
-    unknown_xbrl_concepts: list[dict[str, Any]],
-) -> str:
-    if semantic_mapping_candidates:
-        return "not skipped; review-only semantic candidates are stored"
-    if not missing_targets:
-        return "skipped; target coverage left no missing target concepts"
-    if not unknown_xbrl_concepts:
-        return "skipped; no unknown observed XBRL concepts were available"
-    return "no stored candidates; missing targets and unknown concepts need review"
-
 
 def _scope_count_summary(rows: list[dict[str, Any]]) -> str:
     if not rows:
@@ -2047,7 +1991,7 @@ def _supported_mapping_context(
         )
     )
     catalog_mappings = mapping_candidates_by_key(industry_labels)
-    approved_mapping_rows = _semantic_mapping_rows(connection, cik, status="approved")
+    approved_mapping_rows = _learned_mapping_rows(connection, cik, status="approved")
     approved_keys = {
         (str(row["taxonomy"]), str(row["observed_raw_concept"]))
         for row in approved_mapping_rows
@@ -2209,7 +2153,7 @@ def _alternate_xbrl_tags(connection: sqlite3.Connection, company_id: int | None)
         "SELECT cik FROM companies WHERE company_id = ?",
         [company_id],
     )
-    for row in _semantic_mapping_rows(
+    for row in _learned_mapping_rows(
         connection,
         company.get("cik"),
         status="approved",
@@ -2299,7 +2243,7 @@ def _inline_xbrl_coverage(
     )
 
 
-def _semantic_mapping_rows(
+def _learned_mapping_rows(
     connection: sqlite3.Connection,
     cik: str | None,
     *,
@@ -2346,9 +2290,7 @@ def _semantic_mapping_rows(
     )
     rendered_rows: list[dict[str, Any]] = []
     for row in rows:
-        evidence = _mapping_evidence(row.pop("evidence_json", "{}"))
-        target_taxonomy = str(evidence.get("target_candidate_taxonomy") or "")
-        target_concept = str(evidence.get("target_candidate_xbrl_concept") or "")
+        row.pop("evidence_json", "{}")
         rendered_rows.append(
             {
                 **row,
@@ -2357,64 +2299,9 @@ def _semantic_mapping_rows(
                     if row.get("taxonomy") and row.get("observed_raw_concept")
                     else ""
                 ),
-                "target_candidate_xbrl_concept": (
-                    f"{target_taxonomy}:{target_concept}"
-                    if target_taxonomy and target_concept
-                    else target_concept
-                ),
-                "embedding_granularity": evidence.get("embedding_granularity") or "",
-                "semantic_similarity": evidence.get("semantic_similarity") or row.get("confidence") or "",
-                "requires_review": _evidence_bool(evidence.get("requires_review")),
-                "target_candidate_industry_labels": _join(
-                    tuple(
-                        str(label)
-                        for label in _evidence_sequence(
-                            evidence.get("target_candidate_industry_labels")
-                        )
-                    )
-                ),
-                "observed_label": evidence.get("observed_label") or "",
-                "observed_period_types": _join(
-                    tuple(
-                        str(period_type)
-                        for period_type in _evidence_sequence(
-                            evidence.get("observed_period_types")
-                        )
-                    )
-                ),
             }
         )
     return rendered_rows
-
-
-def _mapping_evidence(raw_value: Any) -> dict[str, Any]:
-    if isinstance(raw_value, dict):
-        return raw_value
-    try:
-        parsed = json.loads(str(raw_value or "{}"))
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-def _evidence_sequence(value: Any) -> tuple[Any, ...]:
-    if value is None:
-        return ()
-    if isinstance(value, (list, tuple)):
-        return tuple(value)
-    return (value,)
-
-
-def _evidence_bool(value: Any) -> str:
-    if value is None or value == "":
-        return ""
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"true", "yes", "1"}:
-            return "yes"
-        if normalized in {"false", "no", "0"}:
-            return "no"
-    return _yes_no(bool(value))
 
 
 def _coverage_note(mapped_count: int, total_count: int) -> str:
@@ -2500,47 +2387,6 @@ def _metric_lineage_summary(connection: sqlite3.Connection, company_id: int | No
     return sorted(summary, key=lambda row: (row["statement_type"], row["metric_name"]))
 
 
-def _metric_lineage_rows(connection: sqlite3.Connection, company_id: int | None) -> list[dict[str, Any]]:
-    if company_id is None:
-        return []
-    return _fetch_all(
-        connection,
-        """
-        SELECT
-            c.ticker,
-            c.cik,
-            m.metric_id,
-            m.statement_type,
-            m.metric_name,
-            f.concept AS raw_xbrl_concept,
-            f.label AS raw_xbrl_label,
-            m.fiscal_year,
-            m.fiscal_period,
-            m.start_date,
-            m.end_date,
-            m.value_numeric,
-            m.unit,
-            m.period_type,
-            m.is_active_window,
-            m.accession_number,
-            fi.form_type,
-            fi.filing_date,
-            m.raw_fact_id,
-            f.quality_flags AS raw_quality_flags
-        FROM financial_metrics AS m
-        LEFT JOIN companies AS c
-            ON c.company_id = m.company_id
-        LEFT JOIN raw_xbrl_facts AS f
-            ON f.id = m.raw_fact_id
-        LEFT JOIN filings AS fi
-            ON fi.filing_id = m.filing_id
-        WHERE m.company_id = ?
-        ORDER BY m.statement_type, m.metric_name, m.fiscal_year DESC, m.fiscal_period DESC, m.accession_number
-        """,
-        [company_id],
-    )
-
-
 def _metric_sample(connection: sqlite3.Connection, company_id: int | None) -> list[dict[str, Any]]:
     if company_id is None:
         return []
@@ -2624,529 +2470,358 @@ def _write_report(run: ExperimentRun, *, full_report: bool) -> None:
     run.paths.report.write_text(format_saved_report(run, full_report=full_report), encoding="utf-8")
 
 
-def format_lineage_report(run: ExperimentRun) -> str:
-    """Render the financial metric data lineage view as a text report."""
-    rows = _lineage_rows_for_run(run)
-    annual_rows = _pivot_metric_rows(rows, annual=True)
-    quarterly_rows = _pivot_metric_rows(rows, annual=False)
-    lines = [
-        "Milestone 2.5 Financial Metric Data Lineage View",
-        "",
-        "Run Context:",
-        f"  ticker: {run.ticker}",
-        f"  run timestamp: {run.run_timestamp}",
-        f"  database: {run.paths.database}",
-        f"  saved report: {run.paths.report}",
-    ]
-    lines.extend(["", "Company Industry Labels:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("company_industry_labels") or []))
-    lines.extend(["", "Approved Company Concept Profile Reuse And Semantic Discovery:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("mapping_profile_reuse") or []))
-    lines.extend(["", "Raw Fact Mapping Coverage (Highlighted):"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("raw_fact_mapping_coverage") or []))
-    lines.extend(["", "Target XBRL Concept Coverage:"])
-    lines.extend(_markdown_table(_target_coverage_report_rows(run.session_after_snapshot)))
-    lines.extend(["", "LLM Formula Proposal Diagnostics Summary:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("formula_proposal_summary") or []))
-    lines.extend(["", "LLM Formula Proposal Diagnostics:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("formula_proposal_diagnostics") or []))
-    lines.extend(["", "LLM Formula Proposal Component Evidence:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("formula_proposal_components") or []))
-    lines.extend(["", "Eligible Formula Proposal Raw Fact Pool:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("formula_proposal_fact_pool_summary") or []))
-    lines.extend(["", "Debt Recovery Formula Catalog:"])
-    lines.extend(_debt_recovery_formula_catalog_text())
-    lines.extend(["", "Debt Recovery Formula Catalog Details:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("debt_recovery_formula_catalog") or []))
-    lines.extend(["", "Debt Recovery Diagnostics Summary:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("debt_recovery_summary") or []))
-    lines.extend(["", "Debt Recovery Diagnostics:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("debt_recovery_diagnostics") or []))
-    lines.extend(["", "Debt Recovery Component Evidence:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("debt_recovery_components") or []))
-    lines.extend(["", "Found Target Facts:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("found_target_facts") or []))
-    lines.extend(["", "Missing Target Facts:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("missing_target_facts") or []))
-    lines.extend(["", "Found But Unmapped Target Facts:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("found_unmapped_target_facts") or []))
-    lines.extend(["", "Inline XBRL Extension Coverage:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("inline_xbrl_coverage") or []))
-    lines.extend(["", "Semantic Mapping Candidates (Review Required):"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("semantic_mapping_candidates") or []))
-    lines.extend(["", "Approved Learned XBRL Mappings:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("approved_learned_mappings") or []))
-    lines.extend(["", "Alternate SEC/XBRL Tags For Same Business Metric:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("alternate_xbrl_tags") or []))
-    lines.extend(["", "Annual XBRL Financial Metrics:"])
-    lines.extend(_markdown_table(annual_rows))
-    lines.extend(["", "Quarterly XBRL Financial Metrics:"])
-    lines.extend(_markdown_table(quarterly_rows))
-    lines.extend(["", "Unknown SEC/XBRL Concepts Not Mapped To Base Metrics:"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("unknown_xbrl_concepts") or []))
-    lines.extend(
-        [
-            "",
-            "Full Evidence:",
-            f"  SQLite database: {run.paths.database}",
-            "  database table: raw_xbrl_facts",
-            "  database table: financial_metrics",
-            "  database table: company_industry_labels",
-            "  database table: xbrl_concept_mappings",
-            f"  companies CSV: {run.paths.exports_dir / 'companies.csv'}",
-            f"  filings CSV: {run.paths.exports_dir / 'filings.csv'}",
-            f"  raw facts CSV: {run.paths.exports_dir / 'raw_xbrl_facts.csv'}",
-            f"  financial metrics CSV: {run.paths.exports_dir / 'financial_metrics.csv'}",
-            f"  company industry labels CSV: {run.paths.exports_dir / 'company_industry_labels.csv'}",
-            f"  XBRL concept mappings CSV: {run.paths.exports_dir / 'xbrl_concept_mappings.csv'}",
-            f"  traceability sample CSV: {run.paths.exports_dir / 'metric_traceability_sample.csv'}",
-            f"  filing downloads: {run.paths.filings_dir}",
-            f"  saved report with appended lineage section: {run.paths.report}",
-            "",
-            "Expected Outcome:",
-            "  A human can scan annual and quarterly XBRL-derived financial",
-            "  metrics with metrics as rows and periods as columns.",
-        ]
-    )
-    return "\n".join(lines)
-
-
-def _target_coverage_report_rows(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
-    rows = snapshot.get("target_raw_fact_coverage") or []
-    return [
-        {column: row.get(column, "") for column in TARGET_COVERAGE_REPORT_COLUMNS}
-        for row in rows
-    ]
-
-
-def _pivot_metric_rows(rows: list[dict[str, Any]], *, annual: bool) -> list[dict[str, Any]]:
-    period_labels: set[str] = set()
-    grouped: dict[tuple[str, str], dict[str, list[str]]] = {}
-    quarterly_end_dates = {} if annual else _latest_end_dates_by_fiscal_period(rows)
-    for row in rows:
-        period_label = _pivot_period_label(
-            row,
-            annual=annual,
-            quarterly_end_dates=quarterly_end_dates,
-        )
-        if period_label is None:
-            continue
-        metric_name = str(row.get("metric_name") or "unknown_metric")
-        statement_type = str(row.get("statement_type") or "unknown_statement")
-        value = row.get("value_numeric")
-        if value is None:
-            continue
-        period_labels.add(period_label)
-        values = grouped.setdefault((metric_name, statement_type), {}).setdefault(period_label, [])
-        value_text = str(value)
-        if value_text not in values:
-            values.append(value_text)
-
-    ordered_periods = sorted(period_labels, key=_pivot_period_sort_key, reverse=True)
-    pivot_rows: list[dict[str, Any]] = []
-    for metric_name, statement_type in sorted(grouped, key=lambda key: (key[1], key[0])):
-        pivot_row: dict[str, Any] = {
-            "metric_name": metric_name,
-            "statement_type": statement_type,
-        }
-        for period_label in ordered_periods:
-            pivot_row[period_label] = _pivot_cell(grouped[(metric_name, statement_type)].get(period_label, []))
-        pivot_rows.append(pivot_row)
-    return pivot_rows
-
-
-def _latest_end_dates_by_fiscal_period(
-    rows: list[dict[str, Any]],
-) -> dict[tuple[int, str], datetime]:
-    latest: dict[tuple[int, str], datetime] = {}
-    for row in rows:
-        fiscal_year = _as_int(row.get("fiscal_year"))
-        fiscal_period = str(row.get("fiscal_period") or "").upper()
-        end_date = _parse_date(row.get("end_date"))
-        if fiscal_year is None or not fiscal_period or end_date is None:
-            continue
-        key = (fiscal_year, fiscal_period)
-        if key not in latest or end_date > latest[key]:
-            latest[key] = end_date
-    return latest
-
-
-def _pivot_period_label(
-    row: dict[str, Any],
-    *,
-    annual: bool,
-    quarterly_end_dates: dict[tuple[int, str], datetime] | None = None,
-) -> str | None:
-    fiscal_year = _as_int(row.get("fiscal_year"))
-    fiscal_period = str(row.get("fiscal_period") or "").upper()
-    if fiscal_year is None or not fiscal_period:
-        return None
-    if annual:
-        if fiscal_period != "FY":
-            return None
-        if not _end_date_matches_period(row.get("end_date"), fiscal_year, quarter=None):
-            return None
-        if not _duration_matches_period(row, annual=True):
-            return None
-        return str(fiscal_year)
-
-    if fiscal_period == "FY":
-        return None
-    quarter = _quarter_number(fiscal_period)
-    if quarter is None:
-        return None
-    expected_end_date = (quarterly_end_dates or {}).get((fiscal_year, fiscal_period))
-    if expected_end_date is None:
-        if not _end_date_matches_period(row.get("end_date"), fiscal_year, quarter=quarter):
-            return None
-    else:
-        row_end_date = _parse_date(row.get("end_date"))
-        if row_end_date is not None and row_end_date != expected_end_date:
-            return None
-    if not _duration_matches_period(row, annual=False):
-        return None
-    return f"{fiscal_year} Q{quarter}"
-
-
-def _end_date_matches_period(value: Any, fiscal_year: int, *, quarter: int | None) -> bool:
-    if value is None:
-        return True
-    text = str(value).strip()
-    if not text:
-        return True
-    parts = text.split("-")
-    if len(parts) < 2:
-        return True
-    try:
-        end_year = int(parts[0])
-        end_month = int(parts[1])
-    except ValueError:
-        return True
-    if end_year != fiscal_year:
-        return False
-    if quarter is None:
-        return True
-    return ((end_month - 1) // 3) + 1 == quarter
-
-
-def _duration_matches_period(row: dict[str, Any], *, annual: bool) -> bool:
-    if str(row.get("period_type") or "").lower() != "duration":
-        return True
-    start_date = _parse_date(row.get("start_date"))
-    end_date = _parse_date(row.get("end_date"))
-    if start_date is None or end_date is None:
-        return True
-    days = (end_date - start_date).days + 1
-    if annual:
-        return days >= 300
-    return 60 <= days <= 120
-
-
-def _parse_date(value: Any) -> datetime | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    try:
-        return datetime.fromisoformat(text)
-    except ValueError:
-        return None
-
-
-def _pivot_period_sort_key(label: str) -> tuple[int, int]:
-    parts = label.split()
-    year = _as_int(parts[0]) if parts else None
-    if len(parts) == 1:
-        return (year or 0, 0)
-    quarter = _quarter_number(parts[1])
-    return (year or 0, quarter or 0)
-
-
-def _quarter_number(value: str) -> int | None:
-    value = value.strip().upper()
-    if len(value) == 2 and value.startswith("Q") and value[1].isdigit():
-        quarter = int(value[1])
-        if 1 <= quarter <= 4:
-            return quarter
-    return None
-
-
-def _pivot_cell(values: Sequence[str]) -> str:
-    return "; ".join(_format_presentation_number(value) for value in values)
-
-
-def _as_int(value: Any) -> int | None:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _lineage_rows_for_run(run: ExperimentRun) -> list[dict[str, Any]]:
-    company_id = _snapshot_company_id(run.session_after_snapshot)
-    if company_id is None or not run.paths.database.exists():
-        return []
-    with connect_sqlite(run.paths.database) as connection:
-        initialize_database(connection)
-        return _metric_lineage_rows(connection, company_id)
-
-
-def format_report(run: ExperimentRun, *, report_output: str = "file") -> str:
-    """Render a compact Markdown report for manual inspection."""
-    lines = [
-        "# Milestone 2.5 Live SEC Experiment Report",
-        "",
-        "## Run Context",
-        "",
-    ]
-    lines.extend(
-        _definition_list(
-            {
-                "ticker": run.ticker,
-                "run timestamp": run.run_timestamp,
-                "database": run.paths.database,
-                "report output": report_output,
-                "report": run.paths.report,
-                "filings directory": run.paths.filings_dir,
-                "csv export directory": run.paths.exports_dir,
-                "SEC_USER_AGENT configured": _yes_no(run.sec_user_agent_configured),
-            }
-        )
-    )
-    if run.error:
-        lines.extend(["", "## Execution Warning", "", run.error])
-    if run.warnings:
-        lines.extend(["", "## Source Quality Warnings", ""])
-        lines.extend(f"- {warning}" for warning in run.warnings)
-
-    lines.extend(["", "## Setup Ingestion", ""])
-    lines.extend(
-        _definition_list(
-            {
-                "company existed before setup": _yes_no(run.company_existed_before_setup),
-                "setup status": run.setup_status,
-                "SEC checked during setup": _yes_no(run.setup_sec_checked),
-            }
-        )
-    )
-
-    lines.extend(["", "## Already-Ingested Session Check", ""])
-    lines.extend(_session_decision_sections(run))
-    lines.extend(["", "## Inspection Samples", ""])
-    lines.extend(["### Compact financial_metrics Sample", ""])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("metric_sample") or []))
-    lines.extend(["", "### Compact Traceability Sample", ""])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("traceability_sample") or []))
-    quality_flags = run.session_after_snapshot.get("quality_flags") or ()
-    if quality_flags:
-        lines.extend(["", "### Raw Fact Quality Flags", ""])
-        lines.extend(f"- {flag}" for flag in quality_flags)
-    return "\n".join(lines)
-
-
 def format_saved_report(run: ExperimentRun, *, full_report: bool = False) -> str:
-    """Render the saved experiment report, including the former terminal summary."""
-    lines = [
-        "# Milestone 2.5 Live SEC Experiment Report",
-        "",
-        "## Compact Summary",
-        "",
-        "```text",
-        format_compact_report(run, full_report=full_report),
-        "```",
-    ]
-    if full_report:
-        detailed_lines = format_report(run, report_output="saved compact + detailed report").splitlines()
-        if detailed_lines[:2] == ["# Milestone 2.5 Live SEC Experiment Report", ""]:
-            detailed_lines = detailed_lines[2:]
-        lines.extend([""])
-        lines.extend(detailed_lines)
-    lines.extend(["", "## Evidence Locations", ""])
-    lines.extend(_saved_report_evidence_locations(run))
-    if not full_report:
-        lines.extend(
-            [
-                "",
-                "## Detailed Evidence",
-                "",
-                "Detailed lineage tables are omitted from the compact report. Use `--full-report` for the Markdown appendix, or inspect the SQLite database and CSV exports listed above.",
-            ]
+    """Render the saved Plan 2.5 target mapping report."""
+    formula_rows_by_form = {
+        form_type: _proposed_formula_rows_for_missing_targets(
+            run.session_after_snapshot,
+            form_type=form_type,
         )
-        return "\n".join(lines)
-    lines.extend(["", "```text", format_lineage_report(run), "```"])
-    return "\n".join(lines)
-
-
-def _saved_report_evidence_locations(run: ExperimentRun) -> list[str]:
-    return [
-        f"- SQLite database: `{run.paths.database}`",
-        f"- CSV exports: `{run.paths.exports_dir}`",
-        f"- Filing downloads: `{run.paths.filings_dir}`",
-        f"- Report file: `{run.paths.report}`",
-    ]
-
-
-def format_compact_report(run: ExperimentRun, *, full_report: bool = False) -> str:
-    """Render a concise run summary for quick manual inspection."""
-    setup_company = run.setup_snapshot.get("company") or {}
-    session_after_company = run.session_after_snapshot.get("company") or {}
-    report_output = "saved compact + detailed report" if full_report else "saved compact report"
+        for form_type in FORMS
+    }
     lines = [
-        "Milestone 2.5 Plan 2.5 Ingestion Examination",
+        "# Plan 2.5 Target Mapping Report",
         "",
-        "Run Context",
-        f"  ticker: {run.ticker}",
-        f"  run timestamp: {run.run_timestamp}",
-        "  mode: live SEC, shared isolated experiment storage",
-        f"  SEC_USER_AGENT configured: {_yes_no(run.sec_user_agent_configured)}",
-        f"  report output: {report_output}",
+        "## 0. Compact Summary",
         "",
-        "Initial Setup Ingestion",
-        f"  company existed before setup: {_yes_no(run.company_existed_before_setup)}",
-        f"  setup status: {run.setup_status}",
-        f"  SEC checked during setup: {_yes_no(run.setup_sec_checked)}",
-        f"  CIK: {setup_company.get('cik') or 'not available'}",
-        f"  company name: {setup_company.get('name') or 'not available'}",
-        "",
-        "Already-Ingested Session Check",
     ]
-    lines.extend(_session_decision_lines(run, indent="  "))
-    lines.extend(["", "Company Industry Labels"])
-    lines.extend(_compact_company_industry_labels(run.session_after_snapshot, indent="  "))
-    lines.extend(["", "Stored Rows After Session"])
-    lines.extend(_compact_counts(run.session_after_snapshot, indent="  "))
-    lines.extend(["", "Active Window After Session"])
-    lines.extend(_compact_active_window(run.session_after_snapshot, indent="  "))
-    lines.extend(["", "Raw Fact Mapping Coverage"])
-    lines.extend(_compact_raw_fact_mapping_coverage(run.session_after_snapshot, indent="  "))
-    lines.extend(["", "Target XBRL Concept Coverage"])
-    lines.extend(_compact_target_raw_fact_coverage(run.session_after_snapshot, indent="  "))
-    lines.extend(["", "LLM Formula Proposal Diagnostics"])
-    lines.extend(_compact_formula_proposals(run.session_after_snapshot, indent="  "))
-    lines.extend(["", "Debt Recovery Diagnostics"])
-    lines.extend(_compact_debt_recovery(run.session_after_snapshot, indent="  "))
-    lines.extend(["", "Adaptive XBRL Mapping"])
-    lines.extend(_compact_adaptive_mapping(run.session_after_snapshot, indent="  "))
-    lines.extend(["", "Base Metrics After Session"])
-    lines.extend(_compact_metric_counts(run.session_after_snapshot, indent="  "))
-
-    if run.error:
-        lines.extend(["", "Execution Warning", f"  {run.error}"])
-    if run.warnings:
-        lines.extend(["", "Source And Export Warnings"])
-        lines.extend(f"  - {warning}" for warning in run.warnings)
-
+    lines.extend(_markdown_table(_saved_compact_summary_rows(run, full_report=full_report, formula_rows_by_form=formula_rows_by_form)))
     lines.extend(
         [
             "",
-            "More Detail",
-            (
-                "  Detailed Markdown sections are included below this compact summary."
-                if full_report
-                else "  Add --full-report to include detailed Markdown sections in this saved report."
-            ),
+            "Boundary: formulas and zero-target decisions are review evidence only. They do not populate `financial_metrics` or feed indicators without approval.",
         ]
     )
+    if run.error:
+        lines.extend(["", "Execution Warning:", run.error])
+    if run.warnings:
+        lines.extend(["", "Source And Export Warnings:"])
+        lines.extend(f"- {warning}" for warning in run.warnings)
+    lines.extend(["", "## 1. Target Metrics Mapping Status", ""])
+    lines.extend(_markdown_table(_target_metric_status_rows(run.session_after_snapshot)))
+    lines.extend(["", "## 2. Proposed Formulas For Formula Recommendations", ""])
+    for form_type in FORMS:
+        lines.extend(["", f"### {form_type}", ""])
+        lines.extend(_markdown_table(formula_rows_by_form[form_type]))
+    lines.extend(["", "## 2A. LLM Formula Proposal Diagnostics Summary", ""])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("formula_proposal_summary") or []))
+    lines.extend(["", "## 2B. LLM Formula Proposal Diagnostics", ""])
+    lines.extend(_markdown_table(_formula_diagnostic_report_rows(run.session_after_snapshot)))
+    lines.extend(["", "## 2C. LLM Formula Proposal Component Evidence", ""])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("formula_proposal_components") or []))
+    lines.extend(["", "## 2D. Eligible Formula Proposal Raw Fact Pool", ""])
+    lines.extend(_markdown_table(run.session_after_snapshot.get("formula_proposal_fact_pool_summary") or []))
     return "\n".join(lines)
 
 
-def _session_decision_lines(run: ExperimentRun, *, indent: str) -> list[str]:
-    decision = run.session_decision
+def _saved_compact_summary_rows(
+    run: ExperimentRun,
+    *,
+    full_report: bool,
+    formula_rows_by_form: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    snapshot = run.session_after_snapshot
+    company = snapshot.get("company") or run.setup_snapshot.get("company") or {}
     before_company = run.session_before_snapshot.get("company") or {}
-    lines = [
-        f"{indent}company in system: {_yes_no(decision.company_exists)}",
-    ]
-    if not decision.company_exists:
-        lines.extend(
-            [
-                f"{indent}update check needed this session: not applicable",
-                f"{indent}SEC update check performed: no",
-                f"{indent}SEC result: company is not in local storage",
-                f"{indent}new filings ingested this session: none",
-            ]
-        )
-        return lines
-
-    lines.extend(
-        [
-            f"{indent}update check needed this session: {_yes_no(_update_check_needed(decision))}",
-            (
-                f"{indent}10-K check due: {_yes_no_unknown(decision.refresh_due_10k)} "
+    target_status_rows = _target_metric_status_rows(snapshot)
+    formula_summary = _summary_rows_by_item(snapshot.get("formula_proposal_summary") or [])
+    diagnostics = snapshot.get("formula_proposal_diagnostics") or []
+    formula_panel = formula_summary.get("formula proposal model panel", {})
+    report_output = "saved Plan 2.5 target mapping report"
+    if full_report:
+        report_output = "saved Plan 2.5 target mapping report; --full-report kept for CLI compatibility"
+    return [
+        {"Item": "Ticker", "Value": run.ticker},
+        {"Item": "CIK", "Value": company.get("cik") or "not available"},
+        {"Item": "Run timestamp", "Value": run.run_timestamp},
+        {"Item": "Report output", "Value": report_output},
+        {"Item": "Company in system", "Value": _yes_no(run.session_decision.company_exists)},
+        {
+            "Item": "Update check needed this session",
+            "Value": _yes_no(_update_check_needed(run.session_decision)) if run.session_decision.company_exists else "not applicable",
+        },
+        {
+            "Item": "10-K check due",
+            "Value": (
+                "not applicable"
+                if not run.session_decision.company_exists
+                else f"{_yes_no_unknown(run.session_decision.refresh_due_10k)} "
                 f"(next check date before session: {before_company.get('next_check_date_10k') or 'not available'})"
             ),
-            (
-                f"{indent}10-Q check due: {_yes_no_unknown(decision.refresh_due_10q)} "
+        },
+        {
+            "Item": "10-Q check due",
+            "Value": (
+                "not applicable"
+                if not run.session_decision.company_exists
+                else f"{_yes_no_unknown(run.session_decision.refresh_due_10q)} "
                 f"(next check date before session: {before_company.get('next_check_date_10q') or 'not available'})"
             ),
-            f"{indent}SEC update check performed: {_yes_no(decision.sec_checked)}",
-            f"{indent}SEC result: {_status_summary(decision)}",
-        ]
-    )
-    lines.extend(_new_filing_lines(decision.new_filings, indent=indent))
-    return lines
-
-
-def _session_decision_sections(run: ExperimentRun) -> list[str]:
-    decision = run.session_decision
-    before_company = run.session_before_snapshot.get("company") or {}
-    after_company = run.session_after_snapshot.get("company") or {}
-    rows: list[dict[str, Any]] = [
-        {"field": "company in system", "value": _yes_no(decision.company_exists)},
+        },
+        {"Item": "SEC update check performed", "Value": _yes_no(run.session_decision.sec_checked)},
+        {"Item": "SEC result", "Value": _status_summary(run.session_decision)},
+        {"Item": "New filings ingested this session", "Value": _new_filing_summary(run.session_decision.new_filings)},
+        {"Item": "Target metrics checked", "Value": len(target_status_rows)},
+        {"Item": "Mapped target metrics", "Value": _count_rows_with_value(target_status_rows, "Mapping status", "mapped")},
+        {"Item": "Missing target metrics", "Value": _count_rows_with_value(target_status_rows, "Mapping status", "missing")},
+        {"Item": "10-K proposed formula rows listed", "Value": len(formula_rows_by_form["10-K"])},
+        {"Item": "10-Q proposed formula rows listed", "Value": len(formula_rows_by_form["10-Q"])},
         {
-            "field": "update check needed this session",
-            "value": "not applicable" if not decision.company_exists else _yes_no(_update_check_needed(decision)),
+            "Item": "Formula diagnostics run",
+            "Value": _yes_no(str(formula_panel.get("value") or "") == "run"),
+        },
+        {"Item": "Formula proposal contexts", "Value": len({row.get("context_id") for row in diagnostics if row.get("context_id")})},
+        {
+            "Item": "Formula proposals returned",
+            "Value": sum(row.get("provider_status") == PROVIDER_STATUS_PROPOSED for row in diagnostics),
         },
         {
-            "field": "10-K check due",
-            "value": (
-                "not applicable"
-                if not decision.company_exists
-                else f"{_yes_no_unknown(decision.refresh_due_10k)}; before={before_company.get('next_check_date_10k') or 'not available'}"
-            ),
+            "Item": "Zero-target evidence rows",
+            "Value": sum(row.get("provider_status") == PROVIDER_STATUS_TARGET_ZERO for row in diagnostics),
         },
-        {
-            "field": "10-Q check due",
-            "value": (
-                "not applicable"
-                if not decision.company_exists
-                else f"{_yes_no_unknown(decision.refresh_due_10q)}; before={before_company.get('next_check_date_10q') or 'not available'}"
-            ),
-        },
-        {"field": "SEC update check performed", "value": _yes_no(decision.sec_checked)},
-        {"field": "SEC result", "value": _status_summary(decision)}
+        {"Item": "Recovered rows inserted into `financial_metrics`", "Value": 0},
+        {"Item": "Used by indicators", "Value": "No"},
     ]
-    lines = _markdown_table(rows)
-    lines.extend(["", "### New Filings Ingested During Session", ""])
-    lines.extend(_markdown_table([_filing_evidence_row(filing) for filing in decision.new_filings]))
-    lines.extend(["", "### Stored Row Deltas During Session", ""])
-    lines.extend(_before_after_counts(run.session_before_snapshot, run.session_after_snapshot))
-    return lines
 
 
-def _new_filing_lines(filings: tuple[FilingUpdateEvidence, ...], *, indent: str) -> list[str]:
-    if not filings:
-        return [f"{indent}new filings ingested this session: none"]
-    lines = [f"{indent}new filings ingested this session:"]
-    lines.extend(
-        (
-            f"{indent}  - {filing.form_type} accession {filing.accession_number}; "
-            f"filed {filing.filing_date}; local path {filing.local_path}"
+def _target_metric_status_rows(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    for row in snapshot.get("target_raw_fact_coverage") or []:
+        metric = str(row.get("internal_metric_name") or "")
+        statement = str(row.get("statement_type") or "")
+        if not metric:
+            continue
+        entry = grouped.setdefault(
+            (metric, statement),
+            {
+                "statuses": set(),
+                "mapped_targets": set(),
+                "approved_alternates": set(),
+                "target_concepts": set(),
+                "required_for_core": False,
+                "required_for_specialized_indicators": False,
+            },
         )
-        for filing in filings
+        status = str(row.get("status") or "")
+        if status:
+            entry["statuses"].add(status)
+        target_concept = str(row.get("target_xbrl_concept") or "")
+        if target_concept:
+            entry["target_concepts"].add(target_concept)
+        if status == STATUS_FOUND_MAPPED and target_concept:
+            entry["mapped_targets"].add(target_concept)
+        if str(row.get("alternate_mapped_concepts") or ""):
+            entry["approved_alternates"].add(str(row.get("alternate_mapped_concepts")))
+        entry["required_for_core"] = entry["required_for_core"] or row.get("required_for_core") == "yes"
+        entry["required_for_specialized_indicators"] = (
+            entry["required_for_specialized_indicators"]
+            or row.get("required_for_specialized_indicators") == "yes"
+        )
+
+    rows: list[dict[str, Any]] = []
+    for (metric, statement), entry in grouped.items():
+        statuses = entry["statuses"]
+        rows.append(
+            {
+                "Metric type": _target_metric_type(entry),
+                "Metric": metric,
+                "Statement": statement,
+                "Mapping status": _target_metric_mapping_status(statuses),
+                "Mapped target concepts": _join_sorted_values(entry["mapped_targets"]) or "none",
+                "Coverage detail": _target_metric_coverage_detail(statuses),
+                "Approved alternates": _join_sorted_values(entry["approved_alternates"]) or "none",
+                "Target XBRL concepts checked": _join_sorted_values(entry["target_concepts"]) or "none",
+            }
+        )
+    return sorted(
+        rows,
+        key=lambda item: (
+            str(item.get("Metric type") or ""),
+            str(item.get("Metric") or ""),
+            str(item.get("Statement") or ""),
+        ),
     )
-    return lines
 
 
-def _filing_evidence_row(filing: FilingUpdateEvidence) -> dict[str, Any]:
+def _target_metric_type(entry: dict[str, Any]) -> str:
+    if entry.get("required_for_core"):
+        return "core"
+    if entry.get("required_for_specialized_indicators"):
+        return "specialized"
+    return "supporting"
+
+
+def _target_metric_mapping_status(statuses: set[str]) -> str:
+    if STATUS_FOUND_MAPPED in statuses or STATUS_FOUND_MAPPED_ALTERNATE in statuses:
+        return "mapped"
+    if STATUS_FOUND_UNMAPPED in statuses:
+        return "found_unmapped"
+    if STATUS_MISSING_TARGET in statuses:
+        return "missing"
+    return "unknown"
+
+
+def _target_metric_coverage_detail(statuses: set[str]) -> str:
+    ordered = [
+        status
+        for status in (
+            STATUS_FOUND_MAPPED,
+            STATUS_FOUND_MAPPED_ALTERNATE,
+            STATUS_FOUND_UNMAPPED,
+            STATUS_MISSING_TARGET,
+        )
+        if status in statuses
+    ]
+    return _join_values(ordered) or "unknown"
+
+
+def _proposed_formula_rows_for_missing_targets(
+    snapshot: dict[str, Any],
+    *,
+    form_type: str,
+) -> list[dict[str, Any]]:
+    missing_metrics = _missing_target_metric_names(snapshot)
+    rows: list[dict[str, Any]] = []
+    for row in snapshot.get("formula_proposal_diagnostics") or []:
+        metric = str(row.get("target_metric_name") or "")
+        if metric not in missing_metrics:
+            continue
+        if row.get("provider_status") not in {PROVIDER_STATUS_PROPOSED, PROVIDER_STATUS_TARGET_ZERO}:
+            continue
+        if not _diagnostic_row_matches_form(row, form_type):
+            continue
+        rows.append(
+            {
+                "Metric": metric,
+                "Statement": row.get("target_primary_statement") or "",
+                "Period context": _formula_period_context_for_report(row.get("period_context"), form_type=form_type),
+                "Provider": _provider_label(row),
+                "Formula": _formula_expression_for_report(metric=metric, row=row),
+                "Validation status": row.get("validation_status") or "",
+                "Confidence": row.get("confidence") or "",
+                "Reason": row.get("reason") or "",
+            }
+        )
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row.get("Metric") or ""),
+            str(row.get("Statement") or ""),
+            str(row.get("Period context") or ""),
+            str(row.get("Provider") or ""),
+            str(row.get("Formula") or ""),
+        ),
+    )
+
+
+def _formula_diagnostic_report_rows(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    return [
+        {
+            "target_metric_name": row.get("target_metric_name") or "",
+            "target_primary_statement": row.get("target_primary_statement") or "",
+            "period_context": row.get("period_context") or "",
+            "provider_name": row.get("provider_name") or "",
+            "provider_status": row.get("provider_status") or "",
+            "target_is_zero": row.get("target_is_zero") or "",
+            "formula_expression": row.get("formula_expression") or "",
+            "components": row.get("components") or "",
+            "validation_status": row.get("validation_status") or "",
+            "agreement_label": row.get("agreement_label") or "",
+            "cache_status": row.get("cache_status") or "",
+            "reason": row.get("reason") or "",
+            "uncertainty": row.get("uncertainty") or "",
+            "error": row.get("error") or "",
+        }
+        for row in snapshot.get("formula_proposal_diagnostics") or []
+    ]
+
+
+def _missing_target_metric_names(snapshot: dict[str, Any]) -> set[str]:
     return {
-        "form": filing.form_type,
-        "accession": filing.accession_number,
-        "filing_date": filing.filing_date,
-        "fiscal_year": filing.fiscal_year,
-        "fiscal_period": filing.fiscal_period,
-        "local_path": filing.local_path,
+        str(row.get("Metric") or "")
+        for row in _target_metric_status_rows(snapshot)
+        if row.get("Mapping status") == "missing"
     }
+
+
+def _diagnostic_row_matches_form(row: dict[str, Any], form_type: str) -> bool:
+    context = str(row.get("period_context") or "").upper()
+    normalized_form = form_type.upper()
+    if normalized_form in context:
+        return True
+    fiscal_period = context.split("|", 1)[0].upper()
+    if normalized_form == "10-K":
+        return " FY" in f" {fiscal_period} "
+    if normalized_form == "10-Q":
+        return any(f" Q{quarter}" in f" {fiscal_period} " for quarter in range(1, 5))
+    return False
+
+
+def _formula_period_context_for_report(value: Any, *, form_type: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    parts = [part.strip() for part in text.split("|") if part.strip()]
+    if not parts:
+        return text
+    fiscal_period = parts[0]
+    return fiscal_period if _diagnostic_context_is_expected_form(fiscal_period, form_type) else text
+
+
+def _diagnostic_context_is_expected_form(fiscal_period: str, form_type: str) -> bool:
+    normalized = fiscal_period.upper()
+    if form_type == "10-K":
+        return " FY" in f" {normalized} "
+    if form_type == "10-Q":
+        return any(f" Q{quarter}" in f" {normalized} " for quarter in range(1, 5))
+    return False
+
+
+def _provider_label(row: dict[str, Any]) -> str:
+    provider = str(row.get("provider_name") or "")
+    model = str(row.get("model_name") or "")
+    if provider and model:
+        return f"{provider} ({model})"
+    return provider or model
+
+
+def _formula_expression_for_report(*, metric: str, row: dict[str, Any]) -> str:
+    if row.get("provider_status") == PROVIDER_STATUS_TARGET_ZERO:
+        return f"{metric} = 0"
+    components = str(row.get("components") or "").strip()
+    if components:
+        return f"{metric} = {_component_formula_rhs(components)}"
+    return str(row.get("formula_expression") or "").strip()
+
+
+def _component_formula_rhs(components: str) -> str:
+    parts = [part.strip() for part in components.split(",") if part.strip()]
+    if parts and parts[0].startswith("+ "):
+        parts[0] = parts[0][2:]
+    return " ".join(parts)
+
+
+def _summary_rows_by_item(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {str(row.get("evidence_item") or ""): row for row in rows}
+
+
+def _count_rows_with_value(rows: list[dict[str, Any]], column: str, value: str) -> int:
+    return sum(row.get(column) == value for row in rows)
+
+
+def _new_filing_summary(filings: tuple[FilingUpdateEvidence, ...]) -> str:
+    if not filings:
+        return "none"
+    return _join_values(
+        tuple(
+            f"{filing.form_type} {filing.accession_number}"
+            for filing in filings
+        )
+    )
+
+
+def _join_sorted_values(values: set[str]) -> str:
+    return _join_values(tuple(sorted(value for value in values if value)))
 
 
 def _update_check_needed(decision: SessionDecision) -> bool:
@@ -3178,164 +2853,6 @@ def _yes_no_unknown(value: bool | None) -> str:
 def _present_report(run: ExperimentRun, *, write_report: bool, full_report: bool) -> None:
     del write_report
     _write_report(run, full_report=full_report)
-
-
-def _compact_counts(snapshot: dict[str, Any], *, indent: str) -> list[str]:
-    counts = snapshot.get("counts") or {}
-    return [f"{indent}{table}: {_format_presentation_number(count)}" for table, count in counts.items()]
-
-
-def _compact_active_window(snapshot: dict[str, Any], *, indent: str) -> list[str]:
-    active = snapshot.get("active_filings_by_form") or {}
-    accessions = snapshot.get("filings_by_form") or {}
-    return [
-        f"{indent}{form_type}: {_format_presentation_number(active.get(form_type, 0))} active filings; "
-        f"{_format_presentation_number(len(accessions.get(form_type, ())))} local accessions"
-        for form_type in FORMS
-    ]
-
-
-def _compact_metric_counts(snapshot: dict[str, Any], *, indent: str) -> list[str]:
-    rows = snapshot.get("metric_counts_by_statement") or []
-    if not rows:
-        return [f"{indent}none"]
-    return [
-        f"{indent}{row['statement_type']}: "
-        f"{_format_presentation_number(row['total_metrics'])} total, "
-        f"{_format_presentation_number(row['active_metrics'])} active"
-        for row in rows
-    ]
-
-
-def _compact_raw_fact_mapping_coverage(snapshot: dict[str, Any], *, indent: str) -> list[str]:
-    rows = snapshot.get("raw_fact_mapping_coverage") or []
-    if not rows:
-        return [f"{indent}none"]
-    by_item = {row["coverage_item"]: row for row in rows}
-    selected_items = (
-        "raw XBRL facts downloaded/stored for ticker",
-        "raw facts mapped into financial_metrics",
-        "raw facts not mapped into financial_metrics",
-        "distinct raw XBRL concepts observed",
-        "distinct unknown raw concepts",
-        "supported SEC/XBRL tags in mapping catalog",
-    )
-    lines = []
-    for item in selected_items:
-        row = by_item.get(item)
-        if row is None:
-            continue
-        note = f" ({row['note']})" if row.get("note") else ""
-        lines.append(f"{indent}{item}: {_format_presentation_number(row['count'])}{note}")
-    return lines or [f"{indent}none"]
-
-
-def _compact_company_industry_labels(snapshot: dict[str, Any], *, indent: str) -> list[str]:
-    rows = snapshot.get("company_industry_labels") or []
-    if not rows:
-        return [f"{indent}none"]
-    row = rows[0]
-    return [
-        f"{indent}assigned labels: {row.get('assigned_industry_labels') or 'none'}",
-        f"{indent}label status: {row.get('label_status') or 'not available'}",
-        f"{indent}assignment source: {row.get('assignment_source') or 'not available'}",
-        f"{indent}assignment reason: {row.get('assignment_reason') or 'not available'}",
-    ]
-
-
-def _compact_target_raw_fact_coverage(snapshot: dict[str, Any], *, indent: str) -> list[str]:
-    rows = snapshot.get("target_raw_fact_coverage") or []
-    if not rows:
-        return [f"{indent}none"]
-    status_counts: dict[str, int] = {}
-    for row in rows:
-        status = str(row.get("status") or "unknown")
-        status_counts[status] = status_counts.get(status, 0) + 1
-    lines = [f"{indent}target concepts checked: {_format_presentation_number(len(rows))}"]
-    for status, count in sorted(status_counts.items()):
-        lines.append(f"{indent}{status}: {_format_presentation_number(count)}")
-    return lines
-
-
-def _compact_debt_recovery(snapshot: dict[str, Any], *, indent: str) -> list[str]:
-    rows = snapshot.get("debt_recovery_summary") or []
-    diagnostics = snapshot.get("debt_recovery_diagnostics") or []
-    if not rows:
-        return [f"{indent}none"]
-    lines = []
-    for row in rows:
-        value = row.get("value")
-        lines.append(
-            f"{indent}{row.get('evidence_item')}: "
-            f"{_format_presentation_number('' if value is None else value)}"
-        )
-    skipped = [
-        str(row.get("skip_reason"))
-        for row in diagnostics
-        if row.get("skip_reason")
-    ]
-    if skipped:
-        lines.append(f"{indent}skip reasons: {_join_values(tuple(sorted(set(skipped))))}")
-    return lines
-
-
-def _compact_formula_proposals(snapshot: dict[str, Any], *, indent: str) -> list[str]:
-    rows = snapshot.get("formula_proposal_summary") or []
-    diagnostics = snapshot.get("formula_proposal_diagnostics") or []
-    if not rows:
-        return [f"{indent}none"]
-    lines = []
-    for row in rows:
-        value = row.get("value")
-        lines.append(
-            f"{indent}{row.get('evidence_item')}: "
-            f"{_format_presentation_number('' if value is None else value)}"
-        )
-    failures = [
-        f"{row.get('provider_name')}={row.get('provider_status')}"
-        for row in diagnostics
-        if row.get("provider_status") in {PROVIDER_STATUS_UNAVAILABLE, PROVIDER_STATUS_FAILED}
-    ]
-    if failures:
-        lines.append(f"{indent}provider issues: {_join_values(tuple(sorted(set(failures))))}")
-    return lines
-
-
-def _compact_adaptive_mapping(snapshot: dict[str, Any], *, indent: str) -> list[str]:
-    inline_rows = snapshot.get("inline_xbrl_coverage") or []
-    candidates = snapshot.get("semantic_mapping_candidates") or []
-    approved = snapshot.get("approved_learned_mappings") or []
-    profile_rows = {
-        row.get("evidence_item"): row
-        for row in snapshot.get("mapping_profile_reuse") or []
-    }
-    discovery = profile_rows.get("semantic discovery status", {})
-    profile = profile_rows.get("approved company concept profile reuse", {})
-    return [
-        f"{indent}approved company concept profile reused: "
-        f"{profile.get('value') or 'not available'}",
-        f"{indent}Inline XBRL facts stored: "
-        f"{_format_presentation_number(sum(int(row.get('raw_fact_rows') or 0) for row in inline_rows))}",
-        f"{indent}semantic discovery status: "
-        f"{discovery.get('value') or 'not available'}",
-        f"{indent}semantic candidates awaiting review: "
-        f"{_format_presentation_number(len(candidates))}",
-        f"{indent}approved learned mappings: {_format_presentation_number(len(approved))}",
-    ]
-
-
-def _before_after_counts(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
-    rows = []
-    for table in before["counts"]:
-        rows.append(
-            {
-                "table": table,
-                "before": before["counts"][table],
-                "after": after["counts"][table],
-                "delta": after["counts"][table] - before["counts"][table],
-            }
-        )
-    return _markdown_table(rows)
 
 
 def _export_csv_artifacts(paths: ExperimentPaths, *, company_id: int | None) -> tuple[str, ...]:
@@ -3431,10 +2948,6 @@ def _fetch_all(
 ) -> list[dict[str, Any]]:
     rows = connection.execute(query, list(params)).fetchall()
     return [dict(row) for row in rows]
-
-
-def _definition_list(values: dict[str, object]) -> list[str]:
-    return [f"- {name}: {value}" for name, value in values.items()]
 
 
 def _markdown_table(rows: list[dict[str, Any]]) -> list[str]:
