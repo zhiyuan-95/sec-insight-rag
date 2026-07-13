@@ -11,13 +11,23 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from src.analyze.prompts import build_xbrl_formula_proposal_prompt
+from src.analyze.prompts import (
+    build_xbrl_final_recommendation_prompt,
+    build_xbrl_formula_proposal_prompt,
+)
 from src.processing.formula_proposals import (
+    FINAL_RECOMMENDATION_RESPONSE_JSON_SCHEMA,
     FORMULA_PROPOSAL_RESPONSE_JSON_SCHEMA,
+    FinalRecommendationProviderResult,
+    FinalRecommendationResponse,
     FormulaProposalProviderResult,
     FormulaProposalResponse,
     FormulaProposalTarget,
+    coerce_final_recommendation_response,
     coerce_formula_proposal_response,
+    final_recommendation_failed_result,
+    final_recommendation_result_from_response,
+    final_recommendation_unavailable_result,
     provider_failed_result,
     provider_result_from_response,
     provider_unavailable_result,
@@ -25,6 +35,7 @@ from src.processing.formula_proposals import (
 
 DEFAULT_GEMINI_FORMULA_PROPOSAL_MODEL = "gemini-2.5-flash"
 DEFAULT_OPENAI_FORMULA_PROPOSAL_MODEL = "gpt-4.1-mini"
+DEFAULT_OPENAI_FINAL_RECOMMENDATION_MODEL = "gpt-5.5"
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 HTTP_TIMEOUT_SECONDS = 120
 
@@ -52,6 +63,15 @@ def default_formula_proposal_provider_configs(
         FormulaProposalProviderConfig("gemini", gemini_model, gemini_api_key),
         FormulaProposalProviderConfig("openai", openai_model, openai_api_key),
     )
+
+
+def default_final_recommendation_provider_config(
+    *,
+    openai_api_key: str | None,
+    openai_model: str = DEFAULT_OPENAI_FINAL_RECOMMENDATION_MODEL,
+) -> FormulaProposalProviderConfig:
+    """Return the configured final recommendation provider."""
+    return FormulaProposalProviderConfig("openai", openai_model, openai_api_key)
 
 
 def generate_formula_proposal(
@@ -93,6 +113,9 @@ def generate_formula_proposal(
                 prompt=prompt,
                 model=provider.model_name,
                 api_key=provider.api_key,
+                schema=FORMULA_PROPOSAL_RESPONSE_JSON_SCHEMA,
+                schema_name="xbrl_formula_proposal",
+                system_content="Return only valid JSON for the requested XBRL formula proposal schema.",
             )
         else:
             return provider_unavailable_result(
@@ -113,6 +136,74 @@ def generate_formula_proposal(
         provider_name=provider.provider_name,
         model_name=provider.model_name,
         target=target,
+        response=response,
+    )
+
+
+def generate_final_recommendation(
+    *,
+    ticker: str,
+    cik: str,
+    target_metric_name: str,
+    statement_type: str,
+    period_context: str,
+    decision_context: dict[str, object],
+    provider: FormulaProposalProviderConfig,
+    generate_json: FormulaJsonGenerator | None = None,
+) -> FinalRecommendationProviderResult:
+    """Generate one provider final recommendation or a reportable failure row."""
+    if not provider.api_key:
+        return final_recommendation_unavailable_result(
+            provider_name=provider.provider_name,
+            model_name=provider.model_name,
+            target_metric_name=target_metric_name,
+            statement_type=statement_type,
+            period_context=period_context,
+            reason=f"{provider.provider_name} API key is not configured",
+        )
+    if provider.provider_name != "openai":
+        return final_recommendation_unavailable_result(
+            provider_name=provider.provider_name,
+            model_name=provider.model_name,
+            target_metric_name=target_metric_name,
+            statement_type=statement_type,
+            period_context=period_context,
+            reason=f"unsupported final recommendation provider: {provider.provider_name}",
+        )
+    prompt = build_xbrl_final_recommendation_prompt(
+        ticker=ticker,
+        cik=cik,
+        decision_context=decision_context,
+    )
+    try:
+        if generate_json is not None:
+            payload = generate_json(prompt, FinalRecommendationResponse, provider.model_name)
+        else:
+            payload = _generate_openai_json(
+                prompt=prompt,
+                model=provider.model_name,
+                api_key=provider.api_key,
+                schema=FINAL_RECOMMENDATION_RESPONSE_JSON_SCHEMA,
+                schema_name="xbrl_final_recommendation",
+                system_content="Return only valid JSON for the requested XBRL final recommendation schema.",
+                temperature=None,
+            )
+        response = coerce_final_recommendation_response(payload)
+    except Exception as exc:
+        return final_recommendation_failed_result(
+            provider_name=provider.provider_name,
+            model_name=provider.model_name,
+            target_metric_name=target_metric_name,
+            statement_type=statement_type,
+            period_context=period_context,
+            error=str(exc),
+        )
+    return final_recommendation_result_from_response(
+        provider_name=provider.provider_name,
+        model_name=provider.model_name,
+        target_metric_name=target_metric_name,
+        statement_type=statement_type,
+        period_context=period_context,
         response=response,
     )
 
@@ -138,26 +229,36 @@ def _generate_gemini_json(*, prompt: str, model: str, api_key: str) -> object:
     return getattr(response, "text", "")
 
 
-def _generate_openai_json(*, prompt: str, model: str, api_key: str) -> object:
+def _generate_openai_json(
+    *,
+    prompt: str,
+    model: str,
+    api_key: str,
+    schema: dict[str, object],
+    schema_name: str,
+    system_content: str,
+    temperature: float | None = 0,
+) -> object:
     payload = {
         "model": model,
         "input": [
             {
                 "role": "system",
-                "content": "Return only valid JSON for the requested XBRL formula proposal schema.",
+                "content": system_content,
             },
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0,
         "text": {
             "format": {
                 "type": "json_schema",
-                "name": "xbrl_formula_proposal",
+                "name": schema_name,
                 "strict": True,
-                "schema": FORMULA_PROPOSAL_RESPONSE_JSON_SCHEMA,
+                "schema": schema,
             }
         },
     }
+    if temperature is not None:
+        payload["temperature"] = temperature
     data = _post_json(
         OPENAI_RESPONSES_URL,
         payload,

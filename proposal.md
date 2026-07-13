@@ -49,8 +49,14 @@ src/
    * Assign reusable hard industry labels from the latest 10-K Item 1 Business section with Gemini when configured, and reclassify when a newer 10-K changes the evidence.
    * Select target XBRL concept sets from common base candidates plus the industry-specific candidates for the company's approved hard labels.
    * Map selected raw XBRL facts into business-friendly base metrics grouped by financial statement type.
+<<<<<<< HEAD
    * Run direct mapping from deterministic catalog entries and approved learned mappings only.
    * Do not generate model-similarity mapping candidates; only approved global, industry, or company-scoped mappings can populate base metrics.
+=======
+   * Run deterministic catalog mapping first, then rank unknown concepts only for missing target XBRL concepts.
+   * Store semantic matches as review-only candidates; only approved global, industry, or company-scoped mappings can populate base metrics.
+   * Resolve unresolved mapping coverage at the internal-metric level before review, so an LLM or reviewer chooses among a semantic candidate, a formula from raw concepts, a zero-target decision, or no evidence for one metric at a time.
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
    * Reuse an approved company concept profile on later ingestions when it still covers the required target metrics.
    * Preserve traceability from each base metric back to the source raw XBRL fact and filing.
 4. Derived indicator calculation
@@ -252,8 +258,14 @@ Example distinction:
    * Select the target XBRL concept set from common base candidates plus industry-specific candidates for every approved hard label.
    * Map selected raw XBRL facts into business-friendly base metrics by statement type through deterministic catalog entries and approved learned mappings.
    * Derive and reuse an approved company concept profile from approved global, industry, and company-scoped mappings.
+<<<<<<< HEAD
    * Leave unresolved targets as missing for base metrics; LLM formula proposal evidence remains report-only.
    * Do not create model-generated mapping candidates or promote formula proposals into base metrics.
+=======
+   * Run semantic mapping only after deterministic mapping leaves missing target XBRL concepts.
+   * Store semantic mapping candidates separately from approved mapping decisions; candidates must not create base metrics.
+   * Present missing coverage as one internal-metric resolution choice rather than separate decisions for each target tag.
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
    * Preserve links from each base metric back to the source filing and raw XBRL fact.
    * Do not calculate derived indicators in this milestone.
 3. Indicator engine

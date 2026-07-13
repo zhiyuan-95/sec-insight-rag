@@ -79,7 +79,7 @@ src/retrieval/service.py
 Generated local data:
 
 data_store/filings/          downloaded SEC filing HTML
-data_store/knowledge/        local embedding cache, target vectors, formula proposal cache, and versioned retrieval indexes
+data_store/knowledge/        local embedding cache, target vectors, formula proposal and final recommendation caches, and versioned retrieval indexes
 stock_data.db                SQLite database
   raw_xbrl_facts             companyfacts plus Inline XBRL facts with context and dimensions
   companies                  local company registry
@@ -200,6 +200,7 @@ data_store/
 - `data/exports/`: Generated CSV export location.
 - `data_store/filings/`: Downloaded SEC filing documents.
 - `data_store/knowledge/formula_proposals/`: Generated exact-context cache for report-only LLM formula proposal decisions. It stores structured successful formula, zero-target, or `no_formula` decisions, not recovered metrics.
+- `data_store/knowledge/final_recommendations/`: Generated exact-context cache for Section 4 report-only final recommendation decisions. It stores the selected option from period-level formula, semantic, zero, or no-recommendation choices, not approved mappings or recovered metrics.
 
 ## Documentation
 
@@ -245,13 +246,19 @@ experiments/
 - `experiments/MS2/experiment_proposal.md`: Human-inspection proposal for the Milestone 2 SEC/XBRL ingestion and normalization experiment. It defines input cases, intended terminal output, artifacts to inspect, edge cases, and expected outcomes.
 - `experiments/MS2/milestone2_ingestion_showcase.py`: Runnable Milestone 2 experiment script that prints the SEC/XBRL ingestion and normalization showcase described by the Milestone 2 proposal.
 - `experiments/storage/`: Generated shared experiment storage. Current MS2.5 live runs use `experiments/storage/experiment.db` and `experiments/storage/filings/` so later milestone experiments can inspect the same isolated state without touching `stock_data.db`.
+<<<<<<< HEAD
 - `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 ingestion and mapping examination harness. It covers persistent isolated storage, update checks, active-window evidence, target metric mapping status, approved learned mappings, report-only LLM formula proposal evidence, saved reports, and SQLite/CSV evidence.
 - `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that saves `experiments/MS2_5/milestone25_mapping_report_<TICKER>.md` without printing the report body. The saved Markdown report keeps the fixed Plan 2.5 target mapping shape: compact run summary, XBRL concept counts provided to formula generation, target metric mapping status, and report-only proposed formula rows split into 10-K and 10-Q subsections. Formula proposal provider calls run by default; `--no-formula-proposals` skips them, `--formula-proposals` is accepted for compatibility, and `--full-report` does not append the older full lineage appendix. The script preserves `experiments/storage/experiment.db`, writes filing downloads under `experiments/storage/filings/`, exports supporting CSVs under `data/exports/ms2_5/`, and stores formula proposal cache entries under `data_store/knowledge/formula_proposals/` unless `KNOWLEDGE_STORAGE_DIR` overrides the location.
+=======
+- `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 ingestion and mapping examination harness. It covers persistent isolated storage, update checks, active-window evidence, persisted industry labels, target and raw-fact coverage, Inline XBRL extensions, semantic mapping candidates, approved learned mappings, report-only LLM formula proposal diagnostics, unknown/alternate tags, financial metric lineage, saved reports, and SQLite/CSV evidence.
+- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that saves `experiments/MS2_5/milestone25_mapping_report_<TICKER>.md` without printing the report body. The saved report is a compact Plan 2.5 target mapping report with section 0 compact summary, section 0A distinct selected XBRL concept counts by period for formula generation, section 1 mapped/missing target metric status sorted by metric type with common-base or actual hard-industry labels, section 2 semantic candidates for missing targets split into 10-K and 10-Q active-window subsections with all-active coverage abbreviated to period ranges, section 3 proposed formula evidence for missing targets split into 10-K and 10-Q active-window subsections, and section 4 period-level final recommendations split into 10-K and 10-Q subsections. Section 4 shows the semantic candidate, formula-only proposed formula evidence, and possible zero evidence that apply to the same metric and period group, and it collapses identical solutions across periods into one compact Period context. Section 4 final recommendations are selected by a separate OpenAI final recommendation model from only the period's formula, semantic, zero, or no-recommendation options and show the selected value itself: formula text, semantic candidate, or `0` for zero-target recommendations. Periods with the same metric, statement, and identical option set share one final recommendation call, then the selected answer is expanded back to each covered period. If the final model is unavailable, fails, or chooses an invalid option, Section 4 shows `needs_review`. If Section 3 annotates a long formula as `[F1]`, Section 4 reuses that annotation and Section 3 lists the full formula below the table. Section 0A dedupes provider/model calls, uses a yearly 10-K table, and uses a year-by-quarter 10-Q matrix. Section 3 agreement rows collapse only when the full provider/formula decision set is identical across periods. When providers disagree for a period, Section 3 shows separate provider rows instead of putting multiple provider formulas in the same Formula cell; those provider-specific disagreement rows may still collapse across periods when the same provider gives the same formula. Section 3 does not add Target concept, Components, or recommendation columns, and its period context uses compact filing labels such as `2023-2025` for 10-K rows and `2021 q1 - 2021 q3` for 10-Q rows instead of raw period type/unit/form suffixes. 10-Q report labels do not show Q4. Displayed concept values strip taxonomy prefixes such as `us-gaap:` and `custom:`. The compact summary records setup ingestion and unchanged-company reuse durations for performance review evidence. During formula proposal generation, the terminal prints missing-target count, selected missing metrics, period-context progress, and final context totals while still leaving provider-level cache details and the report body out of the terminal. After formula proposals complete, the terminal prints final recommendation model, grouped recommendation request progress with option counts, period option context count, and selected/no-recommendation/unavailable/failed completion counts. Report-only formula proposal provider calls run by default, use only active 10-K and 10-Q filing-period raw facts, collapse duplicate missing target tags to one missing metric, and group identical raw-concept pools so each provider is called once per metric/pool while the report lists the covered periods. Use `--no-formula-proposals` to skip provider calls, and `--formula-proposals` remains a compatibility no-op. `--full-report` is retained as a compatibility flag and does not append the old diagnostic appendices. The script preserves `experiments/storage/experiment.db`, writes filing downloads under `experiments/storage/filings/`, exports supporting CSVs under `data/exports/ms2_5/`, and stores formula proposal cache entries under `data_store/knowledge/formula_proposals/` and final recommendation cache entries under `data_store/knowledge/final_recommendations/` unless `KNOWLEDGE_STORAGE_DIR` overrides the location.
+- `experiments/MS2_5/prewarm_target_embeddings.py`: Utility script that precomputes target XBRL concept candidate embeddings for common-base and all hard-industry catalog concepts into `data_store/knowledge/concept_mapping/target_embeddings.json`.
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 - `experiments/MS3/experiment_proposal.md`: Human-inspection proposal for the Milestone 3 indicator engine experiment. It defines active accession-window scope, yearly and quarterly indicator tables for the requested catalog, skipped-period reasons, formulas, and source-metric traceability output.
 - `experiments/MS3/milestone3_indicator_engine.py`: Runnable Milestone 3 experiment script that reads stored `financial_indicators` and writes a `.txt` report under `experiments/MS3` with active accession-window scope, yearly and quarterly indicator tables for the requested ticker or tickers, skipped reasons, formulas, and source traceability.
 - `experiments/MS4/experiment_proposal.md`: Human-inspection proposal for the Milestone 4 deterministic financial analytics experiment. It defines trend, comparison, gap, outlier, and chart-ready output.
 - `experiments/MS5/experiment_proposal.md`: Human-inspection proposal for the Milestone 5 retrieval pipeline experiment. It defines active filing coverage, section-aware chunking, generation state, hybrid retrieval metadata, source lineage, and saved text-report output.
-- `experiments/MS5/milestone5_retrieval_pipeline.py`: Runnable local retrieval experiment that builds or reuses a company index, accepts repeatable queries, saves `experiment_report_<TICKER>.txt`, and prints only a brief terminal summary by default.
+- `experiments/MS5/milestone5_retrieval_pipeline.py`: Runnable local retrieval experiment that builds or reuses a company index, accepts repeatable queries, saves `experiment_report_<TICKER>.txt`, and prints only a brief terminal summary by default. The saved report labels retrieval synchronization duration, initial cold-query duration, subsequent warm-query durations, active filing count, chunk count, embedding model, chunk settings, and whether the embedding cache existed before sync.
 - `experiments/MS6/experiment_proposal.md`: Human-inspection proposal for the Milestone 6 Gemini integration experiment. It defines model, prompt-source, prompt-preview, and call-metadata output.
 - `experiments/MS7/experiment_proposal.md`: Human-inspection proposal for the Milestone 7 RAG analysis experiment. It defines evidence inventory, answer section separation, references, and unsupported-claim checks.
 
@@ -348,16 +355,28 @@ Boundary rule:
 
 ### `src/processing/`
 
+<<<<<<< HEAD
 Companyfacts and Inline XBRL normalization, active-window selection, canonical
 target coverage diagnostics, deterministic base metric mapping with approved
 learned mapping reuse, and report-only missing metric recovery diagnostics.
+=======
+Companyfacts and Inline XBRL normalization, active-window selection, governed
+semantic candidate generation, deterministic base metric mapping, and
+metric-first coverage resolution for mapping review.
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 
 Current files:
 
 - `xbrl_normalizer.py`: Defines `NormalizedFact`, `normalize_companyfacts`, `normalize_fact_entry`, and duplicate fact marking.
 - `inline_xbrl.py`: Converts Arelle filing models into normalized issuer-extension and dimensional raw facts without fetching SEC data or writing storage.
+<<<<<<< HEAD
 - `metric_targets.py`: Builds canonical target definitions from the mapping catalog and reports which canonical metrics remain missing after direct catalog and approved learned mappings.
 - `formula_proposals.py`: Builds target-unit-compatible, period-scoped, statement-bucketed raw fact contexts for report-only LLM formula proposals, computes exact reusable context fingerprints, normalizes provider responses, caches successful structured formula, zero-target, or no-formula decisions, and deterministically validates formula components or cited zero-evidence facts against the same-period raw XBRL fact pool.
+=======
+- `semantic_mapping.py`: Builds canonical target definitions, prewarms and caches candidate-level target XBRL concept embeddings, and ranks review-only candidates for missing metrics.
+- `formula_proposals.py`: Builds target-unit-compatible, statement-bucketed raw fact contexts for report-only LLM formula proposals, collapses identical period raw-concept pools into one provider context with period coverage, computes exact reusable formula and final-recommendation context fingerprints, normalizes provider responses, caches successful structured formula, zero-target, no-formula, or final recommendation decisions, and deterministically validates formula components or cited zero-evidence facts against a representative same-period raw XBRL fact pool.
+- `metric_coverage.py`: Collapses tag-level target coverage, semantic candidates, and formula/zero diagnostics into one metric-level review surface. It does not approve mappings, persist recovered values, or feed indicators.
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 - `active_window.py`: Selects the active analysis window: latest 5 fiscal years of 10-K data and latest 12 quarters of 10-Q data.
 - `base_metrics.py`: Maps clean supported raw XBRL facts into business-friendly base metric records using catalog-backed approved mapping candidates.
 - `metric_recovery.py`: Produces report-only recovery diagnostics for missing debt metrics from existing mapped base metric components; it does not persist recovered values or feed indicators.
@@ -380,6 +399,7 @@ Key responsibilities:
 - Preserve raw values separately from parsed numeric values.
 - Normalize CIK, taxonomy, concept, unit, periods, fiscal year/period, form, filing date, accession number, frame, and source metadata.
 - Preserve namespace URI, context ID, dimensions, consolidation state, concept balance, numeric type, and source document for Inline XBRL facts.
+<<<<<<< HEAD
 - Reuse approved learned mappings from `xbrl_concept_mappings` as deterministic mapping inputs when matching observed raw XBRL concepts to base metrics.
 - Leave unresolved target metrics as report evidence and optional report-only formula proposal inputs; do not generate model-similarity mapping candidates.
 - Validate report-only LLM formula proposals for all unresolved targets against
@@ -389,6 +409,22 @@ Key responsibilities:
   provider panel, summarizes the XBRL concepts provided to formula generation
   by period, and shows compact proposed formula rows with provider, period,
   validation status, confidence, and reason.
+=======
+- Prewarm target XBRL concept candidate embeddings for common-base and all hard-industry catalog concepts.
+- Generate candidate-level semantic mapping candidates without promoting them into base metrics.
+- Resolve coverage at the internal-metric level before human or LLM review:
+  mapped metrics need no action, approved alternate concepts count as covered,
+  and unresolved metrics expose one review choice among semantic candidate,
+  formula-from-raw-concepts, zero-target, or no-evidence.
+- Validate report-only LLM formula proposals for all unresolved targets against
+  period-scoped raw XBRL fact pools, including found target facts, mapped
+  metrics, approved alternates, and unknown/unmapped facts. The MS2.5 report
+  sends active target-unit-compatible contexts to the provider panel, reuses
+  exact provider results when the target/model/raw-concept pool is identical
+  across periods, keeps the full eligible fact pool visible as evidence, and
+  shows target primary statement, period context, cache status, provider output,
+  component or zero-evidence facts, and deterministic validation status.
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 - Produce report-only debt recovery diagnostics for missing `debt_current` and
   `debt_noncurrent` from already mapped component metrics, while keeping
   recovered values out of `financial_metrics` and indicators.
@@ -494,18 +530,28 @@ LLM/RAG reasoning layer.
 Current files:
 
 - `industry_classification.py`: Gemini-backed hard-industry classifier for 10-K Item 1 Business, with strict label validation, high-confidence label keeping, and low-confidence label ignoring.
-- `xbrl_formula_proposals.py`: Optional provider orchestration for report-only missing-target formula proposals through Gemini and OpenAI `gpt-4.1-mini`; provider failures are reported rather than persisted.
-- `prompts.py`: Prompt templates, including the hard-industry classification prompt and statement-first, period-scoped XBRL formula proposal prompt.
+- `xbrl_formula_proposals.py`: Provider orchestration for report-only missing-target formula proposals through Gemini and OpenAI `gpt-4.1-mini`, plus the separate OpenAI `gpt-5.5` final recommendation choice for Section 4; provider failures are reported rather than persisted.
+- `prompts.py`: Prompt templates, including the hard-industry classification prompt, statement-first period-scoped XBRL formula proposal prompt, and period-level final recommendation prompt.
 - `__init__.py`: Package marker.
 
 Current status:
 
 - Gemini hard-industry classification is implemented for ingestion label assignment.
+<<<<<<< HEAD
 - Report-only XBRL formula proposal calls are implemented for the MS2.5 report
   and run by default unless skipped with `--no-formula-proposals`. Formula
   proposal prompts use representative target-unit-compatible period contexts,
   statement-first component selection, optional evidence-backed zero-target
   decisions, and exact context cache reuse for successful structured decisions.
+=======
+- Report-only XBRL formula proposal calls and Section 4 final recommendation
+  calls are implemented for the MS2.5 report. Formula proposal prompts use
+  representative target-unit-compatible period contexts, statement-first
+  component selection, optional evidence-backed zero-target decisions, and
+  exact context cache reuse for successful structured decisions. Final
+  recommendation prompts choose exactly one supplied period-level option or
+  no recommendation, and use a separate exact-context cache.
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 - Gemini/RAG answer synthesis is not implemented yet.
 
 Planned responsibilities:
@@ -568,7 +614,7 @@ The following paths may exist locally but should not be treated as source archit
 - `src/**/__pycache__/`
 - `stock_data.db`
 - downloaded files under `data_store/filings/`
-- generated knowledge cache files under `data_store/knowledge/`, including formula proposal cache entries
+- generated knowledge cache files under `data_store/knowledge/`, including formula proposal and final recommendation cache entries
 - generated exports under `data/exports/`
 - generated shared experiment storage under `experiments/storage/`, including `experiment.db` and `filings/`
 - generated Milestone 2.5 report artifacts: `experiments/MS2_5/milestone25_mapping_report_*.md`

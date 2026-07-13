@@ -76,6 +76,11 @@ Save the detailed report to `experiments/MS5/experiment_report_<TICKER>.txt`
 unless `--report-path` is provided. The terminal should show only one brief
 completion or failure summary. Dependency progress and warnings should be
 captured in the report unless `--verbose` is used.
+The report should expose evidence needed to review the local MVP performance
+expectations without adding pass/fail labels: ticker, active filing count, chunk
+count, embedding model, chunk size, chunk overlap, whether the embedding model
+cache existed before sync, retrieval synchronization duration, first cold-query
+duration, and subsequent warm-query durations.
 
 ```text
 Milestone 5 Experiment: Retrieval Pipeline
@@ -121,7 +126,8 @@ Expected Outcome:
 4. Fallback-section and parsing warnings
 5. Top retrieved evidence with vector, BM25, and fused scores
 6. Full source lineage and readable previews
-7. Artifact integrity and captured dependency output
+7. Cold and warm retrieval timing labels
+8. Artifact integrity and captured dependency output
 
 ## Implementation Guidance
 

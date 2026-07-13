@@ -9,6 +9,10 @@ from src.config import Settings
 from src.ingestion import FilingMetadata
 from src.processing import NormalizedFact
 from src.processing.formula_proposals import (
+    FINAL_OPTION_FORMULA,
+    FINAL_OPTION_ZERO,
+    FINAL_RECOMMENDATION_STATUS_SELECTED,
+    FinalRecommendationProviderResult,
     FormulaProposalComponentResponse,
     FormulaProposalProviderResult,
 )
@@ -40,6 +44,830 @@ def _load_experiment_module() -> ModuleType:
     return module
 
 
+def _report_section(report: str, start: str, end: str | None = None) -> str:
+    section = report.split(start, 1)[1]
+    if end is not None:
+        section = section.split(end, 1)[0]
+    return section
+
+
+def _assert_formula_progress_output(output: str) -> None:
+    assert "[formula proposals]" in output
+    assert "missing target(s) found" in output
+    assert "Missing targets selected:" in output
+    assert "Handling missing target 1/1:" in output
+    assert "Context 1/" in output
+    assert "Formula proposal generation complete:" in output
+    assert "reused cached recommendation" not in output
+    assert "reused identical context from this run" not in output
+
+
+def _assert_final_recommendation_progress_output(output: str) -> None:
+    assert "[final recommendations] Final recommendation model: openai (gpt-5.5)." in output
+    assert "[final recommendations] Final recommendation generation starting:" in output
+    assert "[final recommendations] Handling final recommendation 1/" in output
+    assert "[final recommendations] Final recommendation generation complete:" in output
+    assert "reused cached recommendation" not in output
+    assert "reused identical context from this run" not in output
+
+
+def _final_recommendation_row(
+    *,
+    metric: str,
+    statement: str,
+    period_context: str,
+    option_type: str,
+    option_id: str,
+    final_recommendation: str,
+    provider_status: str = FINAL_RECOMMENDATION_STATUS_SELECTED,
+    form_type: str = "",
+) -> dict[str, object]:
+    row = {
+        "target_metric_name": metric,
+        "statement_type": statement,
+        "period_context": period_context,
+        "provider_name": "openai",
+        "model_name": "gpt-5.5",
+        "provider_status": provider_status,
+        "selected_option_type": option_type,
+        "selected_option_id": option_id,
+        "final_recommendation": final_recommendation,
+        "confidence": 0.9,
+        "reason": "test final choice",
+        "uncertainty": "test",
+    }
+    if form_type:
+        row["form_type"] = form_type
+    return row
+
+
+def _fake_final_provider_config(settings):
+    return SimpleNamespace(provider_name="openai", model_name="gpt-5.5", api_key="test")
+
+
+def _fake_generate_final_recommendation(option_type: str):
+    def generate(
+        *,
+        ticker: str,
+        cik: str,
+        target_metric_name: str,
+        statement_type: str,
+        period_context: str,
+        decision_context,
+        provider,
+    ) -> FinalRecommendationProviderResult:
+        option = next(
+            option
+            for option in decision_context["options"]
+            if option.get("option_type") == option_type
+        )
+        return FinalRecommendationProviderResult(
+            provider_name=provider.provider_name,
+            model_name=provider.model_name,
+            target_metric_name=target_metric_name,
+            statement_type=statement_type,
+            period_context=period_context,
+            provider_status=FINAL_RECOMMENDATION_STATUS_SELECTED,
+            selected_option_type=str(option["option_type"]),
+            selected_option_id=str(option["option_id"]),
+            final_recommendation=str(option["value"]),
+            confidence=0.9,
+            reason="test final choice",
+            uncertainty="test",
+        )
+
+    return generate
+
+
+def test_milestone25_formula_rows_collapse_same_recommended_components() -> None:
+    experiment = _load_experiment_module()
+    snapshot = {
+        "metric_coverage_resolution": [
+            {
+                "internal_metric_name": "debt_current",
+                "statement_type": "balance_sheet",
+                "coverage_status": "needs_llm_resolution",
+            }
+        ],
+        "semantic_mapping_candidates": [
+            {
+                "metric_name": "debt_current",
+                "statement_type": "balance_sheet",
+                "observed_xbrl_concept": "us-gaap:LongTermDebtCurrent",
+                "semantic_similarity": "0.91",
+                "period_coverage_10k": "active 10-K periods: 2024 FY - 2025 FY",
+            }
+        ],
+        "formula_proposal_diagnostics": [
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "target_xbrl_concept": "us-gaap:DebtCurrent",
+                "period_context": "10-K periods: 2025 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "gemini",
+                "model_name": "gemini-2.5-flash",
+                "provider_status": "proposed",
+                "formula_expression": "DebtCurrent = + us-gaap:LongTermDebtCurrent",
+                "components": "+ us-gaap:LongTermDebtCurrent",
+                "validation_status": "validated_component_pool",
+                "confidence": "0.80",
+                "reason": "same component evidence",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "target_xbrl_concept": "us-gaap:DebtCurrent",
+                "period_context": "10-K periods: 2025 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "openai",
+                "model_name": "gpt-4.1-mini",
+                "provider_status": "proposed",
+                "formula_expression": "debt_current = LongTermDebtCurrent",
+                "components": "+ us-gaap:LongTermDebtCurrent",
+                "validation_status": "validated_component_pool",
+                "confidence": "0.90",
+                "reason": "same component evidence",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "target_xbrl_concept": "us-gaap:DebtCurrent",
+                "period_context": "10-K periods: 2024 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "openai",
+                "model_name": "gpt-4.1-mini",
+                "provider_status": "proposed",
+                "formula_expression": "debt_current = LongTermDebtCurrent",
+                "components": "+ us-gaap:LongTermDebtCurrent",
+                "validation_status": "validated_component_pool",
+                "confidence": "0.90",
+                "reason": "same component evidence",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "target_xbrl_concept": "us-gaap:DebtCurrent",
+                "period_context": "10-K periods: 2024 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "gemini",
+                "model_name": "gemini-2.5-flash",
+                "provider_status": "proposed",
+                "formula_expression": "DebtCurrent = + us-gaap:LongTermDebtCurrent",
+                "components": "+ us-gaap:LongTermDebtCurrent",
+                "validation_status": "validated_component_pool",
+                "confidence": "0.80",
+                "reason": "same component evidence",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "target_xbrl_concept": "us-gaap:DebtCurrent",
+                "period_context": "10-Q periods: 2021 Q1 - 2025 Q4 / instant / USD / 10-Q",
+                "forms": "10-Q",
+                "provider_name": "gemini",
+                "model_name": "gemini-2.5-flash",
+                "provider_status": "proposed",
+                "formula_expression": "DebtCurrent = + us-gaap:LongTermDebtCurrent",
+                "components": "+ us-gaap:LongTermDebtCurrent",
+                "validation_status": "validated_component_pool",
+                "confidence": "0.80",
+                "reason": "same component evidence",
+            },
+        ],
+        "final_recommendation_diagnostics": [
+            _final_recommendation_row(
+                metric="debt_current",
+                statement="balance_sheet",
+                period_context="2025",
+                option_type=FINAL_OPTION_FORMULA,
+                option_id="formula_1",
+                final_recommendation="debt_current = LongTermDebtCurrent",
+            ),
+            _final_recommendation_row(
+                metric="debt_current",
+                statement="balance_sheet",
+                period_context="2024",
+                option_type=FINAL_OPTION_FORMULA,
+                option_id="formula_1",
+                final_recommendation="debt_current = LongTermDebtCurrent",
+            ),
+            *[
+                _final_recommendation_row(
+                    metric="debt_current",
+                    statement="balance_sheet",
+                    period_context=f"{year} q{quarter}",
+                    option_type=FINAL_OPTION_FORMULA,
+                    option_id="formula_1",
+                    final_recommendation="debt_current = LongTermDebtCurrent",
+                )
+                for year in range(2021, 2026)
+                for quarter in (1, 2, 3)
+            ],
+        ],
+    }
+
+    formula_rows = experiment._proposed_formula_rows_for_missing_targets(
+        snapshot,
+        form_type="10-K",
+    )
+    quarterly_formula_rows = experiment._proposed_formula_rows_for_missing_targets(
+        snapshot,
+        form_type="10-Q",
+    )
+    final_rows = experiment._final_recommendation_rows_for_missing_targets(
+        snapshot,
+        form_type="10-K",
+    )
+    quarterly_final_rows = experiment._final_recommendation_rows_for_missing_targets(
+        snapshot,
+        form_type="10-Q",
+    )
+
+    assert formula_rows == [
+        {
+            "Metric": "debt_current",
+            "Statement": "balance_sheet",
+            "Period context": "2024-2025",
+            "Providers": "gemini (gemini-2.5-flash); openai (gpt-4.1-mini)",
+            "Formula": "debt_current = LongTermDebtCurrent",
+            "Validation status": "validated_component_pool",
+            "Confidence": "0.80; 0.90",
+            "Reason": "same component evidence",
+        }
+    ]
+    assert quarterly_formula_rows == [
+        {
+            "Metric": "debt_current",
+            "Statement": "balance_sheet",
+            "Period context": (
+                "2021 q1 - 2021 q3, 2022 q1 - 2022 q3, 2023 q1 - 2023 q3, "
+                "2024 q1 - 2024 q3, 2025 q1 - 2025 q3"
+            ),
+            "Providers": "gemini (gemini-2.5-flash)",
+            "Formula": "debt_current = LongTermDebtCurrent",
+            "Validation status": "validated_component_pool",
+            "Confidence": "0.80",
+            "Reason": "same component evidence",
+        }
+    ]
+    assert "Recommendation" not in formula_rows[0]
+    assert "Target concept" not in formula_rows[0]
+    assert "Components" not in formula_rows[0]
+    assert "Components" not in quarterly_formula_rows[0]
+    assert "/" not in formula_rows[0]["Period context"]
+    assert "/" not in quarterly_formula_rows[0]["Period context"]
+    assert final_rows == [
+        {
+            "Metric": "debt_current",
+            "Statement": "balance_sheet",
+            "Period context": "2024-2025",
+            "Semantic candidate": "LongTermDebtCurrent (0.91)",
+            "Formula evidence": "debt_current = LongTermDebtCurrent",
+            "Zero evidence": "",
+            "Final recommendation": "debt_current = LongTermDebtCurrent",
+        }
+    ]
+    assert quarterly_final_rows == [
+        {
+            "Metric": "debt_current",
+            "Statement": "balance_sheet",
+            "Period context": (
+                "2021 q1 - 2021 q3, 2022 q1 - 2022 q3, 2023 q1 - 2023 q3, "
+                "2024 q1 - 2024 q3, 2025 q1 - 2025 q3"
+            ),
+            "Semantic candidate": "",
+            "Formula evidence": "debt_current = LongTermDebtCurrent",
+            "Zero evidence": "",
+            "Final recommendation": "debt_current = LongTermDebtCurrent",
+        }
+    ]
+    assert quarterly_final_rows[0]["Semantic candidate"] == ""
+    assert "q4" not in quarterly_formula_rows[0]["Period context"]
+    assert "q4" not in quarterly_final_rows[0]["Period context"]
+    assert "Final recommendation" in final_rows[0]
+
+
+def test_milestone25_final_recommendations_group_identical_period_options(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    experiment = _load_experiment_module()
+    snapshot = {
+        "metric_coverage_resolution": [
+            {
+                "internal_metric_name": "debt_current",
+                "statement_type": "balance_sheet",
+                "coverage_status": "needs_llm_resolution",
+            }
+        ],
+        "semantic_mapping_candidates": [],
+        "formula_proposal_diagnostics": [
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "period_context": "10-K periods: 2025 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "gemini",
+                "model_name": "gemini-2.5-flash",
+                "provider_status": "proposed",
+                "components": "+ us-gaap:LongTermDebtCurrent",
+                "validation_status": "validated_component_pool",
+                "confidence": "0.90",
+                "reason": "same component evidence",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "period_context": "10-K periods: 2024 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "gemini",
+                "model_name": "gemini-2.5-flash",
+                "provider_status": "proposed",
+                "components": "+ us-gaap:LongTermDebtCurrent",
+                "validation_status": "validated_component_pool",
+                "confidence": "0.90",
+                "reason": "same component evidence",
+            },
+        ],
+    }
+    calls: list[str] = []
+
+    def fake_generate_final_recommendation(
+        *,
+        ticker: str,
+        cik: str,
+        target_metric_name: str,
+        statement_type: str,
+        period_context: str,
+        decision_context,
+        provider,
+    ) -> FinalRecommendationProviderResult:
+        calls.append(period_context)
+        option = decision_context["options"][0]
+        return FinalRecommendationProviderResult(
+            provider_name=provider.provider_name,
+            model_name=provider.model_name,
+            target_metric_name=target_metric_name,
+            statement_type=statement_type,
+            period_context=period_context,
+            provider_status=FINAL_RECOMMENDATION_STATUS_SELECTED,
+            selected_option_type=str(option["option_type"]),
+            selected_option_id=str(option["option_id"]),
+            final_recommendation=str(option["value"]),
+            confidence=0.9,
+            reason="test grouped final choice",
+            uncertainty="test",
+        )
+
+    monkeypatch.setattr(experiment, "_final_recommendation_provider_config", _fake_final_provider_config)
+    monkeypatch.setattr(experiment, "_final_recommendation_cache_dir", lambda settings: tmp_path)
+    monkeypatch.setattr(experiment, "generate_final_recommendation", fake_generate_final_recommendation)
+    progress: list[str] = []
+
+    result = experiment._final_recommendation_snapshot(
+        ticker="TEST",
+        cik="0000000001",
+        snapshot=snapshot,
+        enabled=True,
+        settings=None,
+        progress=progress.append,
+    )
+
+    assert calls == ["2024-2025"]
+    assert len(result["diagnostics"]) == 2
+    assert {row["period_context"] for row in result["diagnostics"]} == {"2024", "2025"}
+    assert {row["form_type"] for row in result["diagnostics"]} == {"10-K"}
+    assert all(
+        row["final_recommendation"] == "debt_current = LongTermDebtCurrent"
+        for row in result["diagnostics"]
+    )
+    assert any(
+        "1 grouped recommendation request(s) for 2 period option context(s)" in line
+        for line in progress
+    )
+
+
+def test_milestone25_final_recommendations_do_not_cross_form_overwrite() -> None:
+    experiment = _load_experiment_module()
+    snapshot = {
+        "metric_coverage_resolution": [
+            {
+                "internal_metric_name": "debt_current",
+                "statement_type": "balance_sheet",
+                "coverage_status": "needs_llm_resolution",
+            }
+        ],
+        "formula_proposal_diagnostics": [
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "period_context": "10-K periods: 2023 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "gemini",
+                "model_name": "gemini-2.5-flash",
+                "provider_status": "proposed",
+                "components": "+ us-gaap:LongTermDebtCurrent",
+                "validation_status": "validated_component_pool",
+                "confidence": "0.90",
+                "reason": "annual component evidence",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "period_context": "10-Q periods: 2023 Q1 / instant / USD / 10-Q",
+                "forms": "10-Q",
+                "provider_name": "gemini",
+                "model_name": "gemini-2.5-flash",
+                "provider_status": "proposed",
+                "components": "+ us-gaap:LongTermDebtCurrent",
+                "validation_status": "validated_component_pool",
+                "confidence": "0.80",
+                "reason": "quarterly component evidence",
+            },
+        ],
+        "final_recommendation_diagnostics": [
+            _final_recommendation_row(
+                metric="debt_current",
+                statement="balance_sheet",
+                period_context="2023",
+                option_type=FINAL_OPTION_FORMULA,
+                option_id="formula_1",
+                final_recommendation="debt_current = LongTermDebtCurrent",
+                form_type="10-K",
+            ),
+            _final_recommendation_row(
+                metric="debt_current",
+                statement="balance_sheet",
+                period_context="2023 q1",
+                option_type="no_recommendation",
+                option_id="",
+                final_recommendation="",
+                provider_status="no_options",
+                form_type="10-Q",
+            ),
+        ],
+    }
+
+    final_rows = experiment._final_recommendation_rows_for_missing_targets(
+        snapshot,
+        form_type="10-K",
+    )
+    quarterly_final_rows = experiment._final_recommendation_rows_for_missing_targets(
+        snapshot,
+        form_type="10-Q",
+    )
+
+    assert final_rows == [
+        {
+            "Metric": "debt_current",
+            "Statement": "balance_sheet",
+            "Period context": "2023",
+            "Semantic candidate": "",
+            "Formula evidence": "debt_current = LongTermDebtCurrent",
+            "Zero evidence": "",
+            "Final recommendation": "debt_current = LongTermDebtCurrent",
+        }
+    ]
+    assert quarterly_final_rows == [
+        {
+            "Metric": "debt_current",
+            "Statement": "balance_sheet",
+            "Period context": "2023 q1",
+            "Semantic candidate": "",
+            "Formula evidence": "debt_current = LongTermDebtCurrent",
+            "Zero evidence": "",
+            "Final recommendation": "needs_review",
+        }
+    ]
+
+
+def test_milestone25_formula_rows_do_not_overlap_when_provider_periods_disagree() -> None:
+    experiment = _load_experiment_module()
+    snapshot = {
+        "metric_coverage_resolution": [
+            {
+                "internal_metric_name": "debt_current",
+                "statement_type": "balance_sheet",
+                "coverage_status": "needs_llm_resolution",
+            }
+        ],
+        "formula_proposal_diagnostics": [
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "period_context": "10-K periods: 2025 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "gemini",
+                "model_name": "gemini-2.5-flash",
+                "provider_status": "proposed",
+                "formula_expression": "ignored",
+                "components": "+ us-gaap:LongTermDebtCurrent, + us-gaap:CommercialPaper",
+                "validation_status": "validation_failed",
+                "confidence": "0.90",
+                "reason": "commercial paper evidence",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "period_context": "10-K periods: 2025 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "openai",
+                "model_name": "gpt-4.1-mini",
+                "provider_status": "proposed",
+                "formula_expression": "ignored",
+                "components": "+ us-gaap:LongTermDebtCurrent, + us-gaap:OtherLiabilitiesCurrent",
+                "validation_status": "validation_failed",
+                "confidence": "0.70",
+                "reason": "other liabilities evidence",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "period_context": "10-K periods: 2024 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "gemini",
+                "model_name": "gemini-2.5-flash",
+                "provider_status": "proposed",
+                "formula_expression": "ignored",
+                "components": "+ us-gaap:LongTermDebtCurrent, + us-gaap:CommercialPaper",
+                "validation_status": "validation_failed",
+                "confidence": "0.90",
+                "reason": "commercial paper evidence",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "period_context": "10-K periods: 2024 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "openai",
+                "model_name": "gpt-4.1-mini",
+                "provider_status": "proposed",
+                "formula_expression": "ignored",
+                "components": "+ us-gaap:LongTermDebtCurrent",
+                "validation_status": "validation_failed",
+                "confidence": "0.95",
+                "reason": "long-term debt evidence",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "period_context": "10-K periods: 2023 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "gemini",
+                "model_name": "gemini-2.5-flash",
+                "provider_status": "proposed",
+                "formula_expression": "ignored",
+                "components": "+ us-gaap:LongTermDebtCurrent",
+                "validation_status": "validation_failed",
+                "confidence": "0.90",
+                "reason": "long-term debt evidence",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "period_context": "10-K periods: 2023 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "openai",
+                "model_name": "gpt-4.1-mini",
+                "provider_status": "proposed",
+                "formula_expression": "ignored",
+                "components": "+ us-gaap:LongTermDebtCurrent",
+                "validation_status": "validation_failed",
+                "confidence": "0.95",
+                "reason": "long-term debt evidence",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "period_context": "10-K periods: 2022 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "gemini",
+                "model_name": "gemini-2.5-flash",
+                "provider_status": "proposed",
+                "formula_expression": "ignored",
+                "components": "+ us-gaap:LongTermDebtCurrent",
+                "validation_status": "validation_failed",
+                "confidence": "0.90",
+                "reason": "long-term debt evidence",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "period_context": "10-K periods: 2022 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "openai",
+                "model_name": "gpt-4.1-mini",
+                "provider_status": "proposed",
+                "formula_expression": "ignored",
+                "components": "+ us-gaap:LongTermDebtCurrent",
+                "validation_status": "validation_failed",
+                "confidence": "0.95",
+                "reason": "long-term debt evidence",
+            },
+        ],
+        "final_recommendation_diagnostics": [
+            _final_recommendation_row(
+                metric="debt_current",
+                statement="balance_sheet",
+                period_context="2025",
+                option_type=FINAL_OPTION_FORMULA,
+                option_id="formula_1",
+                final_recommendation="debt_current = LongTermDebtCurrent + CommercialPaper",
+            ),
+            _final_recommendation_row(
+                metric="debt_current",
+                statement="balance_sheet",
+                period_context="2024",
+                option_type=FINAL_OPTION_FORMULA,
+                option_id="formula_2",
+                final_recommendation="debt_current = LongTermDebtCurrent",
+            ),
+            _final_recommendation_row(
+                metric="debt_current",
+                statement="balance_sheet",
+                period_context="2023",
+                option_type=FINAL_OPTION_FORMULA,
+                option_id="formula_1",
+                final_recommendation="debt_current = LongTermDebtCurrent",
+            ),
+            _final_recommendation_row(
+                metric="debt_current",
+                statement="balance_sheet",
+                period_context="2022",
+                option_type=FINAL_OPTION_FORMULA,
+                option_id="formula_1",
+                final_recommendation="debt_current = LongTermDebtCurrent",
+            ),
+        ],
+    }
+
+    formula_rows = experiment._proposed_formula_rows_for_missing_targets(
+        snapshot,
+        form_type="10-K",
+    )
+    final_rows = experiment._final_recommendation_rows_for_missing_targets(
+        snapshot,
+        form_type="10-K",
+    )
+
+    assert [row["Period context"] for row in formula_rows] == [
+        "2024-2025",
+        "2025",
+        "2024",
+        "2022-2023",
+    ]
+    assert "2021-2024" not in [row["Period context"] for row in formula_rows]
+    assert formula_rows[0]["Providers"] == "gemini (gemini-2.5-flash)"
+    assert formula_rows[0]["Formula"] == "debt_current = LongTermDebtCurrent + CommercialPaper"
+    assert formula_rows[1]["Providers"] == "openai (gpt-4.1-mini)"
+    assert formula_rows[1]["Formula"] == "debt_current = LongTermDebtCurrent + OtherLiabilitiesCurrent"
+    assert formula_rows[2]["Providers"] == "openai (gpt-4.1-mini)"
+    assert formula_rows[2]["Formula"] == "debt_current = LongTermDebtCurrent"
+    assert formula_rows[3]["Formula"] == "debt_current = LongTermDebtCurrent"
+    assert formula_rows[3]["Providers"] == "gemini (gemini-2.5-flash); openai (gpt-4.1-mini)"
+    assert all("Components" not in row for row in formula_rows)
+    final_2025 = next(row for row in final_rows if row["Period context"] == "2025")
+    assert final_2025["Formula evidence"] == (
+        "debt_current = LongTermDebtCurrent + CommercialPaper; "
+        "debt_current = LongTermDebtCurrent + OtherLiabilitiesCurrent"
+    )
+    assert final_2025["Final recommendation"] == "debt_current = LongTermDebtCurrent + CommercialPaper"
+    assert "OtherLiabilitiesCurrent" not in final_2025["Final recommendation"]
+
+
+def test_milestone25_long_formula_annotations_reused_in_final_recommendations() -> None:
+    experiment = _load_experiment_module()
+    long_components = (
+        "+ us-gaap:LongTermDebtCurrent, "
+        "+ us-gaap:CommercialPaper, "
+        "+ us-gaap:FinanceLeaseLiabilityCurrent, "
+        "+ us-gaap:OperatingLeaseLiabilityCurrent, "
+        "+ us-gaap:OtherCurrentBorrowings"
+    )
+    snapshot = {
+        "metric_coverage_resolution": [
+            {
+                "internal_metric_name": "debt_current",
+                "statement_type": "balance_sheet",
+                "coverage_status": "needs_llm_resolution",
+            }
+        ],
+        "formula_proposal_diagnostics": [
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "target_xbrl_concept": "us-gaap:DebtCurrent",
+                "period_context": "10-K periods: 2025 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "gemini",
+                "model_name": "gemini-2.5-flash",
+                "provider_status": "proposed",
+                "formula_expression": "ignored",
+                "components": long_components,
+                "validation_status": "validation_failed",
+                "confidence": "0.90",
+                "reason": "long formula evidence",
+            }
+        ],
+        "final_recommendation_diagnostics": [
+            _final_recommendation_row(
+                metric="debt_current",
+                statement="balance_sheet",
+                period_context="2025",
+                option_type=FINAL_OPTION_FORMULA,
+                option_id="formula_1",
+                final_recommendation=(
+                    "debt_current = LongTermDebtCurrent + CommercialPaper + "
+                    "FinanceLeaseLiabilityCurrent + OperatingLeaseLiabilityCurrent + "
+                    "OtherCurrentBorrowings"
+                ),
+            )
+        ],
+    }
+    formula_annotations: dict[str, str] = {}
+
+    formula_rows = experiment._proposed_formula_rows_for_missing_targets(
+        snapshot,
+        form_type="10-K",
+        formula_annotations=formula_annotations,
+    )
+    annotation_lines = experiment._formula_annotation_lines_for_rows(
+        formula_rows,
+        formula_annotations,
+    )
+    final_rows = experiment._final_recommendation_rows_for_missing_targets(
+        snapshot,
+        form_type="10-K",
+        formula_annotations=formula_annotations,
+    )
+
+    assert formula_rows[0]["Formula"] == "[F1]"
+    assert annotation_lines[1] == "Formula annotations:"
+    assert annotation_lines[2].startswith("- [F1] debt_current = LongTermDebtCurrent + CommercialPaper")
+    assert "OtherCurrentBorrowings" in annotation_lines[2]
+    assert final_rows[0]["Formula evidence"] == "[F1]"
+    assert final_rows[0]["Final recommendation"] == "[F1]"
+
+
+def test_milestone25_xbrl_concepts_provided_counts_by_period() -> None:
+    experiment = _load_experiment_module()
+    snapshot = {
+        "metric_coverage_resolution": [
+            {
+                "internal_metric_name": "debt_current",
+                "statement_type": "balance_sheet",
+                "coverage_status": "needs_llm_resolution",
+            }
+        ],
+        "formula_proposal_diagnostics": [
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "context_id": "annual-shared",
+                "period_context": "10-K periods: 2024 FY, 2025 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "gemini",
+                "concepts_provided": "us-gaap:LongTermDebtCurrent, us-gaap:CommercialPaper",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "context_id": "annual-shared",
+                "period_context": "10-K periods: 2024 FY, 2025 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "openai",
+                "concepts_provided": "us-gaap:LongTermDebtCurrent, us-gaap:CommercialPaper",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "context_id": "annual-2023",
+                "period_context": "10-K periods: 2023 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "concepts_provided": "us-gaap:LongTermDebtCurrent",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "context_id": "quarterly-shared",
+                "period_context": "10-Q periods: 2025 Q1 - 2025 Q2 / instant / USD / 10-Q",
+                "forms": "10-Q",
+                "concepts_provided": "us-gaap:LongTermDebtCurrent, us-gaap:CommercialPaper",
+            },
+        ],
+    }
+
+    assert experiment._xbrl_concepts_provided_10k_rows(snapshot) == [
+        {"Year": "2023", "# of concepts provided": 1},
+        {"Year": "2024", "# of concepts provided": 2},
+        {"Year": "2025", "# of concepts provided": 2},
+    ]
+    assert experiment._xbrl_concepts_provided_10q_rows(snapshot) == [
+        {"Year": "2025", "Q1": 2, "Q2": 2, "Q3": ""},
+    ]
+
+
 def test_milestone25_experiment_presents_first_time_ingestion(
     tmp_path: Path,
     monkeypatch,
@@ -54,6 +882,7 @@ def test_milestone25_experiment_presents_first_time_ingestion(
         [
             "--ticker",
             "TEST",
+            "--no-formula-proposals",
             "--env-file",
             str(env_file),
             "--db-path",
@@ -73,14 +902,36 @@ def test_milestone25_experiment_presents_first_time_ingestion(
     assert calls == ["TEST", "TEST"]
     assert output == ""
     assert "# Plan 2.5 Target Mapping Report" in report
+<<<<<<< HEAD
     assert "## 1. Target Metrics Mapping Status" in report
     assert "## 2. Proposed Formulas For Formula Recommendations" in report
     assert "Company in system" in report
+=======
+    assert "## 0. Compact Summary" in report
+    assert "## 0A. XBRL Concepts Provided By Period" in report
+    assert "### # of concepts provided from XBRL - 10-K" in report
+    assert "### # of concepts provided from XBRL - 10-Q" in report
+    assert "## 1. Target Metrics Mapping Status" in report
+    assert "## 2. Semantic Candidates For Missing Targets" in report
+    assert "## 3. Proposed Formulas For Formula Recommendations" in report
+    assert "## 4. Selected Concept Pools For Formula Recommendations" not in report
+    assert "## 4. Final Recommendations For Missing Targets" in report
+    assert "## 2. Missing Target Replacement Recommendations" not in report
+    assert "### 10-K" in report
+    assert "### 10-Q" in report
+    assert "Company in system" in report
+    assert "Setup ingestion duration seconds" in report
+    assert "Unchanged-company reuse duration seconds" in report
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
     assert "Update check needed this session" in report
     assert "SEC update check performed" in report
     assert "local data reused; no SEC request made" in report
     assert "New filings ingested this session" in report
+<<<<<<< HEAD
     assert "none" in report
+=======
+    assert "Metric-First Coverage Resolution" not in report
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
     assert (tmp_path / "experiment.db").exists()
     assert (tmp_path / "exports" / "companies.csv").exists()
     assert (tmp_path / "exports" / "financial_metrics.csv").exists()
@@ -98,6 +949,7 @@ def test_milestone25_experiment_reports_missing_sec_user_agent(
         [
             "--ticker",
             "TEST",
+            "--no-formula-proposals",
             "--env-file",
             str(env_file),
             "--db-path",
@@ -211,6 +1063,7 @@ def test_milestone25_write_report_flag_preserves_markdown_artifact(
         [
             "--ticker",
             "TEST",
+            "--no-formula-proposals",
             "--write-report",
             "--env-file",
             str(env_file),
@@ -230,11 +1083,21 @@ def test_milestone25_write_report_flag_preserves_markdown_artifact(
     assert exit_code == 0
     assert output == ""
     assert "saved Plan 2.5 target mapping report" in report
+<<<<<<< HEAD
     assert "Target Metrics Mapping Status" in report
     assert "Proposed Formulas For Formula Recommendations" in report
     assert "Evidence Locations" not in report
     assert "Financial Metric Data Lineage View" not in report
     assert "Annual XBRL Financial Metrics" not in report
+=======
+    assert "## 0. Compact Summary" in report
+    assert "## 1. Target Metrics Mapping Status" in report
+    assert "## 3. Proposed Formulas For Formula Recommendations" in report
+    assert "Component Evidence Samples" not in report
+    assert "Evidence Locations" not in report
+    assert "Appendix A: Target-Level XBRL Concept Coverage" not in report
+    assert "Provider-Level Formula Diagnostics" not in report
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
     assert "Phase 2" not in report
 
 
@@ -260,6 +1123,7 @@ def test_milestone25_saves_warning_when_csv_export_is_locked(
         [
             "--ticker",
             "TEST",
+            "--no-formula-proposals",
             "--env-file",
             str(env_file),
             "--db-path",
@@ -279,8 +1143,15 @@ def test_milestone25_saves_warning_when_csv_export_is_locked(
     assert output == ""
     assert "# Plan 2.5 Target Mapping Report" in report
     assert "CSV export skipped for financial_metrics" in report
+<<<<<<< HEAD
     assert "Target Metrics Mapping Status" in report
     assert "Proposed Formulas For Formula Recommendations" in report
+=======
+    assert "## 0. Compact Summary" in report
+    assert "## 2. Semantic Candidates For Missing Targets" in report
+    assert "## 2. Missing Target Replacement Recommendations" not in report
+    assert "Evidence Boundary" not in report
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 
 
 def test_milestone25_full_report_flag_prints_detailed_markdown(
@@ -297,6 +1168,7 @@ def test_milestone25_full_report_flag_prints_detailed_markdown(
         [
             "--ticker",
             "TEST",
+            "--no-formula-proposals",
             "--full-report",
             "--env-file",
             str(env_file),
@@ -316,11 +1188,21 @@ def test_milestone25_full_report_flag_prints_detailed_markdown(
     assert exit_code == 0
     assert output == ""
     assert "# Plan 2.5 Target Mapping Report" in report
+<<<<<<< HEAD
     assert "--full-report kept for CLI compatibility" in report
     assert "Target Metrics Mapping Status" in report
     assert "Proposed Formulas For Formula Recommendations" in report
     assert "Financial Metric Data Lineage View" not in report
     assert "Annual XBRL Financial Metrics" not in report
+=======
+    assert "## 0. Compact Summary" in report
+    assert "## 3. Proposed Formulas For Formula Recommendations" in report
+    assert "--full-report kept for CLI compatibility" in report
+    assert "Appendix A: Target-Level XBRL Concept Coverage" not in report
+    assert "Provider-Level Formula Diagnostics" not in report
+    assert "Raw Fact and Unknown Concept Evidence" not in report
+    assert "Financial Metric Data Lineage View" not in report
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 
 
 def test_milestone25_markdown_table_keeps_identifier_lists_as_text() -> None:
@@ -348,6 +1230,7 @@ def test_milestone25_markdown_table_keeps_identifier_lists_as_text() -> None:
     assert experiment._format_presentation_number("9" * 80) == "9" * 80
 
 
+<<<<<<< HEAD
 def test_milestone25_formula_rows_include_validation_reason() -> None:
     experiment = _load_experiment_module()
     snapshot = {
@@ -492,6 +1375,96 @@ def test_milestone25_xbrl_concepts_provided_by_period_counts_raw_facts(
 
 
 def test_milestone25_report_shows_approved_learned_mapping_reuse(
+=======
+def test_milestone25_markdown_table_keeps_period_context_as_label() -> None:
+    experiment = _load_experiment_module()
+
+    lines = experiment._markdown_table(
+        [
+            {
+                "Metric": "debt_current",
+                "Period context": "2025",
+                "Period coverage": "active 10-K periods: 2021 FY - 2025 FY",
+                "amount": "2025",
+            }
+        ]
+    )
+    table = "\n".join(lines)
+    cells = [cell.strip() for cell in lines[2].strip("|").split("|")]
+
+    assert "2.03K" in table
+    assert cells == [
+        "debt_current",
+        "2025",
+        "active 10-K periods: 2021 FY - 2025 FY",
+        "2.03K",
+    ]
+
+
+def test_milestone25_semantic_period_coverage_abbreviates_all_active_ranges() -> None:
+    experiment = _load_experiment_module()
+
+    annual = experiment._format_period_coverage(
+        form_type="10-K",
+        observed_periods={"2021 FY", "2022 FY", "2023 FY", "2024 FY", "2025 FY"},
+        active_periods={"2021 FY", "2022 FY", "2023 FY", "2024 FY", "2025 FY"},
+    )
+    quarterly = experiment._format_period_coverage(
+        form_type="10-Q",
+        observed_periods={"2023 Q1", "2023 Q2", "2026 Q1", "2026 Q2"},
+        active_periods={"2023 Q1", "2023 Q2", "2026 Q1", "2026 Q2"},
+    )
+
+    assert annual == "active 10-K periods: 2021 FY - 2025 FY"
+    assert quarterly == "active 10-Q periods: 2023 Q1 - 2026 Q2"
+
+
+def test_milestone25_formula_proposal_targets_collapse_missing_tags_by_metric() -> None:
+    experiment = _load_experiment_module()
+
+    targets = experiment._formula_proposal_targets(
+        [
+            {
+                "status": experiment.STATUS_MISSING_TARGET,
+                "internal_metric_name": "depreciation_and_amortization",
+                "statement_type": "cash_flow_statement",
+                "target_xbrl_concept": "us-gaap:DepreciationAndAmortization",
+                "taxonomy": "us-gaap",
+                "target_raw_concept": "DepreciationAndAmortization",
+                "industry_label": "Common Base",
+            },
+            {
+                "status": experiment.STATUS_MISSING_TARGET,
+                "internal_metric_name": "depreciation_and_amortization",
+                "statement_type": "cash_flow_statement",
+                "target_xbrl_concept": "us-gaap:DepreciationDepletionAndAmortization",
+                "taxonomy": "us-gaap",
+                "target_raw_concept": "DepreciationDepletionAndAmortization",
+                "industry_label": "Common Base",
+            },
+            {
+                "status": experiment.STATUS_MISSING_TARGET,
+                "internal_metric_name": "debt_current",
+                "statement_type": "balance_sheet",
+                "target_xbrl_concept": "us-gaap:DebtCurrent",
+                "taxonomy": "us-gaap",
+                "target_raw_concept": "DebtCurrent",
+                "industry_label": "Common Base",
+            },
+        ],
+        target_limit=None,
+    )
+
+    assert [target.target_metric_name for target in targets] == [
+        "depreciation_and_amortization",
+        "debt_current",
+    ]
+    assert "DepreciationAndAmortization" in targets[0].notes
+    assert "DepreciationDepletionAndAmortization" in targets[0].notes
+
+
+def test_milestone25_report_shows_profile_reuse_and_candidate_level_semantic_evidence(
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -509,6 +1482,7 @@ def test_milestone25_report_shows_approved_learned_mapping_reuse(
         [
             "--ticker",
             "TEST",
+            "--no-formula-proposals",
             "--full-report",
             "--env-file",
             str(env_file),
@@ -527,6 +1501,7 @@ def test_milestone25_report_shows_approved_learned_mapping_reuse(
 
     assert exit_code == 0
     assert output == ""
+<<<<<<< HEAD
     assert "Target Metrics Mapping Status" in report
     assert "Target XBRL concepts checked" in report
     target_status_section = report.split("Target Metrics Mapping Status", 1)[1].split(
@@ -537,6 +1512,21 @@ def test_milestone25_report_shows_approved_learned_mapping_reuse(
         line for line in target_status_section.splitlines() if line.startswith("| ")
     )
     assert [cell.strip() for cell in target_status_header.strip("|").split("|")] == [
+=======
+    assert "Approved Company Concept Profile Reuse And Semantic Discovery" not in report
+    assert "semantic discovery status" not in report
+    assert "Metric-First Coverage Resolution" not in report
+    assert "Appendix A: Target-Level XBRL Concept Coverage" not in report
+    target_coverage_section = _report_section(
+        report,
+        "## 1. Target Metrics Mapping Status",
+        "## 2. Semantic Candidates For Missing Targets",
+    )
+    target_coverage_header = next(
+        line for line in target_coverage_section.splitlines() if line.startswith("| ")
+    )
+    assert [cell.strip() for cell in target_coverage_header.strip("|").split("|")] == [
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
         "Metric type",
         "Metric",
         "Statement",
@@ -546,6 +1536,7 @@ def test_milestone25_report_shows_approved_learned_mapping_reuse(
         "Approved alternates",
         "Target XBRL concepts checked",
     ]
+<<<<<<< HEAD
     assert "required_for_core" not in target_status_section
     assert "unit_count" not in target_status_section
     assert "target_candidate_xbrl_concept" not in report
@@ -555,6 +1546,37 @@ def test_milestone25_report_shows_approved_learned_mapping_reuse(
     assert "## Human Question" not in report
     assert "Company Industry Labels:" not in report
     assert "Unknown SEC/XBRL Concepts Not Mapped To Base Metrics:" not in report
+=======
+    assert "Missing or unapproved target concepts" not in target_coverage_header
+    assert "common base" in target_coverage_section
+    assert "required_for_core" not in target_coverage_section
+    assert "unit_count" not in target_coverage_section
+    semantic_section = _report_section(
+        report,
+        "## 2. Semantic Candidates For Missing Targets",
+        "## 3. Proposed Formulas For Formula Recommendations",
+    )
+    assert "### 10-K" in semantic_section
+    assert "### 10-Q" in semantic_section
+    assert "Target concept" not in semantic_section
+    assert "Recommended concepts by semantic similarity" in semantic_section
+    assert "Period coverage" in semantic_section
+    assert "Requires review" not in semantic_section
+    assert "Target candidate" not in semantic_section
+    assert "target_xbrl_concept_candidate" not in report
+    assert "CustomerAccountsReceivable" in semantic_section
+    assert "AccountsReceivableNetCurrent" not in semantic_section
+    assert "active 10-K periods: 2025 FY" in semantic_section
+    assert "active 10-Q periods: 2025 Q1" in semantic_section
+    assert "custom:" not in report
+    assert "us-gaap:" not in report
+    assert "custom:CustomerRevenueGross" not in semantic_section
+    assert "## Human Question" not in report
+    assert "### Company Industry Labels" not in report
+    assert report.count("## 1. Target Metrics Mapping Status") == 1
+    assert report.count("## 2. Semantic Candidates For Missing Targets") == 1
+    assert "Unknown Concept Review Pool" not in report
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
     snapshot = experiment._snapshot(tmp_path / "experiment.db", "TEST")
     unknown_coverage = next(
         row
@@ -566,7 +1588,14 @@ def test_milestone25_report_shows_approved_learned_mapping_reuse(
         for row in snapshot["mapping_profile_reuse"]
         if row["evidence_item"] == "mapping expansion review pool"
     )
+    revenue_resolution = next(
+        row
+        for row in snapshot["metric_coverage_resolution"]
+        if row["internal_metric_name"] == "revenue"
+    )
     assert review_pool["value"] == unknown_coverage["count"]
+    assert revenue_resolution["coverage_status"] == "mapped"
+    assert revenue_resolution["reviewer_action"] == "none"
 
 
 def test_milestone25_report_shows_report_only_debt_recovery_diagnostics(
@@ -583,6 +1612,7 @@ def test_milestone25_report_shows_report_only_debt_recovery_diagnostics(
         [
             "--ticker",
             "TEST",
+            "--no-formula-proposals",
             "--full-report",
             "--env-file",
             str(env_file),
@@ -601,8 +1631,17 @@ def test_milestone25_report_shows_report_only_debt_recovery_diagnostics(
 
     assert exit_code == 0
     assert output == ""
+<<<<<<< HEAD
     assert "Debt Recovery Formula Catalog:" not in report
     assert "Debt Recovery Diagnostics Summary:" not in report
+=======
+    assert "Debt Recovery Formula Catalog" not in report
+    assert "Report-Only Debt Recovery Diagnostics" not in report
+    assert "Debt Recovery Diagnostic Rows" not in report
+    assert "Debt Recovery Component Evidence" not in report
+    assert "## 1. Target Metrics Mapping Status" in report
+    assert "## 3. Proposed Formulas For Formula Recommendations" in report
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
     snapshot = experiment._snapshot(tmp_path / "experiment.db", "TEST")
     current = next(
         row
@@ -677,6 +1716,12 @@ def test_milestone25_report_shows_report_only_formula_proposals_from_found_targe
 
     monkeypatch.setattr(experiment, "_formula_proposal_provider_configs", fake_provider_configs)
     monkeypatch.setattr(experiment, "generate_formula_proposal", fake_generate_formula_proposal)
+    monkeypatch.setattr(experiment, "_final_recommendation_provider_config", _fake_final_provider_config)
+    monkeypatch.setattr(
+        experiment,
+        "generate_final_recommendation",
+        _fake_generate_final_recommendation(FINAL_OPTION_FORMULA),
+    )
     env_file = _env_file(tmp_path)
 
     exit_code = experiment.main(
@@ -684,7 +1729,6 @@ def test_milestone25_report_shows_report_only_formula_proposals_from_found_targe
             "--ticker",
             "TEST",
             "--full-report",
-            "--formula-proposals",
             "--formula-proposal-target-limit",
             "1",
             "--env-file",
@@ -704,6 +1748,7 @@ def test_milestone25_report_shows_report_only_formula_proposals_from_found_targe
     snapshot = experiment._snapshot(tmp_path / "experiment.db", "TEST")
 
     assert exit_code == 0
+<<<<<<< HEAD
     assert output == ""
     assert "XBRL Concepts Provided By Period" in report
     assert "Proposed Formulas For Formula Recommendations" in report
@@ -714,6 +1759,47 @@ def test_milestone25_report_shows_report_only_formula_proposals_from_found_targe
     assert "accounts_receivable = Revenues" in report
     assert "validated_component_pool" in report
     assert "fake_provider (fake_model)" in report
+=======
+    _assert_formula_progress_output(output)
+    _assert_final_recommendation_progress_output(output)
+    assert "## 2. Missing Target Replacement Recommendations" not in report
+    assert "## 3. Proposed Formulas For Formula Recommendations" in report
+    assert "## 4. Selected Concept Pools For Formula Recommendations" not in report
+    assert "## 4. Final Recommendations For Missing Targets" in report
+    assert "Formula / Zero Diagnostics Summary" not in report
+    assert "Formula Proposal Run Summary" not in report
+    assert "Provider-Level Formula Diagnostics" not in report
+    assert "Eligible Formula Proposal Raw Fact Pool" not in report
+    formula_section = _report_section(
+        report,
+        "## 3. Proposed Formulas For Formula Recommendations",
+        "## 4. Final Recommendations For Missing Targets",
+    )
+    assert "### 10-K" in formula_section
+    assert "### 10-Q" in formula_section
+    assert "Formula" in formula_section
+    assert "accounts_receivable = Revenues" in formula_section
+    assert "all active" not in formula_section
+    assert "us-gaap:" not in formula_section
+    assert "custom:" not in formula_section
+    assert "Recommendation" not in formula_section
+    assert "Target concept" not in formula_section
+    assert "Components" not in formula_section
+    assert "/ duration / USD / 10-K" not in formula_section
+    assert "/ instant / USD / 10-K" not in formula_section
+    assert "/ instant / USD / 10-Q" not in formula_section
+    final_section = _report_section(report, "## 4. Final Recommendations For Missing Targets")
+    assert "Formula evidence" in final_section
+    assert "accounts_receivable = Revenues" in final_section
+    assert "Selected concepts provided" not in final_section
+    assert "found_target" not in report
+    assert "validated_component_pool" in report
+    assert "period-scoped formula contexts" not in report
+    assert "Metric-First Coverage Resolution" not in report
+    assert "needs_review" not in final_section
+    assert "cap_per_target" not in report
+    assert "generated_new" not in report
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
     with connect_sqlite(tmp_path / "experiment.db") as connection:
         stored_recovered_metrics = connection.execute(
             """
@@ -774,6 +1860,12 @@ def test_milestone25_report_shows_report_only_zero_target_proposals(
 
     monkeypatch.setattr(experiment, "_formula_proposal_provider_configs", fake_provider_configs)
     monkeypatch.setattr(experiment, "generate_formula_proposal", fake_generate_formula_proposal)
+    monkeypatch.setattr(experiment, "_final_recommendation_provider_config", _fake_final_provider_config)
+    monkeypatch.setattr(
+        experiment,
+        "generate_final_recommendation",
+        _fake_generate_final_recommendation(FINAL_OPTION_ZERO),
+    )
     env_file = _env_file(tmp_path)
 
     exit_code = experiment.main(
@@ -781,7 +1873,6 @@ def test_milestone25_report_shows_report_only_zero_target_proposals(
             "--ticker",
             "TEST",
             "--full-report",
-            "--formula-proposals",
             "--formula-proposal-target-limit",
             "1",
             "--env-file",
@@ -800,10 +1891,34 @@ def test_milestone25_report_shows_report_only_zero_target_proposals(
     report = (tmp_path / "experiment_report.md").read_text(encoding="utf-8")
 
     assert exit_code == 0
+<<<<<<< HEAD
     assert output == ""
     assert "accounts_receivable = 0" in report
     assert "Zero-target evidence rows" in report
     assert "validated_zero_evidence_pool" in report
+=======
+    _assert_formula_progress_output(output)
+    _assert_final_recommendation_progress_output(output)
+    assert "target_zero" not in report
+    assert "target_is_zero" not in report
+    assert "## 2. Missing Target Replacement Recommendations" not in report
+    assert "## 3. Proposed Formulas For Formula Recommendations" in report
+    formula_section = _report_section(
+        report,
+        "## 3. Proposed Formulas For Formula Recommendations",
+    )
+    assert "zero" in formula_section
+    final_section = _report_section(report, "## 4. Final Recommendations For Missing Targets")
+    assert "accounts_receivable = 0" in final_section
+    assert any(
+        line.rstrip().endswith("|                    0 |")
+        for line in final_section.splitlines()
+        if "accounts_receivable = 0" in line
+    )
+    assert "validated_zero_evidence_pool" in report
+    assert "review zero evidence" not in report
+    assert "Zero-target evidence rows" in report
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
     with connect_sqlite(tmp_path / "experiment.db") as connection:
         stored_recovered_metrics = connection.execute(
             """
@@ -871,7 +1986,6 @@ def test_milestone25_formula_proposals_reuse_failed_provider_result_within_run(
             "--ticker",
             "TEST",
             "--full-report",
-            "--formula-proposals",
             "--formula-proposal-target-limit",
             "1",
             "--env-file",
@@ -890,12 +2004,98 @@ def test_milestone25_formula_proposals_reuse_failed_provider_result_within_run(
     report = (tmp_path / "experiment_report.md").read_text(encoding="utf-8")
 
     assert exit_code == 0
-    assert output == ""
+    _assert_formula_progress_output(output)
     assert len(provider_calls) == 1
+<<<<<<< HEAD
     assert "Formula diagnostics run" in report
     assert "Formula proposals returned" in report
     assert "provider_failed" not in report
     assert "test provider failure" not in report
+=======
+    assert "provider_failed" not in report
+    assert "test provider failure" not in report
+    assert "No rows to display." in _report_section(
+        report,
+        "## 3. Proposed Formulas For Formula Recommendations",
+    )
+
+
+def test_milestone25_formula_proposal_fact_pool_uses_active_filing_periods_only(
+    tmp_path: Path,
+) -> None:
+    experiment = _load_experiment_module()
+    db_path = tmp_path / "experiment.db"
+    with connect_sqlite(db_path) as connection:
+        raw_repository = RawFactRepository(connection)
+        company_repository = CompanyRepository(connection)
+        filing_repository = FilingRepository(connection)
+        raw_repository.initialize()
+        company = company_repository.upsert_company(
+            CompanyRecord(
+                cik="0000000001",
+                name="Test Company",
+                ticker="TEST",
+            )
+        )
+        assert company.company_id is not None
+        filing_repository.upsert_filings(
+            company.company_id,
+            [
+                FilingRecord(
+                    company_id=company.company_id,
+                    accession_number="active-10k",
+                    form_type="10-K",
+                    filing_date=date(2025, 2, 15),
+                    fiscal_year=2025,
+                    fiscal_period="FY",
+                    is_active_window=True,
+                ),
+                FilingRecord(
+                    company_id=company.company_id,
+                    accession_number="inactive-10k",
+                    form_type="10-K",
+                    filing_date=date(2020, 2, 15),
+                    fiscal_year=2020,
+                    fiscal_period="FY",
+                    is_active_window=False,
+                ),
+            ],
+        )
+        raw_repository.upsert_facts(
+            [
+                _fact(
+                    form="10-K",
+                    accession_number="active-10k",
+                    concept="ActiveCurrentPeriodConcept",
+                    fiscal_year=2025,
+                    fiscal_period="FY",
+                ),
+                _fact(
+                    form="10-K",
+                    accession_number="active-10k",
+                    concept="ActiveFilingComparativeConcept",
+                    fiscal_year=2024,
+                    fiscal_period="FY",
+                ),
+                _fact(
+                    form="10-K",
+                    accession_number="inactive-10k",
+                    concept="InactiveHistoricalConcept",
+                    fiscal_year=2020,
+                    fiscal_period="FY",
+                ),
+            ]
+        )
+
+        fact_pool = experiment._formula_proposal_fact_pool(
+            connection,
+            company_id=company.company_id,
+            cik="0000000001",
+            target_raw_fact_coverage=[],
+        )
+
+    assert [fact.concept for fact in fact_pool] == ["ActiveCurrentPeriodConcept"]
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 
 
 def test_milestone25_report_presents_new_filings_when_sec_update_ingests_them(
@@ -912,6 +2112,7 @@ def test_milestone25_report_presents_new_filings_when_sec_update_ingests_them(
         [
             "--ticker",
             "TEST",
+            "--no-formula-proposals",
             "--env-file",
             str(env_file),
             "--db-path",
@@ -935,9 +2136,13 @@ def test_milestone25_report_presents_new_filings_when_sec_update_ingests_them(
     assert "SEC update check performed" in report
     assert "SEC checked; new active-window filing data ingested" in report
     assert "New filings ingested this session" in report
+<<<<<<< HEAD
     assert "10-Q test-10q-new" in report
     assert "10-Q check due" in report
     assert "next check date before session: 2020-01-01" in report
+=======
+    assert "10-Q accession test-10q-new" in report
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 
 
 def _fake_ingest_company(calls: list[str]):
@@ -1054,14 +2259,37 @@ def _fake_ingest_company_with_mapping_evidence(calls: list[str]):
                         form="10-K",
                         accession_number="test-10k",
                         taxonomy="custom",
+<<<<<<< HEAD
                         concept="CustomerRevenueApproved",
                         label="Customer revenue approved",
                     ),
                     _fact(
                         form="10-K",
                         accession_number="test-10k",
+=======
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
                         concept="CustomUnmappedDisclosure",
                         label="Custom unmapped disclosure",
+                    ),
+                    _fact(
+                        form="10-K",
+                        accession_number="test-10k",
+                        taxonomy="custom",
+                        concept="CustomerAccountsReceivable",
+                        label="Customer accounts receivable",
+                        period_type="instant",
+                    ),
+                    _fact(
+                        form="10-Q",
+                        accession_number="test-10q",
+                        taxonomy="custom",
+                        concept="CustomerAccountsReceivable",
+                        label="Customer accounts receivable",
+                        period_type="instant",
+                        fiscal_period="Q1",
+                        start_date=None,
+                        end_date=date(2025, 3, 31),
+                        filed_date=date(2025, 5, 15),
                     )
                 ]
             )
@@ -1083,6 +2311,53 @@ def _fake_ingest_company_with_mapping_evidence(calls: list[str]):
                         reviewed_by="tester",
                         reviewed_at="2026-01-01T00:00:00+00:00",
                     ),
+<<<<<<< HEAD
+=======
+                    ConceptMappingRecord(
+                        taxonomy="custom",
+                        concept="CustomerRevenueGross",
+                        metric_name="revenue",
+                        statement_type="income_statement",
+                        scope_type=MAPPING_SCOPE_COMPANY,
+                        scope_value="0000000001",
+                        status=MAPPING_STATUS_CANDIDATE,
+                        confidence=0.91,
+                        match_method="semantic_candidate_embedding_v2",
+                        evidence={
+                            "embedding_granularity": "target_xbrl_concept_candidate",
+                            "target_candidate_taxonomy": "us-gaap",
+                            "target_candidate_xbrl_concept": (
+                                "RevenueFromContractWithCustomerExcludingAssessedTax"
+                            ),
+                            "target_candidate_industry_labels": ["Common Base"],
+                            "observed_label": "Customer revenue gross",
+                            "observed_period_types": ["duration"],
+                            "semantic_similarity": 0.91,
+                            "requires_review": True,
+                        },
+                    ),
+                    ConceptMappingRecord(
+                        taxonomy="custom",
+                        concept="CustomerAccountsReceivable",
+                        metric_name="accounts_receivable",
+                        statement_type="balance_sheet",
+                        scope_type=MAPPING_SCOPE_COMPANY,
+                        scope_value="0000000001",
+                        status=MAPPING_STATUS_CANDIDATE,
+                        confidence=0.88,
+                        match_method="semantic_candidate_embedding_v2",
+                        evidence={
+                            "embedding_granularity": "target_xbrl_concept_candidate",
+                            "target_candidate_taxonomy": "us-gaap",
+                            "target_candidate_xbrl_concept": "AccountsReceivableNetCurrent",
+                            "target_candidate_industry_labels": ["Common Base"],
+                            "observed_label": "Customer accounts receivable",
+                            "observed_period_types": ["instant"],
+                            "semantic_similarity": 0.88,
+                            "requires_review": True,
+                        },
+                    ),
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
                 )
             )
         return result
@@ -1253,8 +2528,17 @@ def _fact(
     taxonomy: str = "us-gaap",
     concept: str = "Revenues",
     label: str = "Revenues",
+<<<<<<< HEAD
     fiscal_year: int = 2025,
     fiscal_period: str = "FY",
+=======
+    period_type: str = "duration",
+    fiscal_year: int = 2025,
+    fiscal_period: str = "FY",
+    start_date: date | None = date(2024, 1, 1),
+    end_date: date | None = date(2024, 12, 31),
+    filed_date: date | None = date(2025, 2, 15),
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 ) -> NormalizedFact:
     return NormalizedFact(
         cik="0000000001",
@@ -1266,13 +2550,19 @@ def _fact(
         unit="USD",
         value_raw=100,
         value=Decimal("100"),
+<<<<<<< HEAD
         start_date=date(2024, 1, 1),
         end_date=date(2024, 12, 31),
         period_type="duration",
+=======
+        start_date=start_date,
+        end_date=end_date,
+        period_type=period_type,
+>>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
         fiscal_year=fiscal_year,
         fiscal_period=fiscal_period,
         form=form,
-        filed_date=date(2025, 2, 15),
+        filed_date=filed_date,
         accession_number=accession_number,
         frame=None,
         source="sec_companyfacts",

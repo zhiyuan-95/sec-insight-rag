@@ -81,6 +81,10 @@ class Settings(BaseSettings):
         default="gpt-4.1-mini",
         validation_alias="OPENAI_FORMULA_PROPOSAL_MODEL",
     )
+    openai_final_recommendation_model: str = Field(
+        default="gpt-5.5",
+        validation_alias="OPENAI_FINAL_RECOMMENDATION_MODEL",
+    )
 
     @field_validator("allowed_chat_models", mode="before")
     @classmethod
@@ -116,6 +120,8 @@ class Settings(BaseSettings):
             raise ValueError("GEMINI_FORMULA_PROPOSAL_MODEL must not be empty")
         if not self.openai_formula_proposal_model.strip():
             raise ValueError("OPENAI_FORMULA_PROPOSAL_MODEL must not be empty")
+        if not self.openai_final_recommendation_model.strip():
+            raise ValueError("OPENAI_FINAL_RECOMMENDATION_MODEL must not be empty")
         if self.retrieval_chunk_overlap >= self.retrieval_chunk_size:
             raise ValueError("RETRIEVAL_CHUNK_OVERLAP must be smaller than RETRIEVAL_CHUNK_SIZE")
         if not self.retrieval_embedding_model.strip():
