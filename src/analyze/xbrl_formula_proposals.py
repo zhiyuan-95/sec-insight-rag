@@ -30,7 +30,8 @@ from src.processing.formula_proposals import (
 )
 
 DEFAULT_GEMINI_FORMULA_PROPOSAL_MODEL = "gemini-2.5-flash"
-DEFAULT_OPENAI_FORMULA_PROPOSAL_MODEL = "gpt-4.1-mini"
+DEFAULT_GEMINI_FLASH_LITE_FORMULA_PROPOSAL_MODEL = "gemini-3.1-flash-lite"
+DEFAULT_OPENAI_FORMULA_PROPOSAL_MODEL = "gpt-5-mini"
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 HTTP_TIMEOUT_SECONDS = 120
 
@@ -51,13 +52,30 @@ def default_formula_proposal_provider_configs(
     gemini_api_key: str | None,
     openai_api_key: str | None,
     gemini_model: str = DEFAULT_GEMINI_FORMULA_PROPOSAL_MODEL,
+    gemini_flash_lite_model: str = DEFAULT_GEMINI_FLASH_LITE_FORMULA_PROPOSAL_MODEL,
     openai_model: str = DEFAULT_OPENAI_FORMULA_PROPOSAL_MODEL,
 ) -> tuple[FormulaProposalProviderConfig, ...]:
     """Return the configured formula proposal provider panel."""
-    return (
-        FormulaProposalProviderConfig("gemini", gemini_model, gemini_api_key),
+    configs = (
         FormulaProposalProviderConfig("openai", openai_model, openai_api_key),
+        FormulaProposalProviderConfig("gemini", gemini_flash_lite_model, gemini_api_key),
+        FormulaProposalProviderConfig("gemini", gemini_model, gemini_api_key),
     )
+    identities = [
+        (config.provider_name.strip().lower(), config.model_name.strip().lower())
+        for config in configs
+    ]
+    if len(set(identities)) != len(identities):
+        duplicates = sorted(
+            f"{provider}/{model}"
+            for provider, model in set(identities)
+            if identities.count((provider, model)) > 1
+        )
+        raise ValueError(
+            "formula proposal provider/model slots must be unique: "
+            + ", ".join(duplicates)
+        )
+    return configs
 
 
 def generate_formula_proposal(
@@ -102,6 +120,7 @@ def generate_formula_proposal(
                 schema=FORMULA_PROPOSAL_RESPONSE_JSON_SCHEMA,
                 schema_name="xbrl_formula_proposal",
                 system_content="Return only valid JSON for the requested XBRL formula proposal schema.",
+                temperature=_openai_temperature(provider.model_name),
             )
         else:
             return provider_unavailable_result(
@@ -177,6 +196,7 @@ def generate_formula_proposal_batch(
                 schema=FORMULA_PROPOSAL_BATCH_RESPONSE_JSON_SCHEMA,
                 schema_name="xbrl_formula_proposal_batch",
                 system_content="Return only valid JSON for the requested XBRL formula proposal batch schema.",
+                temperature=_openai_temperature(provider.model_name),
             )
         else:
             return tuple(
@@ -285,6 +305,13 @@ def _generate_openai_json(
         headers={"Authorization": f"Bearer {api_key}"},
     )
     return _extract_openai_response_text(data)
+
+
+def _openai_temperature(model: str) -> float | None:
+    """Return the compatibility-proven temperature option for an OpenAI model."""
+    if str(model or "").strip().lower() == DEFAULT_OPENAI_FORMULA_PROPOSAL_MODEL:
+        return None
+    return 0
 
 
 def _post_json(url: str, payload: dict[str, object], *, headers: dict[str, str]) -> Any:

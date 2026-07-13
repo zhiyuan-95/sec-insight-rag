@@ -79,8 +79,10 @@ from src.processing.formula_proposals import (
     PROVIDER_STATUS_PROPOSED,
     PROVIDER_STATUS_TARGET_ZERO,
     PROVIDER_STATUS_UNAVAILABLE,
+    VALIDATION_STATUS_FAILED,
     VALIDATION_STATUS_VALIDATED,
     VALIDATION_STATUS_ZERO_EVIDENCE,
+    FormulaProposalConsensusResult,
     FormulaProposalFact,
     FormulaProposalContext,
     FormulaProposalProviderResult,
@@ -89,9 +91,9 @@ from src.processing.formula_proposals import (
     build_formula_proposal_contexts,
     formula_batch_context_prompt_payload,
     formula_batch_group_key,
-    consensus_label,
     formula_context_fingerprint,
     formula_context_prompt_payload,
+    formula_proposal_consensus,
     load_formula_proposal_cache,
     provider_failed_result,
     save_formula_proposal_cache,
@@ -107,6 +109,9 @@ DEFAULT_FILINGS_DIR = EXPERIMENT_STORAGE_DIR / "filings"
 DEFAULT_EXPORTS_DIR = PROJECT_ROOT / "data" / "exports" / "ms2_5"
 FORMULA_PROPOSAL_CACHE_SUBDIR = "formula_proposals"
 FORMS = ("10-K", "10-Q")
+FORMULA_PANEL_SIZE = 3
+NOT_AVAILABLE_FORM_KEY = "__not_available_form__"
+NOT_AVAILABLE_PERIOD_KEY = "__not_available_period__"
 
 
 @dataclass(frozen=True)
@@ -530,6 +535,7 @@ def _snapshot(
             "formula_proposal_diagnostics": formula_proposal_snapshot["diagnostics"],
             "formula_proposal_components": formula_proposal_snapshot["components"],
             "formula_proposal_fact_pool_summary": formula_proposal_snapshot["fact_pool_summary"],
+            "formula_proposal_recommendations": formula_proposal_snapshot["recommendations"],
             "metric_counts_by_statement": _metric_counts_by_statement(connection, company_id),
             "metric_lineage_summary": _metric_lineage_summary(connection, company_id),
             "raw_fact_mapping_coverage": _raw_fact_mapping_coverage(connection, company_id, cik),
@@ -929,12 +935,18 @@ def _formula_proposal_snapshot(
     target_limit: int | None,
     progress: Callable[[str], None] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
+    all_targets = _formula_proposal_targets(target_raw_fact_coverage, target_limit=None)
+    targets = _formula_proposal_targets(target_raw_fact_coverage, target_limit=target_limit)
     if not enabled:
         return {
             "summary": _formula_proposal_not_run_summary(),
             "diagnostics": [],
             "components": [],
             "fact_pool_summary": [],
+            "recommendations": _formula_review_required_recommendation_rows(
+                targets,
+                reason="formula_proposals_not_run",
+            ),
         }
     if company_id is None or not cik:
         _formula_progress(
@@ -949,10 +961,12 @@ def _formula_proposal_snapshot(
             "diagnostics": [],
             "components": [],
             "fact_pool_summary": [],
+            "recommendations": _formula_review_required_recommendation_rows(
+                targets,
+                reason="no_eligible_period_context",
+            ),
         }
 
-    all_targets = _formula_proposal_targets(target_raw_fact_coverage, target_limit=None)
-    targets = _formula_proposal_targets(target_raw_fact_coverage, target_limit=target_limit)
     fact_pool = _formula_proposal_fact_pool(
         connection,
         company_id=company_id,
@@ -979,6 +993,7 @@ def _formula_proposal_snapshot(
             "diagnostics": [],
             "components": [],
             "fact_pool_summary": fact_pool_summary,
+            "recommendations": [],
         }
     if not fact_pool:
         _formula_progress(
@@ -993,6 +1008,10 @@ def _formula_proposal_snapshot(
             "diagnostics": [],
             "components": [],
             "fact_pool_summary": [],
+            "recommendations": _formula_review_required_recommendation_rows(
+                targets,
+                reason="no_eligible_raw_fact_pool",
+            ),
         }
 
     provider_configs = _formula_proposal_provider_configs(settings)
@@ -1000,6 +1019,7 @@ def _formula_proposal_snapshot(
     _formula_progress(progress, f"Formula proposal model panel: {len(provider_configs)} provider(s).")
     diagnostics: list[dict[str, Any]] = []
     components: list[dict[str, Any]] = []
+    recommendations: list[dict[str, Any]] = []
     consensus_counts: dict[str, int] = {}
     run_provider_results: dict[str, tuple[FormulaProposalProviderResult, str, str]] = {}
     context_count = 0
@@ -1017,6 +1037,12 @@ def _formula_proposal_snapshot(
                 f"  {_formula_target_progress_label(target)} has no eligible period context; skipping provider calls.",
             )
             diagnostics.append(_formula_proposal_no_context_row(target))
+            recommendations.extend(
+                _formula_review_required_recommendation_rows(
+                    (target,),
+                    reason="no_eligible_period_context",
+                )
+            )
             continue
         for formula_context in formula_contexts:
             context_count += 1
@@ -1199,9 +1225,15 @@ def _formula_proposal_snapshot(
                 )
             )
             else cache_status
-            for cache_status, validation, proposal in zip(cache_statuses, validations, provider_results_tuple, strict=False)
+            for cache_status, validation, proposal in zip(
+                cache_statuses,
+                validations,
+                provider_results_tuple,
+                strict=False,
+            )
         )
-        agreement_label = consensus_label(provider_results_tuple, validations)
+        consensus = formula_proposal_consensus(provider_results_tuple, validations)
+        agreement_label = consensus.label
         consensus_counts[agreement_label] = consensus_counts.get(agreement_label, 0) + 1
         diagnostics.extend(
             _formula_proposal_diagnostic_rows(
@@ -1220,6 +1252,15 @@ def _formula_proposal_snapshot(
                 target=assignment.target,
                 context=assignment.context,
                 proposals=provider_results_tuple,
+            )
+        )
+        recommendations.extend(
+            _formula_proposal_recommendation_rows(
+                target=assignment.target,
+                context=assignment.context,
+                proposals=provider_results_tuple,
+                validations=validations,
+                consensus=consensus,
             )
         )
 
@@ -1245,6 +1286,7 @@ def _formula_proposal_snapshot(
         "diagnostics": diagnostics,
         "components": components,
         "fact_pool_summary": fact_pool_summary,
+        "recommendations": _dedupe_and_sort_formula_recommendations(recommendations),
     }
 
 
@@ -1640,7 +1682,11 @@ def _formula_proposal_provider_configs(settings: Settings | None):
         gemini_api_key=_secret_value(getattr(settings, "gemini_api_key", None)),
         openai_api_key=_secret_value(getattr(settings, "openai_api_key", None)),
         gemini_model=str(getattr(settings, "gemini_formula_proposal_model", "") or "gemini-2.5-flash"),
-        openai_model=str(getattr(settings, "openai_formula_proposal_model", "") or "gpt-4.1-mini"),
+        gemini_flash_lite_model=str(
+            getattr(settings, "gemini_flash_lite_formula_proposal_model", "")
+            or "gemini-3.1-flash-lite"
+        ),
+        openai_model=str(getattr(settings, "openai_formula_proposal_model", "") or "gpt-5-mini"),
     )
 
 
@@ -1696,6 +1742,181 @@ def _formula_proposal_no_context_row(target: FormulaProposalTarget) -> dict[str,
         "cache_warning": "",
         "prompt_version": "",
     }
+
+
+def _formula_review_required_recommendation_rows(
+    targets: Sequence[FormulaProposalTarget],
+    *,
+    reason: str,
+) -> list[dict[str, Any]]:
+    rows = [
+        {
+            "form_key": NOT_AVAILABLE_FORM_KEY,
+            "period_key": NOT_AVAILABLE_PERIOD_KEY,
+            "form": "not available",
+            "target_metric_name": target.target_metric_name,
+            "target_primary_statement": target.statement_type,
+            "period_context": "not available",
+            "recommendation": "review_required",
+            "formula_or_value": "",
+            "validated_votes": f"0/{FORMULA_PANEL_SIZE}",
+            "agreeing_models": "",
+            "review_reason": reason,
+        }
+        for target in targets
+    ]
+    return _dedupe_and_sort_formula_recommendations(rows)
+
+
+def _formula_proposal_recommendation_rows(
+    *,
+    target: FormulaProposalTarget,
+    context: FormulaProposalContext,
+    proposals: tuple[FormulaProposalProviderResult, ...],
+    validations: tuple[FormulaProposalValidationResult, ...],
+    consensus: FormulaProposalConsensusResult,
+) -> list[dict[str, Any]]:
+    recommendation = "review_required"
+    formula_or_value = ""
+    agreeing_models = ""
+    review_reason = _formula_recommendation_review_reason(
+        proposals=proposals,
+        validations=validations,
+        consensus=consensus,
+    )
+    if consensus.label == CONSENSUS_VALIDATED:
+        recommendation = "formula"
+        winning_proposal = proposals[consensus.agreeing_result_indexes[0]]
+        components = _strip_concept_prefixes(_formula_component_summary(winning_proposal))
+        formula_or_value = _formula_expression_for_report(
+            metric=target.target_metric_name,
+            row={
+                "provider_status": winning_proposal.provider_status,
+                "formula_expression": winning_proposal.formula_expression,
+            },
+            components=components,
+        )
+        agreeing_models = _join_unique_texts(
+            proposals[index].model_name or proposals[index].provider_name
+            for index in consensus.agreeing_result_indexes
+        )
+        review_reason = ""
+    elif consensus.label == CONSENSUS_TARGET_ZERO:
+        recommendation = "zero"
+        formula_or_value = "0"
+        agreeing_models = _join_unique_texts(
+            proposals[index].model_name or proposals[index].provider_name
+            for index in consensus.agreeing_result_indexes
+        )
+        review_reason = ""
+
+    period_context = _format_formula_period_context(context.period_context)
+    forms = _formula_recommendation_forms(context, period_context=period_context)
+    rows: list[dict[str, Any]] = []
+    for form in forms:
+        period_labels = _period_labels_for_report_value(period_context, form_type=form)
+        if not period_labels:
+            period_labels = ("not available",)
+        for period_label in period_labels:
+            form_key = form if form in FORMS else NOT_AVAILABLE_FORM_KEY
+            period_key = (
+                period_label
+                if period_label != "not available"
+                else NOT_AVAILABLE_PERIOD_KEY
+            )
+            rows.append(
+                {
+                    "form_key": form_key,
+                    "period_key": period_key,
+                    "form": form,
+                    "target_metric_name": target.target_metric_name,
+                    "target_primary_statement": context.target_primary_statement,
+                    "period_context": period_label,
+                    "recommendation": recommendation,
+                    "formula_or_value": formula_or_value,
+                    "validated_votes": f"{consensus.validated_vote_count}/{FORMULA_PANEL_SIZE}",
+                    "agreeing_models": agreeing_models,
+                    "review_reason": review_reason,
+                }
+            )
+    return rows
+
+
+def _formula_recommendation_forms(
+    context: FormulaProposalContext,
+    *,
+    period_context: str,
+) -> tuple[str, ...]:
+    raw_forms = context.period_context.get("forms") or ()
+    if isinstance(raw_forms, str):
+        form_values = re.split(r"[,;|]", raw_forms)
+    else:
+        form_values = tuple(raw_forms)
+    normalized = {_normal_report_form(value) for value in form_values}
+    normalized.discard("")
+    forms = tuple(form for form in FORMS if form in normalized)
+    if forms:
+        return forms
+    inferred = tuple(form for form in FORMS if form in period_context.upper())
+    return inferred or ("not available",)
+
+
+def _formula_recommendation_review_reason(
+    *,
+    proposals: tuple[FormulaProposalProviderResult, ...],
+    validations: tuple[FormulaProposalValidationResult, ...],
+    consensus: FormulaProposalConsensusResult,
+) -> str:
+    reasons: list[str] = []
+    statuses = {proposal.provider_status for proposal in proposals}
+    if PROVIDER_STATUS_UNAVAILABLE in statuses:
+        reasons.append("provider_unavailable")
+    if PROVIDER_STATUS_FAILED in statuses:
+        reasons.append("provider_failed")
+    if any(
+        validation.validation_status == VALIDATION_STATUS_FAILED
+        for validation in validations
+    ):
+        reasons.append("validation_failed")
+    if consensus.validated_outcome_count >= 2 and consensus.validated_vote_count < 2:
+        reasons.append("model_disagreement")
+    if consensus.validated_vote_count < 2:
+        reasons.append("no_validated_consensus")
+    return "; ".join(reasons)
+
+
+def _dedupe_and_sort_formula_recommendations(
+    rows: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    unique: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            str(row.get("form_key") or NOT_AVAILABLE_FORM_KEY),
+            str(row.get("target_metric_name") or ""),
+            str(row.get("target_primary_statement") or ""),
+            str(row.get("period_key") or NOT_AVAILABLE_PERIOD_KEY),
+        )
+        existing = unique.get(key)
+        if existing is not None and existing != row:
+            raise ValueError(
+                "conflicting formula recommendation rows for "
+                f"{key[0]} / {key[1]} / {key[2]} / {key[3]}"
+            )
+        unique.setdefault(key, dict(row))
+    form_rank = {"10-K": 0, "10-Q": 1, NOT_AVAILABLE_FORM_KEY: 2}
+    return sorted(
+        unique.values(),
+        key=lambda row: (
+            form_rank.get(str(row.get("form_key") or NOT_AVAILABLE_FORM_KEY), 3),
+            str(row.get("target_metric_name") or ""),
+            str(row.get("target_primary_statement") or ""),
+            -_first_formula_period_sort_value(
+                str(row.get("period_context") or ""),
+                form_type=str(row.get("form") or ""),
+            ),
+            str(row.get("period_context") or ""),
+        ),
+    )
 
 
 def _format_formula_period_context(period_context: dict[str, object]) -> str:
@@ -3322,7 +3543,7 @@ def format_saved_report(run: ExperimentRun, *, full_report: bool = False) -> str
 
     formula_annotations: dict[str, str] = {}
 
-    lines.extend(["", "## 3. Proposed Formulas For Formula Recommendations", ""])
+    lines.extend(["", "## 2. Proposed Formulas For Formula Recommendations", ""])
     for form_type in FORMS:
         lines.extend(["", f"### {form_type}", ""])
         formula_rows = _proposed_formula_rows_for_missing_targets(
@@ -3341,6 +3562,20 @@ def format_saved_report(run: ExperimentRun, *, full_report: bool = False) -> str
         if provider_outcome_rows:
             lines.extend(["", "#### Provider Outcomes Without Formula Recommendation", ""])
             lines.extend(_markdown_table(provider_outcome_rows))
+
+    lines.extend(["", "## 3. Summary Recommendation", ""])
+    summary_recommendation_rows = _formula_summary_recommendation_rows(
+        run.session_after_snapshot,
+        formula_annotations=formula_annotations,
+    )
+    lines.extend(_markdown_table(summary_recommendation_rows))
+    lines.extend(
+        _formula_annotation_lines_for_rows(
+            summary_recommendation_rows,
+            formula_annotations,
+            formula_field="Formula / value",
+        )
+    )
 
     return "\n".join(lines)
 
@@ -3516,6 +3751,36 @@ def _proposed_formula_rows_for_missing_targets(
             str(row.get("Formula") or ""),
         ),
     )
+
+
+def _formula_summary_recommendation_rows(
+    snapshot: dict[str, Any],
+    *,
+    formula_annotations: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in snapshot.get("formula_proposal_recommendations") or []:
+        recommendation = str(row.get("recommendation") or "review_required")
+        formula_or_value = str(row.get("formula_or_value") or "")
+        if recommendation == "formula" and formula_or_value:
+            formula_or_value = _formula_text_for_table(
+                formula_or_value,
+                formula_annotations=formula_annotations,
+            )
+        rows.append(
+            {
+                "Form": row.get("form") or "not available",
+                "Metric": row.get("target_metric_name") or "",
+                "Statement": row.get("target_primary_statement") or "",
+                "Period context": row.get("period_context") or "not available",
+                "Recommendation": recommendation,
+                "Formula / value": formula_or_value,
+                "Validated votes": row.get("validated_votes") or f"0/{FORMULA_PANEL_SIZE}",
+                "Agreeing models": row.get("agreeing_models") or "",
+                "Review reason": row.get("review_reason") or "",
+            }
+        )
+    return rows
 
 
 def _formula_provider_outcome_gap_rows_for_missing_targets(
@@ -4022,6 +4287,8 @@ def _formula_annotation_for_text(formula: str, formula_annotations: dict[str, st
 def _formula_annotation_lines_for_rows(
     rows: list[dict[str, Any]],
     formula_annotations: dict[str, str],
+    *,
+    formula_field: str = "Formula",
 ) -> list[str]:
     if not rows or not formula_annotations:
         return []
@@ -4029,7 +4296,7 @@ def _formula_annotation_lines_for_rows(
         label
         for row in rows
         for label in formula_annotations.values()
-        if label in str(row.get("Formula") or "")
+        if label in str(row.get(formula_field) or "")
     }
     if not referenced_labels:
         return []

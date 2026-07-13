@@ -42,6 +42,29 @@ def test_load_settings_defaults_missing_optional_values(tmp_path: Path) -> None:
     assert settings.knowledge_storage_dir == Path("data_store/knowledge")
     assert settings.primary_chat_model == DEFAULT_CHAT_MODEL
     assert settings.allowed_chat_models == [DEFAULT_CHAT_MODEL]
+    assert settings.openai_formula_proposal_model == "gpt-5-mini"
+    assert settings.gemini_flash_lite_formula_proposal_model == "gemini-3.1-flash-lite"
+    assert settings.gemini_formula_proposal_model == "gemini-2.5-flash"
+
+
+def test_load_settings_accepts_formula_model_overrides(tmp_path: Path) -> None:
+    env_file = tmp_path / "config.env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "OPENAI_FORMULA_PROPOSAL_MODEL=openai-override",
+                "GEMINI_FLASH_LITE_FORMULA_PROPOSAL_MODEL=flash-lite-override",
+                "GEMINI_FORMULA_PROPOSAL_MODEL=gemini-override",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(env_file)
+
+    assert settings.openai_formula_proposal_model == "openai-override"
+    assert settings.gemini_flash_lite_formula_proposal_model == "flash-lite-override"
+    assert settings.gemini_formula_proposal_model == "gemini-override"
 
 
 def test_load_settings_accepts_comma_separated_allowed_models(tmp_path: Path) -> None:

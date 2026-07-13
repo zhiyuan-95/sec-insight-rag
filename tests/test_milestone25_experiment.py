@@ -9,8 +9,16 @@ from src.config import Settings
 from src.ingestion import FilingMetadata
 from src.processing import NormalizedFact
 from src.processing.formula_proposals import (
+    VALIDATION_STATUS_FAILED,
+    VALIDATION_STATUS_NOT_APPLICABLE,
+    VALIDATION_STATUS_VALIDATED,
+    VALIDATION_STATUS_ZERO_EVIDENCE,
     FormulaProposalComponentResponse,
+    FormulaProposalContext,
     FormulaProposalProviderResult,
+    FormulaProposalTarget,
+    FormulaProposalValidationResult,
+    formula_proposal_consensus,
 )
 from src.storage import (
     CompanyRecord,
@@ -516,6 +524,185 @@ def test_milestone25_provider_outcome_gap_rows_show_non_recommendations() -> Non
     ]
 
 
+def test_milestone25_summary_recommendation_returns_two_of_three_formula() -> None:
+    experiment = _load_experiment_module()
+    target = _summary_target()
+    context = _summary_context()
+    proposals = (
+        _summary_proposal("gpt-5-mini", "ShortTermBorrowings"),
+        _summary_proposal("gemini-3.1-flash-lite", "ShortTermBorrowings"),
+        _summary_proposal("gemini-2.5-flash", "LongTermDebtCurrent"),
+    )
+    validations = tuple(_summary_validation(VALIDATION_STATUS_VALIDATED) for _ in proposals)
+
+    rows = experiment._formula_proposal_recommendation_rows(
+        target=target,
+        context=context,
+        proposals=proposals,
+        validations=validations,
+        consensus=formula_proposal_consensus(proposals, validations),
+    )
+
+    assert rows == [
+        {
+            "form_key": "10-K",
+            "period_key": "2025",
+            "form": "10-K",
+            "target_metric_name": "debt_current",
+            "target_primary_statement": "balance_sheet",
+            "period_context": "2025",
+            "recommendation": "formula",
+            "formula_or_value": "debt_current = ShortTermBorrowings",
+            "validated_votes": "2/3",
+            "agreeing_models": "gpt-5-mini; gemini-3.1-flash-lite",
+            "review_reason": "",
+        }
+    ]
+
+
+def test_milestone25_summary_recommendation_returns_two_of_three_zero() -> None:
+    experiment = _load_experiment_module()
+    target = _summary_target()
+    context = _summary_context()
+    proposals = (
+        _summary_proposal("gpt-5-mini", "ShortTermBorrowings", target_zero=True),
+        _summary_proposal("gemini-3.1-flash-lite", "LongTermDebtCurrent", target_zero=True),
+        _summary_proposal("gemini-2.5-flash", "FinanceLeaseLiabilityCurrent"),
+    )
+    validations = (
+        _summary_validation(VALIDATION_STATUS_ZERO_EVIDENCE),
+        _summary_validation(VALIDATION_STATUS_ZERO_EVIDENCE),
+        _summary_validation(VALIDATION_STATUS_VALIDATED),
+    )
+
+    rows = experiment._formula_proposal_recommendation_rows(
+        target=target,
+        context=context,
+        proposals=proposals,
+        validations=validations,
+        consensus=formula_proposal_consensus(proposals, validations),
+    )
+
+    assert rows[0]["recommendation"] == "zero"
+    assert rows[0]["formula_or_value"] == "0"
+    assert rows[0]["validated_votes"] == "2/3"
+    assert rows[0]["agreeing_models"] == "gpt-5-mini; gemini-3.1-flash-lite"
+    assert rows[0]["review_reason"] == ""
+
+
+def test_milestone25_summary_recommendation_explains_unresolved_outcomes() -> None:
+    experiment = _load_experiment_module()
+    target = _summary_target()
+    context = _summary_context()
+    proposals = (
+        _summary_proposal("gpt-5-mini", "ShortTermBorrowings"),
+        _summary_proposal("gemini-3.1-flash-lite", "LongTermDebtCurrent", target_zero=True),
+        _summary_proposal("gemini-2.5-flash", "", failed=True),
+    )
+    validations = (
+        _summary_validation(VALIDATION_STATUS_VALIDATED),
+        _summary_validation(VALIDATION_STATUS_ZERO_EVIDENCE),
+        _summary_validation(VALIDATION_STATUS_NOT_APPLICABLE),
+    )
+
+    rows = experiment._formula_proposal_recommendation_rows(
+        target=target,
+        context=context,
+        proposals=proposals,
+        validations=validations,
+        consensus=formula_proposal_consensus(proposals, validations),
+    )
+
+    assert rows[0]["recommendation"] == "review_required"
+    assert rows[0]["formula_or_value"] == ""
+    assert rows[0]["validated_votes"] == "1/3"
+    assert rows[0]["agreeing_models"] == ""
+    assert rows[0]["review_reason"] == (
+        "provider_failed; model_disagreement; no_validated_consensus"
+    )
+
+
+def test_milestone25_summary_recommendation_reports_unavailable_and_invalid_votes() -> None:
+    experiment = _load_experiment_module()
+    target = _summary_target()
+    context = _summary_context()
+    proposals = (
+        _summary_proposal("gpt-5-mini", "ShortTermBorrowings"),
+        _summary_proposal("gemini-3.1-flash-lite", "LongTermDebtCurrent"),
+        _summary_proposal("gemini-2.5-flash", "", unavailable=True),
+    )
+    validations = (
+        _summary_validation(VALIDATION_STATUS_VALIDATED),
+        _summary_validation(VALIDATION_STATUS_FAILED),
+        _summary_validation(VALIDATION_STATUS_NOT_APPLICABLE),
+    )
+
+    rows = experiment._formula_proposal_recommendation_rows(
+        target=target,
+        context=context,
+        proposals=proposals,
+        validations=validations,
+        consensus=formula_proposal_consensus(proposals, validations),
+    )
+
+    assert rows[0]["recommendation"] == "review_required"
+    assert rows[0]["validated_votes"] == "1/3"
+    assert rows[0]["review_reason"] == (
+        "provider_unavailable; validation_failed; no_validated_consensus"
+    )
+
+
+def test_milestone25_summary_recommendation_keeps_no_context_target_visible() -> None:
+    experiment = _load_experiment_module()
+
+    rows = experiment._formula_review_required_recommendation_rows(
+        (_summary_target(),),
+        reason="no_eligible_period_context",
+    )
+
+    assert rows[0]["form_key"] == experiment.NOT_AVAILABLE_FORM_KEY
+    assert rows[0]["period_key"] == experiment.NOT_AVAILABLE_PERIOD_KEY
+    assert rows[0]["form"] == "not available"
+    assert rows[0]["period_context"] == "not available"
+    assert rows[0]["recommendation"] == "review_required"
+    assert rows[0]["review_reason"] == "no_eligible_period_context"
+
+
+def test_milestone25_summary_recommendation_keeps_empty_fact_pool_targets_visible(
+    tmp_path: Path,
+) -> None:
+    experiment = _load_experiment_module()
+    with connect_sqlite(tmp_path / "experiment.db") as connection:
+        initialize_database(connection)
+        snapshot = experiment._formula_proposal_snapshot(
+            connection,
+            ticker="TEST",
+            cik="0000000001",
+            company_id=1,
+            target_raw_fact_coverage=_formula_batch_target_rows(experiment)[:1],
+            enabled=True,
+            settings=None,
+            target_limit=None,
+        )
+
+    assert snapshot["diagnostics"] == []
+    assert snapshot["recommendations"] == [
+        {
+            "form_key": experiment.NOT_AVAILABLE_FORM_KEY,
+            "period_key": experiment.NOT_AVAILABLE_PERIOD_KEY,
+            "form": "not available",
+            "target_metric_name": "current_assets",
+            "target_primary_statement": "balance_sheet",
+            "period_context": "not available",
+            "recommendation": "review_required",
+            "formula_or_value": "",
+            "validated_votes": "0/3",
+            "agreeing_models": "",
+            "review_reason": "no_eligible_raw_fact_pool",
+        }
+    ]
+
+
 def test_milestone25_xbrl_concepts_provided_counts_by_period() -> None:
     experiment = _load_experiment_module()
     snapshot = {
@@ -614,7 +801,11 @@ def test_milestone25_experiment_presents_first_time_ingestion(
     assert "### # of concepts provided from XBRL - 10-Q" in report
     assert "## 1. Target Metrics Mapping Status" in report
     assert "## 2. Semantic Candidates For Missing Targets" not in report
-    assert "## 3. Proposed Formulas For Formula Recommendations" in report
+    assert "## 2. Proposed Formulas For Formula Recommendations" in report
+    assert "## 3. Summary Recommendation" in report
+    assert "formula_proposals_not_run" in report
+    assert "review_required" in report
+    assert "not available" in report
     assert "## 4. Selected Concept Pools For Formula Recommendations" not in report
     assert "## 4. Final Recommendations For Missing Targets" not in report
     assert "## 2. Missing Target Replacement Recommendations" not in report
@@ -737,7 +928,8 @@ def test_milestone25_write_report_flag_preserves_markdown_artifact(
     assert "saved Plan 2.5 target mapping report" in report
     assert "## 0. Compact Summary" in report
     assert "## 1. Target Metrics Mapping Status" in report
-    assert "## 3. Proposed Formulas For Formula Recommendations" in report
+    assert "## 2. Proposed Formulas For Formula Recommendations" in report
+    assert "## 3. Summary Recommendation" in report
     assert "Component Evidence Samples" not in report
     assert "Evidence Locations" not in report
     assert "Appendix A: Target-Level XBRL Concept Coverage" not in report
@@ -827,7 +1019,8 @@ def test_milestone25_full_report_flag_prints_detailed_markdown(
     _assert_report_generation_output(output, tmp_path / "experiment_report.md")
     assert "# Plan 2.5 Target Mapping Report" in report
     assert "## 0. Compact Summary" in report
-    assert "## 3. Proposed Formulas For Formula Recommendations" in report
+    assert "## 2. Proposed Formulas For Formula Recommendations" in report
+    assert "## 3. Summary Recommendation" in report
     assert "--full-report kept for CLI compatibility" in report
     assert "Appendix A: Target-Level XBRL Concept Coverage" not in report
     assert "Provider-Level Formula Diagnostics" not in report
@@ -964,7 +1157,8 @@ def test_milestone25_report_shows_report_only_debt_recovery_diagnostics(
     assert "Debt Recovery Diagnostic Rows" not in report
     assert "Debt Recovery Component Evidence" not in report
     assert "## 1. Target Metrics Mapping Status" in report
-    assert "## 3. Proposed Formulas For Formula Recommendations" in report
+    assert "## 2. Proposed Formulas For Formula Recommendations" in report
+    assert "## 3. Summary Recommendation" in report
     snapshot = experiment._snapshot(tmp_path / "experiment.db", "TEST")
     current = next(
         row
@@ -1067,7 +1261,8 @@ def test_milestone25_report_shows_report_only_formula_proposals_from_found_targe
     assert exit_code == 0
     _assert_formula_progress_output(output)
     assert "## 2. Missing Target Replacement Recommendations" not in report
-    assert "## 3. Proposed Formulas For Formula Recommendations" in report
+    assert "## 2. Proposed Formulas For Formula Recommendations" in report
+    assert "## 3. Summary Recommendation" in report
     assert "## 4. Selected Concept Pools For Formula Recommendations" not in report
     assert "Formula / Zero Diagnostics Summary" not in report
     assert "Formula Proposal Run Summary" not in report
@@ -1075,7 +1270,8 @@ def test_milestone25_report_shows_report_only_formula_proposals_from_found_targe
     assert "Eligible Formula Proposal Raw Fact Pool" not in report
     formula_section = _report_section(
         report,
-        "## 3. Proposed Formulas For Formula Recommendations",
+        "## 2. Proposed Formulas For Formula Recommendations",
+        "## 3. Summary Recommendation",
     )
     assert "### 10-K" in formula_section
     assert "### 10-Q" in formula_section
@@ -1185,10 +1381,12 @@ def test_milestone25_report_shows_report_only_zero_target_proposals(
     assert "target_zero" not in report
     assert "target_is_zero" not in report
     assert "## 2. Missing Target Replacement Recommendations" not in report
-    assert "## 3. Proposed Formulas For Formula Recommendations" in report
+    assert "## 2. Proposed Formulas For Formula Recommendations" in report
+    assert "## 3. Summary Recommendation" in report
     formula_section = _report_section(
         report,
-        "## 3. Proposed Formulas For Formula Recommendations",
+        "## 2. Proposed Formulas For Formula Recommendations",
+        "## 3. Summary Recommendation",
     )
     assert "zero" in formula_section
     assert "## 4. Final Recommendations For Missing Targets" not in report
@@ -1288,7 +1486,7 @@ def test_milestone25_formula_proposals_reuse_failed_provider_result_within_run(
     assert "test provider failure" in report
     assert "No rows to display." in _report_section(
         report,
-        "## 3. Proposed Formulas For Formula Recommendations",
+        "## 2. Proposed Formulas For Formula Recommendations",
     )
 
 
@@ -1735,6 +1933,89 @@ def _formula_batch_target_rows(experiment) -> list[dict[str, str]]:
             "industry_label": "Common Base",
         },
     ]
+
+
+def _summary_target() -> FormulaProposalTarget:
+    return FormulaProposalTarget(
+        target_metric_name="debt_current",
+        target_xbrl_concept="us-gaap:DebtCurrent",
+        taxonomy="us-gaap",
+        concept="DebtCurrent",
+        statement_type="balance_sheet",
+    )
+
+
+def _summary_context() -> FormulaProposalContext:
+    return FormulaProposalContext(
+        context_id="summary-context",
+        target_primary_statement="balance_sheet",
+        period_context={
+            "fiscal_year": 2025,
+            "fiscal_period": "FY",
+            "period_type": "instant",
+            "unit": "USD",
+            "forms": ("10-K",),
+        },
+        facts=(),
+        prompt_fact_pool=(),
+        statement_relationship_by_key={},
+        base_fingerprint_payload={},
+    )
+
+
+def _summary_proposal(
+    model_name: str,
+    concept: str,
+    *,
+    target_zero: bool = False,
+    failed: bool = False,
+    unavailable: bool = False,
+) -> FormulaProposalProviderResult:
+    if unavailable:
+        provider_status = "provider_unavailable"
+    elif failed:
+        provider_status = "provider_failed"
+    elif target_zero:
+        provider_status = "target_zero"
+    else:
+        provider_status = "proposed"
+    components = (
+        FormulaProposalComponentResponse(
+            component_name=concept,
+            taxonomy="us-gaap",
+            concept=concept,
+            operator="+",
+            role="test evidence",
+            reason="test evidence",
+        ),
+    ) if concept else ()
+    return FormulaProposalProviderResult(
+        provider_name="openai" if model_name.startswith("gpt") else "gemini",
+        model_name=model_name,
+        target_metric_name="debt_current",
+        target_xbrl_concept="us-gaap:DebtCurrent",
+        provider_status=provider_status,
+        no_formula=failed,
+        target_is_zero=target_zero,
+        formula_expression="debt_current = 0" if target_zero else f"debt_current = us-gaap:{concept}",
+        components=components,
+        confidence=0.8,
+        reason="test proposal",
+        uncertainty="review required",
+        error="test provider unavailable" if unavailable else "test provider failure" if failed else "",
+    )
+
+
+def _summary_validation(status: str) -> FormulaProposalValidationResult:
+    return FormulaProposalValidationResult(
+        validation_status=status,
+        skip_reason="" if status != VALIDATION_STATUS_FAILED else "test_validation_failure",
+        valid_component_count=(
+            1
+            if status in {VALIDATION_STATUS_VALIDATED, VALIDATION_STATUS_ZERO_EVIDENCE}
+            else 0
+        ),
+    )
 
 
 def _formula_provider_result(

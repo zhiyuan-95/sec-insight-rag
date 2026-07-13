@@ -2,16 +2,23 @@ from __future__ import annotations
 
 from pathlib import Path
 from decimal import Decimal
+import json
 
 import pytest
 
+from src.analyze import xbrl_formula_proposals as formula_provider
 from src.analyze.xbrl_formula_proposals import (
     FormulaProposalProviderConfig,
     default_formula_proposal_provider_configs,
+    generate_formula_proposal,
     generate_formula_proposal_batch,
 )
 from src.processing.formula_proposals import (
+    CONSENSUS_DISAGREEMENT,
+    CONSENSUS_TARGET_ZERO,
+    CONSENSUS_VALIDATED,
     PROVIDER_STATUS_FAILED,
+    PROVIDER_STATUS_NO_FORMULA,
     PROVIDER_STATUS_TARGET_ZERO,
     PROVIDER_STATUS_UNAVAILABLE,
     STATEMENT_RELATIONSHIP_CROSS,
@@ -29,11 +36,13 @@ from src.processing.formula_proposals import (
     FormulaProposalProviderResult,
     FormulaProposalResponse,
     FormulaProposalTarget,
+    FormulaProposalValidationResult,
     build_formula_proposal_contexts,
     coerce_formula_proposal_batch_response,
     coerce_formula_proposal_response,
     formula_batch_group_key,
     formula_context_fingerprint,
+    formula_proposal_consensus,
     load_formula_proposal_cache,
     provider_result_from_response,
     save_formula_proposal_cache,
@@ -41,16 +50,105 @@ from src.processing.formula_proposals import (
 )
 
 
-def test_formula_proposal_provider_configs_use_gemini_and_openai_only() -> None:
+def test_formula_proposal_provider_configs_use_ordered_three_model_panel() -> None:
     configs = default_formula_proposal_provider_configs(
         gemini_api_key="gemini-key",
         openai_api_key="openai-key",
     )
 
     assert [(config.provider_name, config.model_name) for config in configs] == [
+        ("openai", "gpt-5-mini"),
+        ("gemini", "gemini-3.1-flash-lite"),
         ("gemini", "gemini-2.5-flash"),
-        ("openai", "gpt-4.1-mini"),
     ]
+
+
+def test_formula_proposal_provider_configs_preserve_slot_overrides() -> None:
+    configs = default_formula_proposal_provider_configs(
+        gemini_api_key="gemini-key",
+        openai_api_key="openai-key",
+        openai_model="openai-override",
+        gemini_flash_lite_model="flash-lite-override",
+        gemini_model="gemini-override",
+    )
+
+    assert [config.model_name for config in configs] == [
+        "openai-override",
+        "flash-lite-override",
+        "gemini-override",
+    ]
+
+
+def test_formula_proposal_provider_configs_reject_duplicate_votes() -> None:
+    with pytest.raises(ValueError, match="provider/model slots must be unique"):
+        default_formula_proposal_provider_configs(
+            gemini_api_key="gemini-key",
+            openai_api_key="openai-key",
+            gemini_flash_lite_model="gemini-2.5-flash",
+        )
+
+
+def test_formula_proposal_panel_sends_identical_canonical_prompt() -> None:
+    configs = default_formula_proposal_provider_configs(
+        gemini_api_key="gemini-key",
+        openai_api_key="openai-key",
+    )
+    prompts: list[tuple[str, str]] = []
+
+    def capture_prompt(prompt, schema, model):
+        prompts.append((model, prompt))
+        return _single_proposal_payload(_target("DebtCurrent", "debt_current"))
+
+    for config in configs:
+        result = generate_formula_proposal(
+            ticker="TEST",
+            cik="0000000001",
+            target=_target("DebtCurrent", "debt_current"),
+            fact_pool=[{"taxonomy": "us-gaap", "concept": "ShortTermBorrowings"}],
+            formula_context={"context_id": "same-context"},
+            provider=config,
+            generate_json=capture_prompt,
+        )
+        assert result.provider_status == PROVIDER_STATUS_NO_FORMULA
+
+    assert [model for model, _ in prompts] == [config.model_name for config in configs]
+    assert len({prompt for _, prompt in prompts}) == 1
+
+
+def test_gpt5_mini_openai_requests_omit_temperature(monkeypatch) -> None:
+    payloads: list[dict[str, object]] = []
+    target = _target("DebtCurrent", "debt_current")
+
+    def fake_post_json(url, payload, *, headers):
+        payloads.append(payload)
+        schema_name = payload["text"]["format"]["name"]
+        response = (
+            {"proposals": [_single_proposal_payload(target)]}
+            if schema_name.endswith("batch")
+            else _single_proposal_payload(target)
+        )
+        return {"output_text": json.dumps(response)}
+
+    monkeypatch.setattr(formula_provider, "_post_json", fake_post_json)
+    provider = FormulaProposalProviderConfig("openai", "gpt-5-mini", "test-key")
+
+    generate_formula_proposal(
+        ticker="TEST",
+        cik="0000000001",
+        target=target,
+        fact_pool=[],
+        provider=provider,
+    )
+    generate_formula_proposal_batch(
+        ticker="TEST",
+        cik="0000000001",
+        targets=[target],
+        fact_pool=[],
+        provider=provider,
+    )
+
+    assert len(payloads) == 2
+    assert all("temperature" not in payload for payload in payloads)
 
 
 def test_formula_proposal_validator_allows_found_target_fact_components() -> None:
@@ -495,6 +593,107 @@ def test_formula_proposal_validator_rejects_zero_target_without_evidence() -> No
     assert validation.skip_reason == VALIDATION_SKIP_ZERO_TARGET_NO_EVIDENCE
 
 
+def test_formula_proposal_consensus_returns_matching_formula_bloc() -> None:
+    proposals = (
+        _proposal(
+            model_name="gpt-5-mini",
+            components=(
+                _component("ShortTermBorrowings", "component"),
+                _component("LongTermDebtCurrent", "component"),
+            ),
+        ),
+        _proposal(
+            model_name="gemini-3.1-flash-lite",
+            components=(
+                _component("LongTermDebtCurrent", "component"),
+                _component("ShortTermBorrowings", "component"),
+            ),
+        ),
+        _proposal(
+            model_name="gemini-2.5-flash",
+            components=(_component("FinanceLeaseLiabilityCurrent", "component"),),
+        ),
+    )
+    validations = tuple(_validation(VALIDATION_STATUS_VALIDATED) for _ in proposals)
+
+    consensus = formula_proposal_consensus(proposals, validations)
+
+    assert consensus.label == CONSENSUS_VALIDATED
+    assert consensus.validated_vote_count == 2
+    assert consensus.agreeing_result_indexes == (0, 1)
+    assert consensus.validated_outcome_count == 2
+    assert consensus.formula_signature == (
+        ("+", "us-gaap", "longtermdebtcurrent"),
+        ("+", "us-gaap", "shorttermborrowings"),
+    )
+
+
+def test_formula_proposal_consensus_returns_validated_zero_bloc() -> None:
+    proposals = (
+        _proposal(
+            model_name="gpt-5-mini",
+            components=(_component("ShortTermBorrowings", "zero evidence"),),
+            provider_status=PROVIDER_STATUS_TARGET_ZERO,
+            target_is_zero=True,
+            formula_expression="debt_current = 0",
+        ),
+        _proposal(
+            model_name="gemini-3.1-flash-lite",
+            components=(_component("LongTermDebtCurrent", "zero evidence"),),
+            provider_status=PROVIDER_STATUS_TARGET_ZERO,
+            target_is_zero=True,
+            formula_expression="debt_current = 0",
+        ),
+        _proposal(
+            model_name="gemini-2.5-flash",
+            components=(_component("FinanceLeaseLiabilityCurrent", "component"),),
+        ),
+    )
+    validations = (
+        _validation(VALIDATION_STATUS_ZERO_EVIDENCE),
+        _validation(VALIDATION_STATUS_ZERO_EVIDENCE),
+        _validation(VALIDATION_STATUS_VALIDATED),
+    )
+
+    consensus = formula_proposal_consensus(proposals, validations)
+
+    assert consensus.label == CONSENSUS_TARGET_ZERO
+    assert consensus.validated_vote_count == 2
+    assert consensus.agreeing_result_indexes == (0, 1)
+    assert consensus.formula_signature == ()
+
+
+def test_formula_proposal_consensus_exposes_unresolved_validated_outcomes() -> None:
+    proposals = (
+        _proposal(
+            model_name="gpt-5-mini",
+            components=(_component("ShortTermBorrowings", "component"),),
+        ),
+        _proposal(
+            model_name="gemini-3.1-flash-lite",
+            components=(_component("LongTermDebtCurrent", "component"),),
+        ),
+        _proposal(
+            model_name="gemini-2.5-flash",
+            components=(),
+            provider_status=PROVIDER_STATUS_NO_FORMULA,
+            no_formula=True,
+        ),
+    )
+    validations = (
+        _validation(VALIDATION_STATUS_VALIDATED),
+        _validation(VALIDATION_STATUS_VALIDATED),
+        _validation(VALIDATION_STATUS_FAILED),
+    )
+
+    consensus = formula_proposal_consensus(proposals, validations)
+
+    assert consensus.label == CONSENSUS_DISAGREEMENT
+    assert consensus.validated_vote_count == 1
+    assert consensus.agreeing_result_indexes == ()
+    assert consensus.validated_outcome_count == 2
+
+
 def test_formula_proposal_cache_round_trips_structured_success(tmp_path: Path) -> None:
     target = _target("DebtCurrent", "debt_current")
     facts = (_fact("ShortTermBorrowings", 1),)
@@ -556,26 +755,51 @@ def _batch_proposal_payload(target: FormulaProposalTarget) -> dict[str, object]:
     }
 
 
+def _single_proposal_payload(target: FormulaProposalTarget) -> dict[str, object]:
+    return {
+        "no_formula": True,
+        "target_is_zero": False,
+        "target_metric_name": target.target_metric_name,
+        "target_xbrl_concept": target.target_xbrl_concept,
+        "formula_expression": "",
+        "components": [],
+        "confidence": 0.0,
+        "reason": "No supported formula in the supplied fact pool.",
+        "uncertainty": "Review required.",
+    }
+
+
 def _proposal(
     *,
     components: tuple[FormulaProposalComponentResponse, ...],
     provider_status: str = "proposed",
     target_is_zero: bool = False,
     formula_expression: str = "debt_current = components",
+    provider_name: str = "test_provider",
+    model_name: str = "test_model",
+    no_formula: bool = False,
 ) -> FormulaProposalProviderResult:
     return FormulaProposalProviderResult(
-        provider_name="test_provider",
-        model_name="test_model",
+        provider_name=provider_name,
+        model_name=model_name,
         target_metric_name="debt_current",
         target_xbrl_concept="us-gaap:DebtCurrent",
         provider_status=provider_status,
-        no_formula=False,
+        no_formula=no_formula,
         target_is_zero=target_is_zero,
         formula_expression=formula_expression,
         components=components,
         confidence=0.8,
         reason="test",
         uncertainty="test",
+    )
+
+
+def _validation(status: str) -> FormulaProposalValidationResult:
+    return FormulaProposalValidationResult(
+        validation_status=status,
+        skip_reason="",
+        valid_component_count=1,
     )
 
 

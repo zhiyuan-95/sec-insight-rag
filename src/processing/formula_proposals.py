@@ -260,6 +260,17 @@ class FormulaProposalValidationResult:
     notes: str = ""
 
 
+@dataclass(frozen=True)
+class FormulaProposalConsensusResult:
+    """Deterministic validated outcome bloc for a provider panel."""
+
+    label: str
+    validated_vote_count: int
+    agreeing_result_indexes: tuple[int, ...] = ()
+    formula_signature: tuple[tuple[str, str, str], ...] = ()
+    validated_outcome_count: int = 0
+
+
 FORMULA_PROPOSAL_RESPONSE_JSON_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -1024,16 +1035,26 @@ def consensus_label(
     validations: tuple[FormulaProposalValidationResult, ...],
 ) -> str:
     """Return a target-level agreement label for report display."""
-    signatures: Counter[tuple[tuple[str, str, str], ...]] = Counter()
+    return formula_proposal_consensus(proposals, validations).label
+
+
+def formula_proposal_consensus(
+    proposals: tuple[FormulaProposalProviderResult, ...],
+    validations: tuple[FormulaProposalValidationResult, ...],
+) -> FormulaProposalConsensusResult:
+    """Return the validated formula or zero bloc used for report consensus."""
+    signature_indexes: dict[tuple[tuple[str, str, str], ...], list[int]] = {}
     validated_count = 0
-    zero_validated_count = 0
+    zero_validated_indexes: list[int] = []
     has_formula_attempt = False
     has_zero_attempt = False
-    for proposal, validation in zip(proposals, validations, strict=False):
+    for index, (proposal, validation) in enumerate(
+        zip(proposals, validations, strict=False)
+    ):
         if proposal.provider_status == PROVIDER_STATUS_TARGET_ZERO:
             has_zero_attempt = True
             if validation.validation_status == VALIDATION_STATUS_ZERO_EVIDENCE:
-                zero_validated_count += 1
+                zero_validated_indexes.append(index)
             continue
         if proposal.provider_status != PROVIDER_STATUS_PROPOSED:
             continue
@@ -1041,18 +1062,41 @@ def consensus_label(
         if validation.validation_status != VALIDATION_STATUS_VALIDATED:
             continue
         validated_count += 1
-        signatures[_component_signature(proposal)] += 1
-    if any(count >= 2 for count in signatures.values()):
-        return CONSENSUS_VALIDATED
-    if zero_validated_count >= 2:
-        return CONSENSUS_TARGET_ZERO
-    if validated_count == 1 and zero_validated_count == 0 and not has_zero_attempt:
-        return CONSENSUS_SINGLE_VALIDATED
-    if validated_count == 0 and zero_validated_count == 1 and not has_formula_attempt:
-        return CONSENSUS_SINGLE_TARGET_ZERO
-    if validated_count or zero_validated_count or has_formula_attempt or has_zero_attempt:
-        return CONSENSUS_DISAGREEMENT
-    return CONSENSUS_NOT_APPLICABLE
+        signature_indexes.setdefault(_component_signature(proposal), []).append(index)
+
+    validated_outcome_count = len(signature_indexes) + bool(zero_validated_indexes)
+    vote_counts = [len(indexes) for indexes in signature_indexes.values()]
+    vote_counts.append(len(zero_validated_indexes))
+    validated_vote_count = max(vote_counts, default=0)
+    for signature, indexes in signature_indexes.items():
+        if len(indexes) >= 2:
+            return FormulaProposalConsensusResult(
+                label=CONSENSUS_VALIDATED,
+                validated_vote_count=len(indexes),
+                agreeing_result_indexes=tuple(indexes),
+                formula_signature=signature,
+                validated_outcome_count=validated_outcome_count,
+            )
+    if len(zero_validated_indexes) >= 2:
+        return FormulaProposalConsensusResult(
+            label=CONSENSUS_TARGET_ZERO,
+            validated_vote_count=len(zero_validated_indexes),
+            agreeing_result_indexes=tuple(zero_validated_indexes),
+            validated_outcome_count=validated_outcome_count,
+        )
+    if validated_count == 1 and not zero_validated_indexes and not has_zero_attempt:
+        label = CONSENSUS_SINGLE_VALIDATED
+    elif not validated_count and len(zero_validated_indexes) == 1 and not has_formula_attempt:
+        label = CONSENSUS_SINGLE_TARGET_ZERO
+    elif validated_count or zero_validated_indexes or has_formula_attempt or has_zero_attempt:
+        label = CONSENSUS_DISAGREEMENT
+    else:
+        label = CONSENSUS_NOT_APPLICABLE
+    return FormulaProposalConsensusResult(
+        label=label,
+        validated_vote_count=validated_vote_count,
+        validated_outcome_count=validated_outcome_count,
+    )
 
 
 def _preferred_period_type_for_statement(statement_type: str) -> str:

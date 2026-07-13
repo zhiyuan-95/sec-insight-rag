@@ -250,7 +250,8 @@ Sections:
 0. Compact Summary
 0A. XBRL Concepts Provided By Period
 1. Target Metrics Mapping Status
-3. Proposed Formulas For Formula Recommendations
+2. Proposed Formulas For Formula Recommendations
+3. Summary Recommendation
 
 Section 0A presents the count of distinct selected XBRL concepts provided to
 formula generation for each period, deduped across provider/model calls. It
@@ -259,18 +260,18 @@ Section 1 lists every target metric, marks it as mapped or missing, and labels
 the metric source as common base or the actual hard-industry label name.
 Section 1 is sorted by metric type and uses this column order: Metric type,
 Metric, Statement, Mapping status, Mapped target concepts, Coverage detail,
-Approved alternates, Target XBRL concepts checked. Section 3 lists proposed
+Approved alternates, Target XBRL concepts checked. Section 2 lists proposed
 formula evidence only for missing target metrics and splits rows into 10-K and
-10-Q active-window subsections. Section 3 should group rows by missing metric,
+10-Q active-window subsections. Section 2 should group rows by missing metric,
 statement, and displayed formula so identical recommended formulas can collapse
 across periods and provider/model results even when the providers cite different
 component or zero-evidence details. The `LLM result count` column should count
 distinct target/context/model formula results supporting the displayed formula,
 not display-period labels expanded from one result. When a target/context/model
-returns `no_formula`, `provider_unavailable`, or `provider_failed`, Section 3
+returns `no_formula`, `provider_unavailable`, or `provider_failed`, Section 2
 should show a compact provider outcome row for that period context so missing
-recommendation coverage is visible. Section 3 should not include
-Target concept, Components, or recommendation columns. Section 3
+recommendation coverage is visible. Section 2 should not include
+Target concept, Components, or recommendation columns. Section 2
 period context should show only compact filing periods:
 10-K rows use years such as `2023` or `2023-2025`, and 10-Q rows use
 year-quarter labels such as `2021 q1` or `2021 q1 - 2021 q3`; omit raw suffixes
@@ -280,6 +281,15 @@ an annotation such as `[F1]`, and the full formula should be listed under the
 table in a Formula annotations block.
 Displayed concept values should omit taxonomy prefixes such as `us-gaap:` or
 `custom:`.
+
+Section 3 should contain one row for every selected missing target-period. It
+should reduce the three validated model outcomes to `formula` when at least two
+models return the same validated component signature, `zero` when at least two
+models return validated zero evidence, and `review_required` otherwise. It
+should show Form, Metric, Statement, Period context, Recommendation,
+Formula / value, Validated votes, Agreeing models, and Review reason. Targets
+without an eligible context, disabled formula runs, and empty eligible fact
+pools should remain visible as `review_required` rows instead of disappearing.
 
 The compact summary should include setup ingestion duration and unchanged-company
 reuse duration as evidence for the local MVP performance expectations. It should
@@ -318,8 +328,9 @@ should say `needs_review` so the LLM does not sound like the final approver.
   calls in `src/analyze/xbrl_formula_proposals.py`, and period context
   construction, target-compatible unit filtering, statement-scoped batch
   grouping, exact-cache reuse, and deterministic validation in
-  `src/processing/formula_proposals.py`. The provider panel is Gemini plus
-  OpenAI `gpt-4.1-mini`.
+  `src/processing/formula_proposals.py`. The ordered provider panel is OpenAI
+  `gpt-5-mini`, Gemini `gemini-3.1-flash-lite`, and Gemini
+  `gemini-2.5-flash`; both Gemini slots reuse `GEMINI_API_KEY`.
 - Treat LLM formula proposals as report-only evidence. Do not approve mappings,
   persist recovered values, or feed indicators from model confidence or model
   agreement. A model may also return a report-only zero-target decision when
@@ -345,7 +356,7 @@ should say `needs_review` so the LLM does not sound like the final approver.
   report body to the terminal.
 - Keep target-level, raw-fact, unknown-concept, validation, cache, and component
   diagnostic tables out of the saved Markdown report. Keep full provider-level
-  diagnostics out too, except for the compact Section 3 provider outcome rows
+  diagnostics out too, except for the compact Section 2 provider outcome rows
   that expose `no_formula`, `provider_unavailable`, or `provider_failed`
   recommendation coverage gaps. Source rows remain available in SQLite and CSV
   exports.

@@ -77,8 +77,12 @@ class Settings(BaseSettings):
         default=DEFAULT_CHAT_MODEL,
         validation_alias="GEMINI_FORMULA_PROPOSAL_MODEL",
     )
+    gemini_flash_lite_formula_proposal_model: str = Field(
+        default="gemini-3.1-flash-lite",
+        validation_alias="GEMINI_FLASH_LITE_FORMULA_PROPOSAL_MODEL",
+    )
     openai_formula_proposal_model: str = Field(
-        default="gpt-4.1-mini",
+        default="gpt-5-mini",
         validation_alias="OPENAI_FORMULA_PROPOSAL_MODEL",
     )
 
@@ -114,6 +118,8 @@ class Settings(BaseSettings):
             raise ValueError("PRIMARY_CHAT_MODEL must be in ALLOWED_CHAT_MODELS")
         if not self.gemini_formula_proposal_model.strip():
             raise ValueError("GEMINI_FORMULA_PROPOSAL_MODEL must not be empty")
+        if not self.gemini_flash_lite_formula_proposal_model.strip():
+            raise ValueError("GEMINI_FLASH_LITE_FORMULA_PROPOSAL_MODEL must not be empty")
         if not self.openai_formula_proposal_model.strip():
             raise ValueError("OPENAI_FORMULA_PROPOSAL_MODEL must not be empty")
         if self.retrieval_chunk_overlap >= self.retrieval_chunk_size:
