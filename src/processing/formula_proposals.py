@@ -187,11 +187,7 @@ class FormulaProposalFact:
 
 @dataclass(frozen=True)
 class FormulaProposalTarget:
-<<<<<<< HEAD
     """One target still unresolved after direct and approved learned mapping."""
-=======
-    """One target still unresolved after hard mapping."""
->>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 
     target_metric_name: str
     target_xbrl_concept: str

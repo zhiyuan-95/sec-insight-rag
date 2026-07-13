@@ -608,11 +608,6 @@ def test_milestone25_experiment_presents_first_time_ingestion(
     assert calls == ["TEST", "TEST"]
     _assert_report_generation_output(output, tmp_path / "experiment_report.md")
     assert "# Plan 2.5 Target Mapping Report" in report
-<<<<<<< HEAD
-    assert "## 1. Target Metrics Mapping Status" in report
-    assert "## 2. Proposed Formulas For Formula Recommendations" in report
-    assert "Company in system" in report
-=======
     assert "## 0. Compact Summary" in report
     assert "## 0A. XBRL Concepts Provided By Period" in report
     assert "### # of concepts provided from XBRL - 10-K" in report
@@ -628,16 +623,11 @@ def test_milestone25_experiment_presents_first_time_ingestion(
     assert "Company in system" in report
     assert "Setup ingestion duration seconds" in report
     assert "Unchanged-company reuse duration seconds" in report
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
     assert "Update check needed this session" in report
     assert "SEC update check performed" in report
     assert "local data reused; no SEC request made" in report
     assert "New filings ingested this session" in report
-<<<<<<< HEAD
-    assert "none" in report
-=======
     assert "Metric-First Coverage Resolution" not in report
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
     assert (tmp_path / "experiment.db").exists()
     assert (tmp_path / "exports" / "companies.csv").exists()
     assert (tmp_path / "exports" / "financial_metrics.csv").exists()
@@ -675,50 +665,6 @@ def test_milestone25_experiment_reports_missing_sec_user_agent(
     _assert_report_generation_output(output, tmp_path / "experiment_report.md")
     assert "Execution Warning" in report
     assert "SEC_USER_AGENT is required for live SEC experiment runs" in report
-
-
-def test_milestone25_error_report_preserves_local_company_snapshot(
-    tmp_path: Path,
-    capsys,
-) -> None:
-    experiment = _load_experiment_module()
-    database_path = tmp_path / "experiment.db"
-    with connect_sqlite(database_path) as connection:
-        initialize_database(connection)
-        CompanyRepository(connection).upsert_company(
-            CompanyRecord(cik="0000789019", name="Microsoft Corp.", ticker="TEST")
-        )
-    env_file = tmp_path / "config.env"
-    env_file.write_text("", encoding="utf-8")
-
-    exit_code = experiment.main(
-        [
-            "--ticker",
-            "TEST",
-            "--env-file",
-            str(env_file),
-            "--db-path",
-            str(database_path),
-            "--report-path",
-            str(tmp_path / "experiment_report.md"),
-            "--filings-dir",
-            str(tmp_path / "filings"),
-            "--exports-dir",
-            str(tmp_path / "exports"),
-        ]
-    )
-    output = capsys.readouterr().out
-    report = (tmp_path / "experiment_report.md").read_text(encoding="utf-8")
-
-    company_line = next(line for line in report.splitlines() if "Company in system" in line)
-    sec_result_line = next(line for line in report.splitlines() if "SEC result" in line)
-    assert exit_code == 1
-    assert output == ""
-    assert "yes" in company_line
-    assert "experiment_error" in sec_result_line
-    assert "company is not in local storage" not in report
-    assert "0000789019" in report
-    assert "789.02K" not in report
 
 
 def test_milestone25_uses_ticker_specific_default_report_path(
@@ -789,13 +735,6 @@ def test_milestone25_write_report_flag_preserves_markdown_artifact(
     assert exit_code == 0
     _assert_report_generation_output(output, tmp_path / "experiment_report.md")
     assert "saved Plan 2.5 target mapping report" in report
-<<<<<<< HEAD
-    assert "Target Metrics Mapping Status" in report
-    assert "Proposed Formulas For Formula Recommendations" in report
-    assert "Evidence Locations" not in report
-    assert "Financial Metric Data Lineage View" not in report
-    assert "Annual XBRL Financial Metrics" not in report
-=======
     assert "## 0. Compact Summary" in report
     assert "## 1. Target Metrics Mapping Status" in report
     assert "## 3. Proposed Formulas For Formula Recommendations" in report
@@ -803,7 +742,6 @@ def test_milestone25_write_report_flag_preserves_markdown_artifact(
     assert "Evidence Locations" not in report
     assert "Appendix A: Target-Level XBRL Concept Coverage" not in report
     assert "Provider-Level Formula Diagnostics" not in report
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
     assert "Phase 2" not in report
 
 
@@ -849,14 +787,9 @@ def test_milestone25_saves_warning_when_csv_export_is_locked(
     _assert_report_generation_output(output, tmp_path / "experiment_report.md")
     assert "# Plan 2.5 Target Mapping Report" in report
     assert "CSV export skipped for financial_metrics" in report
-<<<<<<< HEAD
-    assert "Target Metrics Mapping Status" in report
-    assert "Proposed Formulas For Formula Recommendations" in report
-=======
     assert "## 0. Compact Summary" in report
     assert "## 2. Missing Target Replacement Recommendations" not in report
     assert "Evidence Boundary" not in report
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 
 
 def test_milestone25_full_report_flag_prints_detailed_markdown(
@@ -893,13 +826,6 @@ def test_milestone25_full_report_flag_prints_detailed_markdown(
     assert exit_code == 0
     _assert_report_generation_output(output, tmp_path / "experiment_report.md")
     assert "# Plan 2.5 Target Mapping Report" in report
-<<<<<<< HEAD
-    assert "--full-report kept for CLI compatibility" in report
-    assert "Target Metrics Mapping Status" in report
-    assert "Proposed Formulas For Formula Recommendations" in report
-    assert "Financial Metric Data Lineage View" not in report
-    assert "Annual XBRL Financial Metrics" not in report
-=======
     assert "## 0. Compact Summary" in report
     assert "## 3. Proposed Formulas For Formula Recommendations" in report
     assert "--full-report kept for CLI compatibility" in report
@@ -907,7 +833,6 @@ def test_milestone25_full_report_flag_prints_detailed_markdown(
     assert "Provider-Level Formula Diagnostics" not in report
     assert "Raw Fact and Unknown Concept Evidence" not in report
     assert "Financial Metric Data Lineage View" not in report
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 
 
 def test_milestone25_markdown_table_keeps_identifier_lists_as_text() -> None:
@@ -929,158 +854,9 @@ def test_milestone25_markdown_table_keeps_identifier_lists_as_text() -> None:
     assert raw_fact_ids in table
     assert context_hash in table
     assert "123.46M" in table
-    year_table = "\n".join(experiment._markdown_table([{"Year": "2026", "Q1": 223}]))
-    assert "2026" in year_table
-    assert "2.03K" not in year_table
     assert experiment._format_presentation_number("9" * 80) == "9" * 80
 
 
-<<<<<<< HEAD
-def test_milestone25_formula_rows_include_validation_reason() -> None:
-    experiment = _load_experiment_module()
-    snapshot = {
-        "target_raw_fact_coverage": [
-            {
-                "internal_metric_name": "debt_current",
-                "statement_type": "balance_sheet",
-                "status": experiment.STATUS_MISSING_TARGET,
-                "target_xbrl_concept": "us-gaap:DebtCurrent",
-            }
-        ],
-        "formula_proposal_diagnostics": [
-            {
-                "target_metric_name": "debt_current",
-                "target_primary_statement": "balance_sheet",
-                "period_context": "2026 Q3 | instant | USD | ->2026-03-31 | 10-Q | test-accession",
-                "provider_status": "proposed",
-                "provider_name": "gemini",
-                "model_name": "gemini-2.5-flash",
-                "formula_expression": "debt_current = us-gaap:LongTermDebtCurrent",
-                "components": "+ us-gaap:LongTermDebtCurrent",
-                "validation_status": "validation_failed",
-                "validation_skip_reason": "formula_components_duplicate_same_period_facts",
-                "confidence": "0.95",
-                "reason": "test proposal",
-            }
-        ],
-    }
-
-    rows = experiment._proposed_formula_rows_for_missing_targets(snapshot, form_type="10-Q")
-
-    assert rows == [
-        {
-            "Metric": "debt_current",
-            "Statement": "balance_sheet",
-            "Period context": "2026 q3",
-            "Providers": "gemini (gemini-2.5-flash)",
-            "Formula": "debt_current = LongTermDebtCurrent",
-            "Validation status": "validation_failed",
-            "Validation reason": "formula_components_duplicate_same_period_facts",
-            "Confidence": "0.95",
-            "Reason": "test proposal",
-        }
-    ]
-
-
-def test_milestone25_xbrl_concepts_provided_by_period_counts_raw_facts(
-    tmp_path: Path,
-    monkeypatch,
-    capsys,
-) -> None:
-    experiment = _load_experiment_module()
-    calls: list[str] = []
-    base_ingest = _fake_ingest_company(calls)
-
-    def ingest_with_extra_raw_facts(ticker: str, settings: Settings) -> SimpleNamespace:
-        result = base_ingest(ticker, settings)
-        with connect_sqlite(settings.stock_sql_db_path) as connection:
-            raw_repository = RawFactRepository(connection)
-            raw_repository.initialize()
-            raw_repository.upsert_facts(
-                [
-                    _fact(
-                        form="10-K",
-                        accession_number="test-10k",
-                        concept="Assets",
-                        label="Assets",
-                        fiscal_period="FY",
-                    ),
-                    _fact(
-                        form="10-K/A",
-                        accession_number="test-10ka",
-                        concept="Liabilities",
-                        label="Liabilities",
-                        fiscal_period="FY",
-                    ),
-                    _fact(
-                        form="10-Q",
-                        accession_number="test-10q",
-                        concept="Assets",
-                        label="Assets",
-                        fiscal_period="Q1",
-                    ),
-                    _fact(
-                        form="10-Q",
-                        accession_number="test-10q",
-                        concept="Liabilities",
-                        label="Liabilities",
-                        fiscal_period="Q1",
-                    ),
-                    _fact(
-                        form="10-Q/A",
-                        accession_number="test-10qa",
-                        concept="StockholdersEquity",
-                        label="Stockholders' equity",
-                        fiscal_period="Q2",
-                    ),
-                ]
-            )
-        return result
-
-    monkeypatch.setattr(experiment, "ingest_company", ingest_with_extra_raw_facts)
-    env_file = _env_file(tmp_path)
-
-    exit_code = experiment.main(
-        [
-            "--ticker",
-            "TEST",
-            "--no-formula-proposals",
-            "--env-file",
-            str(env_file),
-            "--db-path",
-            str(tmp_path / "experiment.db"),
-            "--report-path",
-            str(tmp_path / "experiment_report.md"),
-            "--filings-dir",
-            str(tmp_path / "filings"),
-            "--exports-dir",
-            str(tmp_path / "exports"),
-        ]
-    )
-    output = capsys.readouterr().out
-    report = (tmp_path / "experiment_report.md").read_text(encoding="utf-8")
-
-    annual_section = report.split("### # of concepts provided from XBRL - 10-K", 1)[1].split(
-        "### # of concepts provided from XBRL - 10-Q",
-        1,
-    )[0]
-    annual_row = next(line for line in annual_section.splitlines() if line.startswith("| 2025"))
-    annual_cells = [cell.strip() for cell in annual_row.strip("|").split("|")]
-    quarterly_section = report.split("### # of concepts provided from XBRL - 10-Q", 1)[1].split(
-        "Boundary:",
-        1,
-    )[0]
-    quarterly_row = next(line for line in quarterly_section.splitlines() if line.startswith("| 2025"))
-    quarterly_cells = [cell.strip() for cell in quarterly_row.strip("|").split("|")]
-
-    assert exit_code == 0
-    assert output == ""
-    assert annual_cells == ["2025", "3"]
-    assert quarterly_cells == ["2025", "2", "1", ""]
-
-
-def test_milestone25_report_shows_approved_learned_mapping_reuse(
-=======
 def test_milestone25_markdown_table_keeps_period_context_as_label() -> None:
     experiment = _load_experiment_module()
 
@@ -1150,144 +926,6 @@ def test_milestone25_formula_proposal_targets_collapse_missing_tags_by_metric() 
     assert "DepreciationDepletionAndAmortization" in targets[0].notes
 
 
-<<<<<<< HEAD
-def test_milestone25_report_shows_profile_reuse_and_candidate_level_semantic_evidence(
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
-    tmp_path: Path,
-    monkeypatch,
-    capsys,
-) -> None:
-    experiment = _load_experiment_module()
-    calls: list[str] = []
-    monkeypatch.setattr(
-        experiment,
-        "ingest_company",
-        _fake_ingest_company_with_mapping_evidence(calls),
-    )
-    env_file = _env_file(tmp_path)
-
-    exit_code = experiment.main(
-        [
-            "--ticker",
-            "TEST",
-            "--no-formula-proposals",
-            "--full-report",
-            "--env-file",
-            str(env_file),
-            "--db-path",
-            str(tmp_path / "experiment.db"),
-            "--report-path",
-            str(tmp_path / "experiment_report.md"),
-            "--filings-dir",
-            str(tmp_path / "filings"),
-            "--exports-dir",
-            str(tmp_path / "exports"),
-        ]
-    )
-    output = capsys.readouterr().out
-    report = (tmp_path / "experiment_report.md").read_text(encoding="utf-8")
-
-    assert exit_code == 0
-    assert output == ""
-<<<<<<< HEAD
-    assert "Target Metrics Mapping Status" in report
-    assert "Target XBRL concepts checked" in report
-    target_status_section = report.split("Target Metrics Mapping Status", 1)[1].split(
-        "Proposed Formulas For Formula Recommendations",
-        1,
-    )[0]
-    target_status_header = next(
-        line for line in target_status_section.splitlines() if line.startswith("| ")
-    )
-    assert [cell.strip() for cell in target_status_header.strip("|").split("|")] == [
-=======
-    assert "Approved Company Concept Profile Reuse And Semantic Discovery" not in report
-    assert "semantic discovery status" not in report
-    assert "Metric-First Coverage Resolution" not in report
-    assert "Appendix A: Target-Level XBRL Concept Coverage" not in report
-    target_coverage_section = _report_section(
-        report,
-        "## 1. Target Metrics Mapping Status",
-        "## 2. Semantic Candidates For Missing Targets",
-    )
-    target_coverage_header = next(
-        line for line in target_coverage_section.splitlines() if line.startswith("| ")
-    )
-    assert [cell.strip() for cell in target_coverage_header.strip("|").split("|")] == [
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
-        "Metric type",
-        "Metric",
-        "Statement",
-        "Mapping status",
-        "Mapped target concepts",
-        "Coverage detail",
-        "Approved alternates",
-        "Target XBRL concepts checked",
-    ]
-<<<<<<< HEAD
-    assert "required_for_core" not in target_status_section
-    assert "unit_count" not in target_status_section
-    assert "target_candidate_xbrl_concept" not in report
-    assert "target_xbrl_concept_candidate" not in report
-    assert "Mapping Candidates (Review Required):" not in report
-    assert "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax" in report
-    assert "## Human Question" not in report
-    assert "Company Industry Labels:" not in report
-    assert "Unknown SEC/XBRL Concepts Not Mapped To Base Metrics:" not in report
-=======
-    assert "Missing or unapproved target concepts" not in target_coverage_header
-    assert "common base" in target_coverage_section
-    assert "required_for_core" not in target_coverage_section
-    assert "unit_count" not in target_coverage_section
-    semantic_section = _report_section(
-        report,
-        "## 2. Semantic Candidates For Missing Targets",
-        "## 3. Proposed Formulas For Formula Recommendations",
-    )
-    assert "### 10-K" in semantic_section
-    assert "### 10-Q" in semantic_section
-    assert "Target concept" not in semantic_section
-    assert "Recommended concepts by semantic similarity" in semantic_section
-    assert "Period coverage" in semantic_section
-    assert "Requires review" not in semantic_section
-    assert "Target candidate" not in semantic_section
-    assert "target_xbrl_concept_candidate" not in report
-    assert "CustomerAccountsReceivable" in semantic_section
-    assert "AccountsReceivableNetCurrent" not in semantic_section
-    assert "active 10-K periods: 2025 FY" in semantic_section
-    assert "active 10-Q periods: 2025 Q1" in semantic_section
-    assert "custom:" not in report
-    assert "us-gaap:" not in report
-    assert "custom:CustomerRevenueGross" not in semantic_section
-    assert "## Human Question" not in report
-    assert "### Company Industry Labels" not in report
-    assert report.count("## 1. Target Metrics Mapping Status") == 1
-    assert report.count("## 2. Semantic Candidates For Missing Targets") == 1
-    assert "Unknown Concept Review Pool" not in report
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
-    snapshot = experiment._snapshot(tmp_path / "experiment.db", "TEST")
-    unknown_coverage = next(
-        row
-        for row in snapshot["raw_fact_mapping_coverage"]
-        if row["coverage_item"] == "distinct unknown raw concepts"
-    )
-    review_pool = next(
-        row
-        for row in snapshot["mapping_profile_reuse"]
-        if row["evidence_item"] == "mapping expansion review pool"
-    )
-    revenue_resolution = next(
-        row
-        for row in snapshot["metric_coverage_resolution"]
-        if row["internal_metric_name"] == "revenue"
-    )
-    assert review_pool["value"] == unknown_coverage["count"]
-    assert revenue_resolution["coverage_status"] == "mapped"
-    assert revenue_resolution["reviewer_action"] == "none"
-
-
-=======
->>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 def test_milestone25_report_shows_report_only_debt_recovery_diagnostics(
     tmp_path: Path,
     monkeypatch,
@@ -1320,22 +958,13 @@ def test_milestone25_report_shows_report_only_debt_recovery_diagnostics(
     report = (tmp_path / "experiment_report.md").read_text(encoding="utf-8")
 
     assert exit_code == 0
-<<<<<<< HEAD
-    assert output == ""
-<<<<<<< HEAD
-    assert "Debt Recovery Formula Catalog:" not in report
-    assert "Debt Recovery Diagnostics Summary:" not in report
-=======
-=======
     _assert_report_generation_output(output, tmp_path / "experiment_report.md")
->>>>>>> 007dd04 (Refine evidence report generation and normalization)
     assert "Debt Recovery Formula Catalog" not in report
     assert "Report-Only Debt Recovery Diagnostics" not in report
     assert "Debt Recovery Diagnostic Rows" not in report
     assert "Debt Recovery Component Evidence" not in report
     assert "## 1. Target Metrics Mapping Status" in report
     assert "## 3. Proposed Formulas For Formula Recommendations" in report
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
     snapshot = experiment._snapshot(tmp_path / "experiment.db", "TEST")
     current = next(
         row
@@ -1436,18 +1065,6 @@ def test_milestone25_report_shows_report_only_formula_proposals_from_found_targe
     snapshot = experiment._snapshot(tmp_path / "experiment.db", "TEST")
 
     assert exit_code == 0
-<<<<<<< HEAD
-    assert output == ""
-    assert "XBRL Concepts Provided By Period" in report
-    assert "Proposed Formulas For Formula Recommendations" in report
-    assert "LLM Formula Proposal Diagnostics Summary" not in report
-    assert "LLM Formula Proposal Diagnostics" not in report
-    assert "LLM Formula Proposal Component Evidence" not in report
-    assert "Eligible Formula Proposal Raw Fact Pool" not in report
-    assert "accounts_receivable = Revenues" in report
-    assert "validated_component_pool" in report
-    assert "fake_provider (fake_model)" in report
-=======
     _assert_formula_progress_output(output)
     assert "## 2. Missing Target Replacement Recommendations" not in report
     assert "## 3. Proposed Formulas For Formula Recommendations" in report
@@ -1479,7 +1096,6 @@ def test_milestone25_report_shows_report_only_formula_proposals_from_found_targe
     assert "Metric-First Coverage Resolution" not in report
     assert "cap_per_target" not in report
     assert "generated_new" not in report
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
     with connect_sqlite(tmp_path / "experiment.db") as connection:
         stored_recovered_metrics = connection.execute(
             """
@@ -1565,12 +1181,6 @@ def test_milestone25_report_shows_report_only_zero_target_proposals(
     report = (tmp_path / "experiment_report.md").read_text(encoding="utf-8")
 
     assert exit_code == 0
-<<<<<<< HEAD
-    assert output == ""
-    assert "accounts_receivable = 0" in report
-    assert "Zero-target evidence rows" in report
-    assert "validated_zero_evidence_pool" in report
-=======
     _assert_formula_progress_output(output)
     assert "target_zero" not in report
     assert "target_is_zero" not in report
@@ -1586,7 +1196,6 @@ def test_milestone25_report_shows_report_only_zero_target_proposals(
     assert "validated_zero_evidence_pool" in report
     assert "review zero evidence" not in report
     assert "Zero-target evidence rows" in report
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
     with connect_sqlite(tmp_path / "experiment.db") as connection:
         stored_recovered_metrics = connection.execute(
             """
@@ -1674,20 +1283,9 @@ def test_milestone25_formula_proposals_reuse_failed_provider_result_within_run(
     assert exit_code == 0
     _assert_formula_progress_output(output)
     assert len(provider_calls) == 1
-<<<<<<< HEAD
-<<<<<<< HEAD
-    assert "Formula diagnostics run" in report
-    assert "Formula proposals returned" in report
-    assert "provider_failed" not in report
-    assert "test provider failure" not in report
-=======
-    assert "provider_failed" not in report
-    assert "test provider failure" not in report
-=======
     assert "Provider Outcomes Without Formula Recommendation" in report
     assert "provider_failed" in report
     assert "test provider failure" in report
->>>>>>> 007dd04 (Refine evidence report generation and normalization)
     assert "No rows to display." in _report_section(
         report,
         "## 3. Proposed Formulas For Formula Recommendations",
@@ -1997,7 +1595,6 @@ def test_milestone25_formula_proposal_fact_pool_uses_active_filing_periods_only(
         )
 
     assert [fact.concept for fact in fact_pool] == ["ActiveCurrentPeriodConcept"]
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 
 
 def test_milestone25_report_presents_new_filings_when_sec_update_ingests_them(
@@ -2038,13 +1635,7 @@ def test_milestone25_report_presents_new_filings_when_sec_update_ingests_them(
     assert "SEC update check performed" in report
     assert "SEC checked; new active-window filing data ingested" in report
     assert "New filings ingested this session" in report
-<<<<<<< HEAD
-    assert "10-Q test-10q-new" in report
-    assert "10-Q check due" in report
-    assert "next check date before session: 2020-01-01" in report
-=======
     assert "10-Q accession test-10q-new" in report
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 
 
 def _seed_formula_batch_company(connection) -> int:
@@ -2291,15 +1882,6 @@ def _fake_ingest_company_with_mapping_evidence(calls: list[str]):
                         form="10-K",
                         accession_number="test-10k",
                         taxonomy="custom",
-<<<<<<< HEAD
-                        concept="CustomerRevenueApproved",
-                        label="Customer revenue approved",
-                    ),
-                    _fact(
-                        form="10-K",
-                        accession_number="test-10k",
-=======
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
                         concept="CustomUnmappedDisclosure",
                         label="Custom unmapped disclosure",
                     ),
@@ -2343,56 +1925,6 @@ def _fake_ingest_company_with_mapping_evidence(calls: list[str]):
                         reviewed_by="tester",
                         reviewed_at="2026-01-01T00:00:00+00:00",
                     ),
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-                    ConceptMappingRecord(
-                        taxonomy="custom",
-                        concept="CustomerRevenueGross",
-                        metric_name="revenue",
-                        statement_type="income_statement",
-                        scope_type=MAPPING_SCOPE_COMPANY,
-                        scope_value="0000000001",
-                        status=MAPPING_STATUS_CANDIDATE,
-                        confidence=0.91,
-                        match_method="semantic_candidate_embedding_v2",
-                        evidence={
-                            "embedding_granularity": "target_xbrl_concept_candidate",
-                            "target_candidate_taxonomy": "us-gaap",
-                            "target_candidate_xbrl_concept": (
-                                "RevenueFromContractWithCustomerExcludingAssessedTax"
-                            ),
-                            "target_candidate_industry_labels": ["Common Base"],
-                            "observed_label": "Customer revenue gross",
-                            "observed_period_types": ["duration"],
-                            "semantic_similarity": 0.91,
-                            "requires_review": True,
-                        },
-                    ),
-                    ConceptMappingRecord(
-                        taxonomy="custom",
-                        concept="CustomerAccountsReceivable",
-                        metric_name="accounts_receivable",
-                        statement_type="balance_sheet",
-                        scope_type=MAPPING_SCOPE_COMPANY,
-                        scope_value="0000000001",
-                        status=MAPPING_STATUS_CANDIDATE,
-                        confidence=0.88,
-                        match_method="semantic_candidate_embedding_v2",
-                        evidence={
-                            "embedding_granularity": "target_xbrl_concept_candidate",
-                            "target_candidate_taxonomy": "us-gaap",
-                            "target_candidate_xbrl_concept": "AccountsReceivableNetCurrent",
-                            "target_candidate_industry_labels": ["Common Base"],
-                            "observed_label": "Customer accounts receivable",
-                            "observed_period_types": ["instant"],
-                            "semantic_similarity": 0.88,
-                            "requires_review": True,
-                        },
-                    ),
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
-=======
->>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
                 )
             )
         return result
@@ -2563,17 +2095,12 @@ def _fact(
     taxonomy: str = "us-gaap",
     concept: str = "Revenues",
     label: str = "Revenues",
-<<<<<<< HEAD
-    fiscal_year: int = 2025,
-    fiscal_period: str = "FY",
-=======
     period_type: str = "duration",
     fiscal_year: int = 2025,
     fiscal_period: str = "FY",
     start_date: date | None = date(2024, 1, 1),
     end_date: date | None = date(2024, 12, 31),
     filed_date: date | None = date(2025, 2, 15),
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 ) -> NormalizedFact:
     return NormalizedFact(
         cik="0000000001",
@@ -2585,15 +2112,9 @@ def _fact(
         unit="USD",
         value_raw=100,
         value=Decimal("100"),
-<<<<<<< HEAD
-        start_date=date(2024, 1, 1),
-        end_date=date(2024, 12, 31),
-        period_type="duration",
-=======
         start_date=start_date,
         end_date=end_date,
         period_type=period_type,
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
         fiscal_year=fiscal_year,
         fiscal_period=fiscal_period,
         form=form,

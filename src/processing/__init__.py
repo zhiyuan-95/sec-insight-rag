@@ -33,6 +33,7 @@ from src.processing.mapping_catalog import (
     mapping_candidates_by_key,
     target_facts_for_industry_labels,
 )
+from src.processing.periods import classify_period, parse_sec_date, validate_period
 from src.processing.metric_coverage import (
     METRIC_COVERAGE_APPROVED_ALTERNATE,
     METRIC_COVERAGE_MAPPED,
@@ -47,12 +48,7 @@ from src.processing.metric_coverage import (
     metric_coverage_report_rows,
     resolve_metric_coverage,
 )
-<<<<<<< HEAD
-from src.processing.periods import classify_period, parse_sec_date, validate_period
-from src.processing.metric_targets import (
-=======
 from src.processing.mapping_targets import (
->>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
     CanonicalMetricTarget,
     TargetConceptCandidate,
     all_canonical_metric_targets,
@@ -71,16 +67,7 @@ __all__ = [
     "CanonicalMetricTarget",
     "COMMON_BASE_LABEL",
     "NormalizedFact",
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-    "SemanticMappingCandidate",
     "MetricCoverageResolution",
-    "TargetEmbeddingPrewarmResult",
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
-=======
-    "MetricCoverageResolution",
->>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
     "TargetConceptCandidate",
     "CompanyIndustryLabelAssignment",
     "HARD_INDUSTRY_LABELS",
@@ -120,14 +107,7 @@ __all__ = [
     "normalize_fact_entry",
     "normalize_inline_xbrl_model",
     "parse_sec_date",
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-    "prewarm_all_target_candidate_embeddings",
-=======
->>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
     "resolve_metric_coverage",
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
     "target_facts_for_industry_labels",
     "validate_period",
 ]

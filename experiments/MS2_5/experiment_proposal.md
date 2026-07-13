@@ -76,18 +76,6 @@ This experiment covers:
 - approved learned mappings with global, industry, or company scope
 - missing exact target tags whose canonical metric is recovered through an
   approved alternate concept
-<<<<<<< HEAD
-- report-only LLM formula proposal evidence for unresolved target concepts
-  after direct catalog and approved learned mapping, using period-scoped raw
-  fact pools that include found targets, mapped base metrics, approved
-  alternates, and unknown/unmapped raw facts, with target-compatible unit filtering,
-  statement-first prompting, one representative context per target, and
-  exact-context cache reuse
-- saved Plan 2.5 target mapping report with compact run summary, XBRL concept
-  counts provided to formula generation, target metric mapping status, and
-  report-only formula proposal rows; source rows remain available in SQLite and
-  CSV exports
-=======
 - report-only LLM formula proposal diagnostics for unresolved target concepts
   after hard mapping, using period-scoped raw fact pools
   that include found targets, mapped base metrics, approved alternates, and
@@ -101,15 +89,8 @@ This experiment covers:
   skip reasons, formula versions, and source metric/raw fact IDs
 - saved Plan 2.5 target mapping report with a compact summary, mapped/missing
   target metric status with common-base versus industry-special classification,
-<<<<<<< HEAD
-  semantic candidates for missing metrics split into 10-K and 10-Q active-window
-  subsections, and proposed formula rows split into 10-K and 10-Q active-window
-  subsections with taxonomy prefixes removed from displayed concept values
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
-=======
   and proposed formula rows split into 10-K and 10-Q active-window subsections
   with taxonomy prefixes removed from displayed concept values
->>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 
 This experiment does not cover derived indicators, deterministic analytics,
 retrieval indexes, Gemini calls, RAG answers, frontend behavior, durable
@@ -145,18 +126,12 @@ report body to the terminal.
 `experiments/storage/experiment.db` should persist across runs and across
 milestone experiments. The CSV exports should overwrite stable paths on each
 run.
-<<<<<<< HEAD
-`--full-report` is accepted only as a compatibility flag; it should not append
-the older full lineage appendix. `--write-report` is also accepted only as a
-compatibility flag because the report is now always saved.
-=======
 The default saved report should show the compact metric-first decision path.
 `--full-report` is kept as a CLI compatibility flag, but the saved report keeps
 the same decision-focused section shape instead of appending diagnostic
 appendices.
 `--write-report` is accepted only as a compatibility flag because the report is
 now always saved.
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 
 ## Data Mode
 
@@ -196,7 +171,7 @@ Compatibility saved report run:
 uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER --write-report
 ```
 
-Compatibility detailed-flag run:
+Detailed saved report run:
 
 ```text
 uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER --full-report
@@ -208,28 +183,10 @@ Default report run with report-only LLM formula proposals:
 uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER
 ```
 
-<<<<<<< HEAD
-Use `--no-formula-proposals` to skip provider calls for a cheaper mapping run.
-`--formula-proposals` is accepted for compatibility and keeps the default
-provider-call behavior. Use `--formula-proposal-target-limit N` for a capped live-provider smoke test.
-The formula proposal panel evaluates one representative period context per
-missing target to keep live provider calls bounded; the saved report summarizes
-the selected XBRL concept counts instead of appending raw-fact diagnostics.
-=======
 Use `--no-formula-proposals` to skip provider calls for a cheaper report-only
 mapping run. Use `--formula-proposal-target-limit N` for a capped live-provider
 smoke test.
 The formula proposal panel evaluates active 10-K and 10-Q filing periods for
-<<<<<<< HEAD
-each missing metric. It sends each provider one request per distinct metric,
-unit, period type, form, statement bucket set, and raw concept pool. When
-multiple active periods expose the same pool, one model recommendation is shown
-with period coverage for all matching periods. When active periods expose
-different raw concept pools, the report can show different period-scoped formula
-recommendations. The full eligible active-period raw fact pool remains
-available in SQLite and CSV export evidence.
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
-=======
 each missing metric. It loads exact per-target cache entries first, then sends
 each provider one request per statement-scoped batch context for uncached
 targets. A batch request may include multiple missing metrics only when they
@@ -243,26 +200,18 @@ coverage for all matching periods. When active periods expose different raw
 concept pools, the report can show different period-scoped formula
 recommendations. The full eligible active-period raw fact pool, including
 secondary currency facts, remains available in SQLite and CSV export evidence.
->>>>>>> 007dd04 (Refine evidence report generation and normalization)
 
 Rules:
 
 - exactly one ticker is accepted per run
-- the Plan 2.5 target mapping report is saved to `milestone25_mapping_report_<TICKER>.md` by default
+- the compact summary is saved to `milestone25_mapping_report_<TICKER>.md` by default
 - the report body is not printed to the terminal
-<<<<<<< HEAD
-- formula proposal provider calls run by default and can be skipped with
-  `--no-formula-proposals`
-- `--full-report` is accepted for CLI compatibility but keeps the same fixed
-  target mapping report shape
-=======
 - while formula proposals run, the terminal prints process progress: how many
   missing targets were selected, which missing metric/statement is being
   handled, each statement-scoped context, each batch context, and the final
   context count
 - `--full-report` is accepted for compatibility; it does not add old
   target-level, provider-level, raw-fact, or unknown-concept appendices
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 - `--write-report` is accepted for compatibility; the report is already saved
 - both 10-K and 10-Q behavior are presented for that ticker
 - normal runs do not delete `experiments/storage/experiment.db`; repeat runs
@@ -290,47 +239,6 @@ Supporting CSV artifacts:
 data/exports/ms2_5/
 ```
 
-<<<<<<< HEAD
-The saved Markdown report should keep the fixed Plan 2.5 target mapping shape.
-It should show the operational decision path first, then XBRL concept counts
-provided to formula generation, target metric mapping status, then formula
-proposal evidence. It should not include model-similarity mapping candidates,
-final recommendations, debt recovery diagnostics, annual metric pivots,
-quarterly metric pivots, or the older full lineage appendix.
-
-`--full-report` is accepted for CLI compatibility, but it should not change the
-saved report into the old full appendix shape.
-
-## Saved Target Mapping Report Shape
-
-```text
-# Plan 2.5 Target Mapping Report
-
-## 0. Compact Summary
-  ticker, CIK, timestamp, update-check status, SEC result,
-  target metrics checked, mapped/missing target metrics, formula counts
-
-## 0A. XBRL Concepts Provided By Period
-  yearly 10-K concept counts
-  year-by-quarter 10-Q concept counts
-
-## 1. Target Metrics Mapping Status
-  one row per internal metric with mapping status, mapped concepts,
-  approved alternates, and target XBRL concepts checked
-
-## 2. Proposed Formulas For Formula Recommendations
-  10-K proposed formula rows
-  10-Q proposed formula rows
-
-```
-
-## Required Report Sections
-
-1. Compact summary
-2. XBRL concepts provided by period
-3. Target metric mapping status
-4. Proposed formulas by filing form
-=======
 ## Saved Report Shape
 
 The saved report should be compact, intuitive, and metric-first. The reader
@@ -388,7 +296,6 @@ no_evidence
 
 The internal resolver may still use `needs_llm_resolution`, but the report
 should say `needs_review` so the LLM does not sound like the final approver.
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 
 ## Implementation Guidance
 
@@ -405,16 +312,8 @@ should say `needs_review` so the LLM does not sound like the final approver.
   formula-from-raw-concepts, zero-target, or no-evidence.
 - Reuse `src/ingestion/inline_xbrl.py` and Arelle for active filing extension
   taxonomy loading; keep normalization in `src/processing/inline_xbrl.py`.
-<<<<<<< HEAD
-- Reuse `src/processing/metric_targets.py` for canonical target definitions and
-  missing-target diagnostics.
-- Read approved learned mappings from `xbrl_concept_mappings`; only approved
-  learned mappings can supplement the source-controlled catalog.
-- Do not generate model-similarity mapping candidates.
-=======
 - Read approved learned mappings from `xbrl_concept_mappings`; only approved
   mappings can participate in hard mapping.
->>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 - Keep LLM formula proposal prompt text in `src/analyze/prompts.py`, provider
   calls in `src/analyze/xbrl_formula_proposals.py`, and period context
   construction, target-compatible unit filtering, statement-scoped batch
@@ -427,8 +326,8 @@ should say `needs_review` so the LLM does not sound like the final approver.
   same-period raw facts provide affirmative evidence that the missing target
   may be zero; that decision is still review evidence and does not create a
   financial metric.
-- Keep report-only debt recovery logic out of the saved Markdown report; use
-  dedicated metric recovery tests for that behavior.
+- Reuse `src/processing/metric_recovery.py` for report-only debt recovery
+  diagnostics. Do not duplicate formula logic in this experiment script.
 - Reuse repositories in `src/storage/` for all database reads and writes.
 - Do not calculate derived indicators inside the experiment script.
 - Do not persist recovered debt values or insert them into `financial_metrics`.
@@ -439,34 +338,17 @@ should say `needs_review` so the LLM does not sound like the final approver.
 - Do not write to `stock_data.db`.
 - Do not delete or reset `experiments/storage/experiment.db` at startup.
 - Do not print secrets or the actual `SEC_USER_AGENT` value.
-<<<<<<< HEAD
-- Save the fixed target mapping report to
-  `milestone25_mapping_report_<TICKER>.md` by default without printing the
-  report body to the terminal.
-- Keep the saved Markdown report limited to compact summary, XBRL concept counts
-  provided to formula generation, target metric mapping status, and proposed
-  formula rows.
-- Accept `--full-report` as a compatibility flag; do not append the old full
-  lineage report.
-=======
 - Keep the default saved report compact, metric-first, and limited to the
   requested mapping evidence tables.
 - Save the compact Plan 2.5 target mapping report to
   `milestone25_mapping_report_<TICKER>.md` by default without printing the
   report body to the terminal.
-<<<<<<< HEAD
-- Keep target-level, provider-level, raw-fact, unknown-concept, validation,
-  cache, and component diagnostic tables out of the saved Markdown report.
-  Source rows remain available in SQLite and CSV exports.
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
-=======
 - Keep target-level, raw-fact, unknown-concept, validation, cache, and component
   diagnostic tables out of the saved Markdown report. Keep full provider-level
   diagnostics out too, except for the compact Section 3 provider outcome rows
   that expose `no_formula`, `provider_unavailable`, or `provider_failed`
   recommendation coverage gaps. Source rows remain available in SQLite and CSV
   exports.
->>>>>>> 007dd04 (Refine evidence report generation and normalization)
 - Accept `--write-report` as a compatibility flag, not as a separate output
   mode.
 - Store Decimal-compatible numeric text values as they come from the storage
@@ -483,30 +365,21 @@ raw_xbrl_facts
 financial_metrics
 ```
 
-<<<<<<< HEAD
-The generated CSV exports are written under:
-=======
 Generated CSV exports remain under:
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 
 ```text
 data/exports/ms2_5/
 ```
 
-<<<<<<< HEAD
-=======
 The saved report should use Markdown tables for the compact summary, target
 metric mapping status, and proposed formulas for formula recommendations.
 Table cells should be padded to the column width so headers and values align in
 the text report.
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 Numeric report values should use presentation-only abbreviations where useful:
 `K`, `M`, `B`, and `T` represent thousands, millions, billions, and trillions.
 Abbreviated values should use two decimal places when possible, and decimal
 values below `1K` should be rounded to two decimal places. Stored SQLite values
 and CSV exports should remain unmodified.
-<<<<<<< HEAD
-=======
 When multiple distinct values remain for one metric-period cell, the report
 should keep them visible in the cell instead of silently dropping them.
 Detailed target raw fact coverage, provider-level formula diagnostics, formula
@@ -514,7 +387,6 @@ component evidence, raw fact mapping coverage, persisted hard industry labels,
 Inline XBRL extension coverage, approved learned mappings, observed alternate
 tags, and unknown concepts should remain inspectable through SQLite and CSV
 exports rather than appended to the saved Markdown report.
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 
 ## Edge Cases To Present
 
@@ -553,12 +425,8 @@ inspect:
 - which hard industry labels are assigned and why
 - which target raw facts were expected, found, missing, or found but unmapped
 - which base metrics can be traced back to raw XBRL facts
-<<<<<<< HEAD
-- where to inspect formula proposal evidence for unresolved targets
-=======
 - where to inspect target-level, provider-level, raw-fact, and unknown-concept
   evidence
->>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 - where to open the full SQLite database and CSV exports
 
 The experiment should stop at presentation. The human reviewer decides whether
