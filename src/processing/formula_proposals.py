@@ -16,11 +16,8 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 FORMULA_PROPOSAL_PROMPT_VERSION = "xbrl_formula_proposal_v3"
-FINAL_RECOMMENDATION_PROMPT_VERSION = "xbrl_final_recommendation_v1"
 FORMULA_CONTEXT_FINGERPRINT_VERSION = "formula_context_v1"
-FINAL_RECOMMENDATION_CONTEXT_FINGERPRINT_VERSION = "final_recommendation_context_v1"
 FORMULA_PROPOSAL_CACHE_SCHEMA_VERSION = "formula_proposal_cache_v1"
-FINAL_RECOMMENDATION_CACHE_SCHEMA_VERSION = "final_recommendation_cache_v1"
 STATEMENT_BUCKET_CLASSIFIER_VERSION = "statement_bucket_v1"
 TARGET_CATALOG_VERSION = "target_catalog_v1"
 
@@ -29,22 +26,6 @@ PROVIDER_STATUS_TARGET_ZERO = "target_zero"
 PROVIDER_STATUS_NO_FORMULA = "no_formula"
 PROVIDER_STATUS_UNAVAILABLE = "provider_unavailable"
 PROVIDER_STATUS_FAILED = "provider_failed"
-
-FINAL_RECOMMENDATION_STATUS_SELECTED = "selected"
-FINAL_RECOMMENDATION_STATUS_NO_OPTIONS = "no_options"
-FINAL_RECOMMENDATION_STATUS_UNAVAILABLE = "provider_unavailable"
-FINAL_RECOMMENDATION_STATUS_FAILED = "provider_failed"
-
-FINAL_OPTION_FORMULA = "formula"
-FINAL_OPTION_SEMANTIC_CANDIDATE = "semantic_candidate"
-FINAL_OPTION_ZERO = "zero"
-FINAL_OPTION_NO_RECOMMENDATION = "no_recommendation"
-FINAL_OPTION_TYPES = {
-    FINAL_OPTION_FORMULA,
-    FINAL_OPTION_SEMANTIC_CANDIDATE,
-    FINAL_OPTION_ZERO,
-    FINAL_OPTION_NO_RECOMMENDATION,
-}
 
 VALIDATION_STATUS_VALIDATED = "validated_component_pool"
 VALIDATION_STATUS_ZERO_EVIDENCE = "validated_zero_evidence_pool"
@@ -151,30 +132,6 @@ class FormulaProposalResponse(BaseModel):
         return str(value or "").strip()
 
 
-class FinalRecommendationResponse(BaseModel):
-    """Structured model response for one period-level final recommendation."""
-
-    selected_option_type: str = FINAL_OPTION_NO_RECOMMENDATION
-    selected_option_id: str = ""
-    final_recommendation: str = ""
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    reason: str = ""
-    uncertainty: str = ""
-
-    @field_validator("selected_option_type")
-    @classmethod
-    def normalize_option_type(cls, value: str) -> str:
-        clean = str(value or FINAL_OPTION_NO_RECOMMENDATION).strip()
-        if clean not in FINAL_OPTION_TYPES:
-            raise ValueError(f"unsupported final recommendation option type: {clean}")
-        return clean
-
-    @field_validator("selected_option_id", "final_recommendation", "reason", "uncertainty")
-    @classmethod
-    def strip_final_response_text(cls, value: str) -> str:
-        return str(value or "").strip()
-
-
 @dataclass(frozen=True)
 class FormulaProposalFact:
     """One eligible raw SEC/XBRL fact available to the formula proposal panel."""
@@ -224,7 +181,11 @@ class FormulaProposalFact:
 
 @dataclass(frozen=True)
 class FormulaProposalTarget:
+<<<<<<< HEAD
     """One target still unresolved after direct and approved learned mapping."""
+=======
+    """One target still unresolved after hard mapping."""
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 
     target_metric_name: str
     target_xbrl_concept: str
@@ -279,26 +240,6 @@ class FormulaProposalProviderResult:
     reason: str
     uncertainty: str
     prompt_version: str = FORMULA_PROPOSAL_PROMPT_VERSION
-    error: str = ""
-
-
-@dataclass(frozen=True)
-class FinalRecommendationProviderResult:
-    """One provider's report-only final recommendation for one metric period."""
-
-    provider_name: str
-    model_name: str
-    target_metric_name: str
-    statement_type: str
-    period_context: str
-    provider_status: str
-    selected_option_type: str
-    selected_option_id: str
-    final_recommendation: str
-    confidence: float
-    reason: str
-    uncertainty: str
-    prompt_version: str = FINAL_RECOMMENDATION_PROMPT_VERSION
     error: str = ""
 
 
@@ -358,31 +299,6 @@ FORMULA_PROPOSAL_RESPONSE_JSON_SCHEMA: dict[str, Any] = {
         "uncertainty": {"type": "string"},
     },
 }
-
-FINAL_RECOMMENDATION_RESPONSE_JSON_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "required": [
-        "selected_option_type",
-        "selected_option_id",
-        "final_recommendation",
-        "confidence",
-        "reason",
-        "uncertainty",
-    ],
-    "properties": {
-        "selected_option_type": {
-            "type": "string",
-            "enum": sorted(FINAL_OPTION_TYPES),
-        },
-        "selected_option_id": {"type": "string"},
-        "final_recommendation": {"type": "string"},
-        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-        "reason": {"type": "string"},
-        "uncertainty": {"type": "string"},
-    },
-}
-
 
 def provider_unavailable_result(
     *,
@@ -466,91 +382,6 @@ def provider_result_from_response(
     )
 
 
-def final_recommendation_unavailable_result(
-    *,
-    provider_name: str,
-    model_name: str,
-    target_metric_name: str,
-    statement_type: str,
-    period_context: str,
-    reason: str,
-) -> FinalRecommendationProviderResult:
-    """Return a report row for a final recommender that cannot run."""
-    return FinalRecommendationProviderResult(
-        provider_name=provider_name,
-        model_name=model_name,
-        target_metric_name=target_metric_name,
-        statement_type=statement_type,
-        period_context=period_context,
-        provider_status=FINAL_RECOMMENDATION_STATUS_UNAVAILABLE,
-        selected_option_type=FINAL_OPTION_NO_RECOMMENDATION,
-        selected_option_id="",
-        final_recommendation="",
-        confidence=0.0,
-        reason="",
-        uncertainty="",
-        error=reason,
-    )
-
-
-def final_recommendation_failed_result(
-    *,
-    provider_name: str,
-    model_name: str,
-    target_metric_name: str,
-    statement_type: str,
-    period_context: str,
-    error: str,
-) -> FinalRecommendationProviderResult:
-    """Return a report row for a final recommender call or parse failure."""
-    return FinalRecommendationProviderResult(
-        provider_name=provider_name,
-        model_name=model_name,
-        target_metric_name=target_metric_name,
-        statement_type=statement_type,
-        period_context=period_context,
-        provider_status=FINAL_RECOMMENDATION_STATUS_FAILED,
-        selected_option_type=FINAL_OPTION_NO_RECOMMENDATION,
-        selected_option_id="",
-        final_recommendation="",
-        confidence=0.0,
-        reason="",
-        uncertainty="",
-        error=error,
-    )
-
-
-def final_recommendation_result_from_response(
-    *,
-    provider_name: str,
-    model_name: str,
-    target_metric_name: str,
-    statement_type: str,
-    period_context: str,
-    response: FinalRecommendationResponse,
-) -> FinalRecommendationProviderResult:
-    """Normalize a structured final recommendation into report evidence."""
-    provider_status = (
-        FINAL_RECOMMENDATION_STATUS_NO_OPTIONS
-        if response.selected_option_type == FINAL_OPTION_NO_RECOMMENDATION
-        else FINAL_RECOMMENDATION_STATUS_SELECTED
-    )
-    return FinalRecommendationProviderResult(
-        provider_name=provider_name,
-        model_name=model_name,
-        target_metric_name=target_metric_name,
-        statement_type=statement_type,
-        period_context=period_context,
-        provider_status=provider_status,
-        selected_option_type=response.selected_option_type,
-        selected_option_id=response.selected_option_id,
-        final_recommendation=response.final_recommendation,
-        confidence=float(response.confidence),
-        reason=response.reason,
-        uncertainty=response.uncertainty,
-    )
-
-
 def coerce_formula_proposal_response(payload: object) -> FormulaProposalResponse:
     """Coerce a provider payload into the shared formula proposal schema."""
     if isinstance(payload, FormulaProposalResponse):
@@ -562,19 +393,6 @@ def coerce_formula_proposal_response(payload: object) -> FormulaProposalResponse
     if not isinstance(payload, dict):
         raise ValueError("formula proposal provider returned a non-object payload")
     return FormulaProposalResponse.model_validate(payload)
-
-
-def coerce_final_recommendation_response(payload: object) -> FinalRecommendationResponse:
-    """Coerce a provider payload into the shared final recommendation schema."""
-    if isinstance(payload, FinalRecommendationResponse):
-        return payload
-    if isinstance(payload, BaseModel):
-        payload = payload.model_dump()
-    if isinstance(payload, str):
-        payload = json.loads(_extract_json_text(payload))
-    if not isinstance(payload, dict):
-        raise ValueError("final recommendation provider returned a non-object payload")
-    return FinalRecommendationResponse.model_validate(payload)
 
 
 def build_formula_proposal_contexts(
@@ -679,30 +497,6 @@ def formula_context_fingerprint(
         "target_xbrl_concept": target.target_xbrl_concept,
         "target_primary_statement": context.target_primary_statement,
         "context": context.base_fingerprint_payload,
-    }
-    return _stable_hash(payload), payload
-
-
-def final_recommendation_context_fingerprint(
-    *,
-    target_metric_name: str,
-    statement_type: str,
-    period_context: str,
-    options: tuple[dict[str, object], ...],
-    provider_name: str,
-    model_name: str,
-) -> tuple[str, dict[str, object]]:
-    """Return the exact reusable identity for one final recommendation request."""
-    payload = {
-        "cache_schema_version": FINAL_RECOMMENDATION_CACHE_SCHEMA_VERSION,
-        "fingerprint_version": FINAL_RECOMMENDATION_CONTEXT_FINGERPRINT_VERSION,
-        "prompt_version": FINAL_RECOMMENDATION_PROMPT_VERSION,
-        "provider_name": provider_name,
-        "model_name": model_name,
-        "target_metric_name": target_metric_name,
-        "statement_type": statement_type,
-        "period_context": period_context,
-        "options": options,
     }
     return _stable_hash(payload), payload
 
@@ -842,89 +636,9 @@ def save_formula_proposal_cache(
     return ""
 
 
-def load_final_recommendation_cache(
-    *,
-    cache_dir: Path,
-    final_context_hash: str,
-    target_metric_name: str,
-    statement_type: str,
-    period_context: str,
-    provider_name: str,
-    model_name: str,
-) -> tuple[FinalRecommendationProviderResult | None, str]:
-    """Load a cached structured final recommendation for an identical context."""
-    cache_path = final_recommendation_cache_path(cache_dir=cache_dir, final_context_hash=final_context_hash)
-    if not cache_path.exists():
-        return None, ""
-    try:
-        entry = json.loads(cache_path.read_text(encoding="utf-8"))
-    except OSError as exc:
-        return None, f"cache read failed: {exc}"
-    except json.JSONDecodeError as exc:
-        return None, f"cache JSON invalid: {exc}"
-
-    if entry.get("cache_schema_version") != FINAL_RECOMMENDATION_CACHE_SCHEMA_VERSION:
-        return None, "cache schema version mismatch"
-    if entry.get("prompt_version") != FINAL_RECOMMENDATION_PROMPT_VERSION:
-        return None, "cache prompt version mismatch"
-    try:
-        response = FinalRecommendationResponse.model_validate(entry.get("response"))
-    except ValueError as exc:
-        return None, f"cache response invalid: {exc}"
-    return (
-        final_recommendation_result_from_response(
-            provider_name=provider_name,
-            model_name=model_name,
-            target_metric_name=target_metric_name,
-            statement_type=statement_type,
-            period_context=period_context,
-            response=response,
-        ),
-        "",
-    )
-
-
-def save_final_recommendation_cache(
-    *,
-    cache_dir: Path,
-    final_context_hash: str,
-    fingerprint_payload: dict[str, object],
-    result: FinalRecommendationProviderResult,
-) -> str:
-    """Persist successful final recommendations for exact reuse."""
-    if result.provider_status not in {
-        FINAL_RECOMMENDATION_STATUS_SELECTED,
-        FINAL_RECOMMENDATION_STATUS_NO_OPTIONS,
-    }:
-        return ""
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = final_recommendation_cache_path(cache_dir=cache_dir, final_context_hash=final_context_hash)
-    entry = {
-        "cache_schema_version": FINAL_RECOMMENDATION_CACHE_SCHEMA_VERSION,
-        "prompt_version": FINAL_RECOMMENDATION_PROMPT_VERSION,
-        "final_context_hash": final_context_hash,
-        "fingerprint_payload": fingerprint_payload,
-        "provider_status": result.provider_status,
-        "created_at": datetime.now(timezone.utc).isoformat(),
-        "response": _response_from_final_recommendation_result(result).model_dump(mode="json"),
-    }
-    tmp_path = cache_path.with_name(f"{cache_path.name}.{os.getpid()}.tmp")
-    try:
-        tmp_path.write_text(json.dumps(entry, indent=2, sort_keys=True), encoding="utf-8")
-        tmp_path.replace(cache_path)
-    except OSError as exc:
-        return f"cache write failed: {exc}"
-    return ""
-
-
 def formula_proposal_cache_path(*, cache_dir: Path, formula_context_hash: str) -> Path:
     """Return the cache file path for one formula context hash."""
     return cache_dir / f"{formula_context_hash}.json"
-
-
-def final_recommendation_cache_path(*, cache_dir: Path, final_context_hash: str) -> Path:
-    """Return the cache file path for one final recommendation context hash."""
-    return cache_dir / f"{final_context_hash}.json"
 
 
 def validate_formula_proposal(
@@ -1508,19 +1222,6 @@ def _response_from_provider_result(result: FormulaProposalProviderResult) -> For
         target_xbrl_concept=result.target_xbrl_concept,
         formula_expression=result.formula_expression,
         components=list(result.components),
-        confidence=result.confidence,
-        reason=result.reason,
-        uncertainty=result.uncertainty,
-    )
-
-
-def _response_from_final_recommendation_result(
-    result: FinalRecommendationProviderResult,
-) -> FinalRecommendationResponse:
-    return FinalRecommendationResponse(
-        selected_option_type=result.selected_option_type,
-        selected_option_id=result.selected_option_id,
-        final_recommendation=result.final_recommendation,
         confidence=result.confidence,
         reason=result.reason,
         uncertainty=result.uncertainty,

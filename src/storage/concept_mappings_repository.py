@@ -10,13 +10,9 @@ from typing import Any, Iterable
 
 from src.storage.database import initialize_database
 
-MAPPING_STATUS_CANDIDATE = "candidate"
 MAPPING_STATUS_APPROVED = "approved"
-MAPPING_STATUS_REJECTED = "rejected"
 MAPPING_STATUSES = {
-    MAPPING_STATUS_CANDIDATE,
     MAPPING_STATUS_APPROVED,
-    MAPPING_STATUS_REJECTED,
 }
 
 MAPPING_SCOPE_GLOBAL = "global"
@@ -31,7 +27,7 @@ MAPPING_SCOPES = {
 
 @dataclass(frozen=True)
 class ConceptMappingRecord:
-    """One candidate or reviewed raw-concept mapping."""
+    """One approved raw-concept mapping."""
 
     taxonomy: str
     concept: str
@@ -50,7 +46,7 @@ class ConceptMappingRecord:
 
 
 class ConceptMappingRepository:
-    """Persist candidates and expose only approved mappings to calculations."""
+    """Persist approved learned mappings used by hard mapping."""
 
     def __init__(self, connection: sqlite3.Connection) -> None:
         self.connection = connection
@@ -94,11 +90,13 @@ class ConceptMappingRepository:
             ) DO UPDATE SET
                 namespace_uri = excluded.namespace_uri,
                 statement_type = excluded.statement_type,
+                status = excluded.status,
                 confidence = excluded.confidence,
                 match_method = excluded.match_method,
                 evidence_json = excluded.evidence_json,
+                reviewed_by = excluded.reviewed_by,
+                reviewed_at = excluded.reviewed_at,
                 updated_at = excluded.updated_at
-            WHERE xbrl_concept_mappings.status = 'candidate'
             """,
             [
                 (
@@ -165,40 +163,6 @@ class ConceptMappingRepository:
         rows = self.connection.execute(query, params).fetchall()
         return tuple(_row_to_mapping(row) for row in rows)
 
-    def set_status(
-        self,
-        mapping_id: int,
-        status: str,
-        *,
-        reviewed_by: str,
-    ) -> ConceptMappingRecord:
-        """Approve or reject one candidate with an explicit reviewer."""
-        if status not in {MAPPING_STATUS_APPROVED, MAPPING_STATUS_REJECTED}:
-            raise ValueError("Reviewed mappings must be approved or rejected")
-        reviewer = reviewed_by.strip()
-        if not reviewer:
-            raise ValueError("reviewed_by is required")
-        now = datetime.now(timezone.utc).isoformat()
-        cursor = self.connection.execute(
-            """
-            UPDATE xbrl_concept_mappings
-            SET status = ?, reviewed_by = ?, reviewed_at = ?, updated_at = ?
-            WHERE mapping_id = ? AND status = 'candidate'
-            """,
-            [status, reviewer, now, now, mapping_id],
-        )
-        if cursor.rowcount != 1:
-            raise ValueError(f"Candidate mapping not found or already reviewed: {mapping_id}")
-        self.connection.commit()
-        row = self.connection.execute(
-            "SELECT * FROM xbrl_concept_mappings WHERE mapping_id = ?",
-            [mapping_id],
-        ).fetchone()
-        if row is None:
-            raise RuntimeError(f"Reviewed mapping disappeared: {mapping_id}")
-        return _row_to_mapping(row)
-
-
 def _validate_mapping(mapping: ConceptMappingRecord) -> None:
     if mapping.status not in MAPPING_STATUSES:
         raise ValueError(f"Unknown mapping status: {mapping.status}")
@@ -208,8 +172,8 @@ def _validate_mapping(mapping: ConceptMappingRecord) -> None:
         raise ValueError("Global mappings must use an empty scope_value")
     if mapping.scope_type != MAPPING_SCOPE_GLOBAL and not mapping.scope_value:
         raise ValueError(f"{mapping.scope_type} mappings require scope_value")
-    if mapping.status != MAPPING_STATUS_CANDIDATE and not mapping.reviewed_by:
-        raise ValueError("Approved and rejected mappings require reviewed_by")
+    if not mapping.reviewed_by:
+        raise ValueError("Approved mappings require reviewed_by")
 
 
 def _row_to_mapping(row: sqlite3.Row) -> ConceptMappingRecord:

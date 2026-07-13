@@ -42,20 +42,24 @@ from src.processing.metric_coverage import (
     REVIEW_ACTION_NO_EVIDENCE,
     REVIEW_ACTION_NONE,
     RESOLUTION_OPTION_FORMULA,
-    RESOLUTION_OPTION_SEMANTIC,
     RESOLUTION_OPTION_ZERO,
     MetricCoverageResolution,
     metric_coverage_report_rows,
     resolve_metric_coverage,
 )
+<<<<<<< HEAD
 from src.processing.periods import classify_period, parse_sec_date, validate_period
 from src.processing.metric_targets import (
+=======
+from src.processing.mapping_targets import (
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
     CanonicalMetricTarget,
     TargetConceptCandidate,
     all_canonical_metric_targets,
     canonical_metric_targets,
     missing_metric_targets,
 )
+from src.processing.periods import classify_period, parse_sec_date, validate_period
 from src.processing.xbrl_normalizer import NormalizedFact, find_duplicate_facts, normalize_companyfacts, normalize_fact_entry
 
 __all__ = [
@@ -68,11 +72,15 @@ __all__ = [
     "COMMON_BASE_LABEL",
     "NormalizedFact",
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
     "SemanticMappingCandidate",
     "MetricCoverageResolution",
     "TargetEmbeddingPrewarmResult",
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
+=======
+    "MetricCoverageResolution",
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
     "TargetConceptCandidate",
     "CompanyIndustryLabelAssignment",
     "HARD_INDUSTRY_LABELS",
@@ -90,7 +98,6 @@ __all__ = [
     "REVIEW_ACTION_NO_EVIDENCE",
     "REVIEW_ACTION_NONE",
     "RESOLUTION_OPTION_FORMULA",
-    "RESOLUTION_OPTION_SEMANTIC",
     "RESOLUTION_OPTION_ZERO",
     "XbrlPayloadError",
     "XbrlProcessingError",
@@ -114,8 +121,11 @@ __all__ = [
     "normalize_inline_xbrl_model",
     "parse_sec_date",
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
     "prewarm_all_target_candidate_embeddings",
+=======
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
     "resolve_metric_coverage",
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
     "target_facts_for_industry_labels",

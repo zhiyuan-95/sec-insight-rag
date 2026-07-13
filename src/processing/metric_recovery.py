@@ -16,18 +16,14 @@ COMPONENT_MAPPED = "component_mapped"
 COMPONENT_ASSUMED_ZERO = "assumed_zero_component"
 COMPONENT_MISSING_REQUIRED = "component_missing_required"
 COMPONENT_AMBIGUOUS = "component_ambiguous"
-COMPONENT_CANDIDATE_REVIEW_REQUIRED = "component_candidate_review_required"
 
 REVIEW_NOT_REVIEWED = "not_reviewed"
-REVIEW_CANDIDATE_REQUIRED = "candidate_review_required"
 REVIEW_APPROVED = "approved"
 
 SKIP_MISSING_REQUIRED_COMPONENT = "recovery_skipped_missing_required_component"
 SKIP_UNIT_MISMATCH = "recovery_skipped_unit_mismatch"
 SKIP_PERIOD_MISMATCH = "recovery_skipped_period_mismatch"
 SKIP_DUPLICATE_COMPONENT_FACTS = "recovery_skipped_duplicate_component_facts"
-SKIP_AMBIGUOUS_COMPONENT_CANDIDATE = "recovery_skipped_ambiguous_component_candidate"
-SKIP_LLM_ONLY_CANDIDATE = "recovery_skipped_llm_only_candidate"
 
 FORMULA_VERSION = "v1"
 
@@ -80,7 +76,7 @@ class MetricRecoveryComponentResult:
 
     component_name: str
     component_status: str
-    candidate_metric_names: tuple[str, ...]
+    metric_names: tuple[str, ...]
     value_numeric: Decimal | None = None
     unit: str | None = None
     source_metric_ids: tuple[int, ...] = ()
@@ -234,7 +230,6 @@ DEBT_COMPONENT_METRIC_NAMES = tuple(
 def recover_debt_metrics(
     metrics: Iterable[MetricRecoverySource],
     *,
-    candidate_metric_names: Iterable[str] = (),
     active_only: bool = True,
 ) -> tuple[MetricRecoveryResult, ...]:
     """Return report-only debt recovery diagnostics for mapped base metrics."""
@@ -249,7 +244,6 @@ def recover_debt_metrics(
     )
     if not metric_rows:
         return ()
-    candidate_names = frozenset(name for name in candidate_metric_names if name)
     periods = _periods_for_recovery(metric_rows)
     results: list[MetricRecoveryResult] = []
     for period in periods:
@@ -260,7 +254,6 @@ def recover_debt_metrics(
                     period=period,
                     target_metric_name=target_metric_name,
                     target_xbrl_concept=target_xbrl_concept,
-                    candidate_metric_names=candidate_names,
                 )
             )
     return tuple(results)
@@ -297,7 +290,6 @@ def _recover_one_target(
     period: _PeriodKey,
     target_metric_name: str,
     target_xbrl_concept: str,
-    candidate_metric_names: frozenset[str],
 ) -> MetricRecoveryResult:
     direct = _component_from_metric_names(
         metrics,
@@ -306,7 +298,6 @@ def _recover_one_target(
         metric_names=(target_metric_name,),
         required=True,
         zero_if_absent=False,
-        candidate_metric_names=candidate_metric_names,
     )
     if direct.component_status == COMPONENT_MAPPED and direct.value_numeric is not None:
         return MetricRecoveryResult(
@@ -345,7 +336,6 @@ def _recover_one_target(
             formula,
             metrics,
             period=period,
-            candidate_metric_names=candidate_metric_names,
         )
         for formula in DEBT_RECOVERY_FORMULAS
         if formula.target_metric_name == target_metric_name
@@ -377,7 +367,6 @@ def _evaluate_formula(
     metrics: tuple[MetricRecoverySource, ...],
     *,
     period: _PeriodKey,
-    candidate_metric_names: frozenset[str],
 ) -> _FormulaEvaluation:
     component_results = tuple(
         _component_from_metric_names(
@@ -387,7 +376,6 @@ def _evaluate_formula(
             metric_names=component.metric_names,
             required=component.required,
             zero_if_absent=component.zero_if_absent,
-            candidate_metric_names=candidate_metric_names,
         )
         for component in formula.components
     )
@@ -399,11 +387,7 @@ def _evaluate_formula(
             value_numeric=None,
             unit=None,
             skip_reason=skip_reason,
-            review_status=(
-                REVIEW_CANDIDATE_REQUIRED
-                if any(result.component_status == COMPONENT_CANDIDATE_REVIEW_REQUIRED for result in component_results)
-                else REVIEW_NOT_REVIEWED
-            ),
+            review_status=REVIEW_NOT_REVIEWED,
         )
     mapped_components = [
         result
@@ -439,7 +423,6 @@ def _component_from_metric_names(
     metric_names: tuple[str, ...],
     required: bool,
     zero_if_absent: bool,
-    candidate_metric_names: frozenset[str],
 ) -> MetricRecoveryComponentResult:
     exact = tuple(
         metric
@@ -470,7 +453,7 @@ def _component_from_metric_names(
         return MetricRecoveryComponentResult(
             component_name=component_name,
             component_status=COMPONENT_MAPPED,
-            candidate_metric_names=metric_names,
+            metric_names=metric_names,
             value_numeric=metric.value_numeric,
             unit=metric.unit,
             source_metric_ids=_metric_ids((metric,)),
@@ -483,23 +466,15 @@ def _component_from_metric_names(
         return MetricRecoveryComponentResult(
             component_name=component_name,
             component_status=COMPONENT_AMBIGUOUS,
-            candidate_metric_names=metric_names,
+            metric_names=metric_names,
             skip_reason=SKIP_PERIOD_MISMATCH,
             notes="Component exists for the same fiscal period but incompatible period type.",
-        )
-    if any(name in candidate_metric_names for name in metric_names):
-        return MetricRecoveryComponentResult(
-            component_name=component_name,
-            component_status=COMPONENT_CANDIDATE_REVIEW_REQUIRED,
-            candidate_metric_names=metric_names,
-            skip_reason=SKIP_LLM_ONLY_CANDIDATE,
-            notes="Only review-pending candidate evidence is available.",
         )
     if required:
         return MetricRecoveryComponentResult(
             component_name=component_name,
             component_status=COMPONENT_MISSING_REQUIRED,
-            candidate_metric_names=metric_names,
+            metric_names=metric_names,
             skip_reason=SKIP_MISSING_REQUIRED_COMPONENT,
             notes="Required component was not found.",
         )
@@ -507,12 +482,11 @@ def _component_from_metric_names(
         return MetricRecoveryComponentResult(
             component_name=component_name,
             component_status=COMPONENT_ASSUMED_ZERO,
-            candidate_metric_names=metric_names,
+            metric_names=metric_names,
             value_numeric=Decimal("0"),
             coverage_proof=(
                 "active period inspected",
                 "no approved component metric found",
-                "no review-pending component candidate found",
                 "no ambiguous component metric set found",
             ),
             notes="Optional component explicitly allowed to contribute zero when absent.",
@@ -520,7 +494,7 @@ def _component_from_metric_names(
     return MetricRecoveryComponentResult(
         component_name=component_name,
         component_status=COMPONENT_MISSING_REQUIRED,
-        candidate_metric_names=metric_names,
+        metric_names=metric_names,
         skip_reason=SKIP_MISSING_REQUIRED_COMPONENT,
         notes="Optional component is not allowed to default to zero.",
     )
@@ -538,7 +512,7 @@ def _component_result_from_sources(
     return MetricRecoveryComponentResult(
         component_name=component_name,
         component_status=status,
-        candidate_metric_names=metric_names,
+        metric_names=metric_names,
         unit=", ".join(sorted({source.unit for source in sources if source.unit})) or None,
         source_metric_ids=_metric_ids(sources),
         source_raw_fact_ids=_raw_fact_ids(sources),
@@ -554,8 +528,6 @@ def _formula_skip_reason(components: tuple[MetricRecoveryComponentResult, ...]) 
         SKIP_DUPLICATE_COMPONENT_FACTS,
         SKIP_UNIT_MISMATCH,
         SKIP_PERIOD_MISMATCH,
-        SKIP_LLM_ONLY_CANDIDATE,
-        SKIP_AMBIGUOUS_COMPONENT_CANDIDATE,
         SKIP_MISSING_REQUIRED_COMPONENT,
     ):
         if reason in reasons:
@@ -568,9 +540,7 @@ def _select_failure(evaluations: list[_FormulaEvaluation]) -> _FormulaEvaluation
         SKIP_DUPLICATE_COMPONENT_FACTS: 0,
         SKIP_UNIT_MISMATCH: 1,
         SKIP_PERIOD_MISMATCH: 2,
-        SKIP_LLM_ONLY_CANDIDATE: 3,
-        SKIP_AMBIGUOUS_COMPONENT_CANDIDATE: 4,
-        SKIP_MISSING_REQUIRED_COMPONENT: 5,
+        SKIP_MISSING_REQUIRED_COMPONENT: 3,
         None: 99,
     }
     return sorted(evaluations, key=lambda evaluation: priority.get(evaluation.skip_reason, 90))[0]
@@ -657,7 +627,6 @@ def _incomplete_result(
             if component.component_status
             in {
                 COMPONENT_MISSING_REQUIRED,
-                COMPONENT_CANDIDATE_REVIEW_REQUIRED,
                 COMPONENT_AMBIGUOUS,
             }
         ),

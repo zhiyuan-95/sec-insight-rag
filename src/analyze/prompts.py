@@ -6,7 +6,6 @@ from src.processing.company_industry_labels import HARD_INDUSTRY_LABELS
 
 INDUSTRY_CLASSIFICATION_PROMPT_VERSION = "industry_classification_v1"
 XBRL_FORMULA_PROPOSAL_PROMPT_VERSION = "xbrl_formula_proposal_v3"
-XBRL_FINAL_RECOMMENDATION_PROMPT_VERSION = "xbrl_final_recommendation_v1"
 
 
 def build_industry_classification_prompt(
@@ -72,9 +71,14 @@ def build_xbrl_formula_proposal_prompt(
     facts_json = _json_block(fact_pool)
     return f"""You are proposing a report-only XBRL decision for a missing target financial metric.
 
+<<<<<<< HEAD
 The system has already tried direct catalog mapping and approved learned
 mappings. Your task is not to approve a mapping. Your task is to decide whether
 the missing target can be
+=======
+The system has already tried hard mapping. Your task is not to approve a
+mapping. Your task is to decide whether the missing target can be
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 composed from raw XBRL facts already observed for this company in the supplied
 same-period context, whether the target may reasonably be zero from other
 same-period evidence, or whether neither decision is supported.
@@ -133,58 +137,6 @@ Formula proposal context:
 
 Eligible same-period raw SEC/XBRL fact pool:
 {facts_json}
-"""
-
-
-def build_xbrl_final_recommendation_prompt(
-    *,
-    ticker: str,
-    cik: str,
-    decision_context: dict[str, object],
-) -> str:
-    """Build the prompt for one period-level final recommendation choice."""
-    context_json = _json_block(decision_context)
-    return f"""You are choosing one report-only final recommendation for a missing financial metric.
-
-The system has already gathered review evidence for one company, one metric, and
-one reporting period. Your job is not to approve a mapping or persist a metric.
-Your job is to choose exactly one final recommendation from the supplied options,
-or choose no_recommendation if no option is supportable.
-
-Rules:
-- Use only the supplied options. Do not invent formulas, semantic candidates, concepts, periods, or values.
-- Choose one option_id from the options list when selecting formula, semantic_candidate, or zero.
-- If you choose a formula, final_recommendation must exactly equal that option's value.
-- If you choose a semantic_candidate, final_recommendation must exactly equal that option's value.
-- If you choose zero, final_recommendation must be exactly "0".
-- Prefer a validated formula with stronger same-period evidence over a semantic candidate when the formula directly composes the target.
-- Prefer semantic_candidate when formulas conflict, are weakly validated, or use questionable cross-statement evidence.
-- Choose zero only when the zero option includes affirmative same-period evidence.
-- If the options are contradictory or insufficient, choose no_recommendation and explain what needs review.
-- Return JSON only. Do not include Markdown.
-
-Return JSON matching this schema:
-{{
-  "selected_option_type": "formula",
-  "selected_option_id": "formula_1",
-  "final_recommendation": "target_metric = ComponentA + ComponentB",
-  "confidence": 0.0,
-  "reason": "short evidence-based explanation for the choice",
-  "uncertainty": "what could be wrong or what needs review"
-}}
-
-Allowed selected_option_type values:
-- formula
-- semantic_candidate
-- zero
-- no_recommendation
-
-Company:
-- ticker: {ticker}
-- cik: {cik}
-
-Decision context:
-{context_json}
 """
 
 

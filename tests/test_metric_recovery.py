@@ -5,11 +5,8 @@ from decimal import Decimal
 
 from src.processing.metric_recovery import (
     COMPONENT_ASSUMED_ZERO,
-    COMPONENT_CANDIDATE_REVIEW_REQUIRED,
     COMPONENT_MAPPED,
-    REVIEW_CANDIDATE_REQUIRED,
     SKIP_DUPLICATE_COMPONENT_FACTS,
-    SKIP_LLM_ONLY_CANDIDATE,
     SKIP_MISSING_REQUIRED_COMPONENT,
     SKIP_PERIOD_MISMATCH,
     SKIP_UNIT_MISMATCH,
@@ -122,24 +119,6 @@ def test_recover_debt_metrics_rejects_period_mismatch() -> None:
 
     assert current.target_recovery_status == TARGET_DECOMPOSITION_INCOMPLETE
     assert current.skip_reason == SKIP_PERIOD_MISMATCH
-
-
-def test_recover_debt_metrics_keeps_candidate_only_evidence_review_only() -> None:
-    results = recover_debt_metrics(
-        [_metric("short_term_borrowings", "5")],
-        candidate_metric_names={"long_term_debt_current"},
-    )
-
-    current = _result(results, "debt_current")
-
-    assert current.target_recovery_status == TARGET_DECOMPOSITION_INCOMPLETE
-    assert current.review_status == REVIEW_CANDIDATE_REQUIRED
-    assert current.skip_reason == SKIP_LLM_ONLY_CANDIDATE
-    assert current.value_numeric is None
-    assert any(
-        component.component_status == COMPONENT_CANDIDATE_REVIEW_REQUIRED
-        for component in current.components
-    )
 
 
 def _result(results, target_metric_name: str):

@@ -6,8 +6,6 @@ from src.storage.concept_mappings_repository import (
     MAPPING_SCOPE_GLOBAL,
     MAPPING_SCOPE_INDUSTRY,
     MAPPING_STATUS_APPROVED,
-    MAPPING_STATUS_CANDIDATE,
-    MAPPING_STATUS_REJECTED,
     ConceptMappingRecord,
     ConceptMappingRepository,
 )
@@ -43,8 +41,6 @@ __all__ = [
     "MAPPING_SCOPE_GLOBAL",
     "MAPPING_SCOPE_INDUSTRY",
     "MAPPING_STATUS_APPROVED",
-    "MAPPING_STATUS_CANDIDATE",
-    "MAPPING_STATUS_REJECTED",
     "RawFactRepository",
     "RetrievalIndexState",
     "RetrievalRepository",

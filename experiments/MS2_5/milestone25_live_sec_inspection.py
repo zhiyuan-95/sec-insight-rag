@@ -21,9 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.config import Settings, load_settings
 from src.analyze.xbrl_formula_proposals import (
-    default_final_recommendation_provider_config,
     default_formula_proposal_provider_configs,
-    generate_final_recommendation,
     generate_formula_proposal,
 )
 from src.ingestion import (
@@ -54,7 +52,6 @@ from src.processing.metric_coverage import (
 from src.processing.metric_recovery import (
     COMPONENT_AMBIGUOUS,
     COMPONENT_ASSUMED_ZERO,
-    COMPONENT_CANDIDATE_REVIEW_REQUIRED,
     COMPONENT_MAPPED,
     COMPONENT_MISSING_REQUIRED,
     DEBT_RECOVERY_FORMULAS,
@@ -74,16 +71,8 @@ from src.processing.formula_proposals import (
     CACHE_STATUS_REUSED_EXACT_CONTEXT,
     CACHE_STATUS_REUSED_VALIDATION_FAILED,
     CACHE_STATUS_UNAVAILABLE,
-    CONSENSUS_VALIDATED,
     CONSENSUS_TARGET_ZERO,
-    FINAL_OPTION_FORMULA,
-    FINAL_OPTION_NO_RECOMMENDATION,
-    FINAL_OPTION_SEMANTIC_CANDIDATE,
-    FINAL_OPTION_ZERO,
-    FINAL_RECOMMENDATION_STATUS_FAILED,
-    FINAL_RECOMMENDATION_STATUS_NO_OPTIONS,
-    FINAL_RECOMMENDATION_STATUS_SELECTED,
-    FINAL_RECOMMENDATION_STATUS_UNAVAILABLE,
+    CONSENSUS_VALIDATED,
     PROVIDER_STATUS_FAILED,
     PROVIDER_STATUS_NO_FORMULA,
     PROVIDER_STATUS_PROPOSED,
@@ -93,18 +82,14 @@ from src.processing.formula_proposals import (
     VALIDATION_STATUS_ZERO_EVIDENCE,
     FormulaProposalFact,
     FormulaProposalContext,
-    FinalRecommendationProviderResult,
     FormulaProposalProviderResult,
     FormulaProposalTarget,
     FormulaProposalValidationResult,
     build_formula_proposal_contexts,
-    final_recommendation_context_fingerprint,
     consensus_label,
     formula_context_fingerprint,
     formula_context_prompt_payload,
-    load_final_recommendation_cache,
     load_formula_proposal_cache,
-    save_final_recommendation_cache,
     save_formula_proposal_cache,
     validate_formula_proposal,
 )
@@ -117,7 +102,6 @@ DEFAULT_REPORT_PREFIX = "milestone25_mapping_report"
 DEFAULT_FILINGS_DIR = EXPERIMENT_STORAGE_DIR / "filings"
 DEFAULT_EXPORTS_DIR = PROJECT_ROOT / "data" / "exports" / "ms2_5"
 FORMULA_PROPOSAL_CACHE_SUBDIR = "formula_proposals"
-FINAL_RECOMMENDATION_CACHE_SUBDIR = "final_recommendations"
 FORMS = ("10-K", "10-Q")
 <<<<<<< HEAD
 STATUS_FOUND_MAPPED_ALTERNATE = "found_mapped_alternate"
@@ -497,6 +481,7 @@ def _snapshot(
             assignment=industry_assignment,
         )
 <<<<<<< HEAD
+<<<<<<< HEAD
         approved_learned_mappings = _learned_mapping_rows(
 =======
         semantic_mapping_candidates = _semantic_mapping_rows(
@@ -510,6 +495,11 @@ def _snapshot(
             connection,
             cik,
             company_id=company_id,
+=======
+        approved_learned_mappings = _concept_mapping_rows(
+            connection,
+            cik,
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
             status="approved",
         )
         unknown_xbrl_concepts = _unknown_xbrl_concepts(connection, company_id, cik)
@@ -531,22 +521,8 @@ def _snapshot(
         metric_coverage_resolution = metric_coverage_report_rows(
             resolve_metric_coverage(
                 target_coverage_rows=target_raw_fact_coverage,
-                semantic_candidate_rows=semantic_mapping_candidates,
                 formula_diagnostic_rows=formula_proposal_snapshot["diagnostics"],
             )
-        )
-        review_snapshot = {
-            "metric_coverage_resolution": metric_coverage_resolution,
-            "semantic_mapping_candidates": semantic_mapping_candidates,
-            "formula_proposal_diagnostics": formula_proposal_snapshot["diagnostics"],
-        }
-        final_recommendation_snapshot = _final_recommendation_snapshot(
-            ticker=ticker,
-            cik=cik,
-            snapshot=review_snapshot,
-            enabled=formula_proposals_enabled,
-            settings=settings,
-            progress=formula_progress,
         )
         return {
             "company": company,
@@ -568,8 +544,6 @@ def _snapshot(
             "formula_proposal_diagnostics": formula_proposal_snapshot["diagnostics"],
             "formula_proposal_components": formula_proposal_snapshot["components"],
             "formula_proposal_fact_pool_summary": formula_proposal_snapshot["fact_pool_summary"],
-            "final_recommendation_summary": final_recommendation_snapshot["summary"],
-            "final_recommendation_diagnostics": final_recommendation_snapshot["diagnostics"],
             "metric_counts_by_statement": _metric_counts_by_statement(connection, company_id),
             "metric_lineage_summary": _metric_lineage_summary(connection, company_id),
             "raw_fact_mapping_coverage": _raw_fact_mapping_coverage(connection, company_id, cik),
@@ -618,8 +592,6 @@ def _empty_snapshot() -> dict[str, Any]:
         "formula_proposal_diagnostics": [],
         "formula_proposal_components": [],
         "formula_proposal_fact_pool_summary": [],
-        "final_recommendation_summary": _final_recommendation_not_run_summary(),
-        "final_recommendation_diagnostics": [],
         "metric_counts_by_statement": [],
         "metric_lineage_summary": [],
         "raw_fact_mapping_coverage": [],
@@ -1294,412 +1266,6 @@ def _formula_proposal_status_summary(*, status: str, notes: str) -> list[dict[st
     ]
 
 
-def _final_recommendation_snapshot(
-    *,
-    ticker: str,
-    cik: str | None,
-    snapshot: dict[str, Any],
-    enabled: bool,
-    settings: Settings | None,
-    progress: Callable[[str], None] | None = None,
-) -> dict[str, list[dict[str, Any]]]:
-    if not enabled:
-        return {
-            "summary": _final_recommendation_not_run_summary(),
-            "diagnostics": [],
-        }
-    if not cik:
-        _final_progress(progress, "Final recommendation generation skipped: company CIK is not available.")
-        return {
-            "summary": _final_recommendation_status_summary(
-                status="not_available",
-                notes="Company CIK was not available for final recommendation generation.",
-            ),
-            "diagnostics": [],
-        }
-
-    contexts = _final_recommendation_contexts(snapshot)
-    if not contexts:
-        _final_progress(
-            progress,
-            "Final recommendation generation complete: 0 period option context(s).",
-        )
-        return {
-            "summary": _final_recommendation_status_summary(
-                status="no_options",
-                notes="No period-level semantic, formula, or zero options were available.",
-            ),
-            "diagnostics": [],
-        }
-
-    provider = _final_recommendation_provider_config(settings)
-    cache_dir = _final_recommendation_cache_dir(settings)
-    _final_progress(progress, f"Final recommendation model: {provider.provider_name} ({provider.model_name}).")
-    grouped_contexts = _group_final_recommendation_contexts(contexts)
-    _final_progress(
-        progress,
-        "Final recommendation generation starting: "
-        f"{len(grouped_contexts)} grouped recommendation request(s) "
-        f"for {len(contexts)} period option context(s).",
-    )
-    diagnostics: list[dict[str, Any]] = []
-    for context_index, context in enumerate(grouped_contexts, start=1):
-        form_type = str(context["form_type"])
-        metric = str(context["metric"])
-        statement = str(context["statement"])
-        period_context = str(context["period_context"])
-        options = tuple(context["options"])
-        _final_progress(
-            progress,
-            f"Handling final recommendation {context_index}/{len(grouped_contexts)}: "
-            f"{_final_context_progress_label(metric=metric, statement=statement, period_context=period_context, options=options)}.",
-        )
-        final_hash, fingerprint_payload = final_recommendation_context_fingerprint(
-            target_metric_name=metric,
-            statement_type=statement,
-            period_context=period_context,
-            options=options,
-            provider_name=provider.provider_name,
-            model_name=provider.model_name,
-        )
-        cached_result, cache_warning = load_final_recommendation_cache(
-            cache_dir=cache_dir,
-            final_context_hash=final_hash,
-            target_metric_name=metric,
-            statement_type=statement,
-            period_context=period_context,
-            provider_name=provider.provider_name,
-            model_name=provider.model_name,
-        )
-        if cached_result is not None:
-            result = cached_result
-            cache_status = CACHE_STATUS_REUSED_EXACT_CONTEXT
-        else:
-            decision_context = {
-                "target_metric_name": metric,
-                "statement_type": statement,
-                "period_context": period_context,
-                "options": options,
-            }
-            result = generate_final_recommendation(
-                ticker=ticker,
-                cik=cik,
-                target_metric_name=metric,
-                statement_type=statement,
-                period_context=period_context,
-                decision_context=decision_context,
-                provider=provider,
-            )
-            result = _validate_final_recommendation_result(result, options=options)
-            cache_status = CACHE_STATUS_UNAVAILABLE
-            if result.provider_status in {
-                FINAL_RECOMMENDATION_STATUS_SELECTED,
-                FINAL_RECOMMENDATION_STATUS_NO_OPTIONS,
-            }:
-                write_warning = save_final_recommendation_cache(
-                    cache_dir=cache_dir,
-                    final_context_hash=final_hash,
-                    fingerprint_payload=fingerprint_payload,
-                    result=result,
-                )
-                cache_warning = cache_warning or write_warning
-                cache_status = CACHE_STATUS_GENERATED_NEW
-        for original_period_context in context["period_contexts"]:
-            diagnostics.append(
-                _final_recommendation_diagnostic_row(
-                    result=replace(result, period_context=str(original_period_context)),
-                    form_type=form_type,
-                    options=options,
-                    final_context_hash=final_hash,
-                    cache_status=cache_status,
-                    cache_warning=cache_warning,
-                )
-            )
-
-    selected = sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_SELECTED for row in diagnostics)
-    no_options = sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_NO_OPTIONS for row in diagnostics)
-    unavailable = sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_UNAVAILABLE for row in diagnostics)
-    failed = sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_FAILED for row in diagnostics)
-    _final_progress(
-        progress,
-        "Final recommendation generation complete: "
-        f"{len(grouped_contexts)} grouped recommendation request(s), "
-        f"{len(contexts)} period option context(s), "
-        f"{selected} selected, "
-        f"{no_options} no recommendation, "
-        f"{unavailable} unavailable, "
-        f"{failed} failed.",
-    )
-    return {
-        "summary": _final_recommendation_summary_rows(
-            diagnostics=diagnostics,
-            provider=provider,
-            cache_dir=cache_dir,
-        ),
-        "diagnostics": diagnostics,
-    }
-
-
-def _final_recommendation_not_run_summary() -> list[dict[str, Any]]:
-    return _final_recommendation_status_summary(
-        status="not_run",
-        notes="Final recommendations were skipped because formula proposals were skipped.",
-    )
-
-
-def _final_recommendation_status_summary(*, status: str, notes: str) -> list[dict[str, Any]]:
-    return [
-        {
-            "evidence_item": "final recommendation model",
-            "value": status,
-            "notes": notes,
-        }
-    ]
-
-
-def _final_recommendation_contexts(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
-    contexts: list[dict[str, Any]] = []
-    for form_type in FORMS:
-        semantic_by_period = _semantic_options_by_metric_period(snapshot, form_type=form_type)
-        formula_by_period = _formula_recommendations_by_metric_period(
-            snapshot,
-            form_type=form_type,
-            provider_statuses={PROVIDER_STATUS_PROPOSED},
-        )
-        zero_by_period = _formula_recommendations_by_metric_period(
-            snapshot,
-            form_type=form_type,
-            provider_statuses={PROVIDER_STATUS_TARGET_ZERO},
-        )
-        keys = set(semantic_by_period) | set(formula_by_period) | set(zero_by_period)
-        for metric, statement, period_label in sorted(
-            keys,
-            key=lambda key: (
-                key[0],
-                key[1],
-                -_first_formula_period_sort_value(key[2], form_type=form_type),
-            ),
-        ):
-            options = _final_recommendation_options(
-                semantic_candidate=semantic_by_period.get((metric, statement, period_label), ""),
-                formula_recommendations=formula_by_period.get((metric, statement, period_label), []),
-                zero_recommendations=zero_by_period.get((metric, statement, period_label), []),
-            )
-            if not options:
-                continue
-            contexts.append(
-                {
-                    "form_type": form_type,
-                    "metric": metric,
-                    "statement": statement,
-                    "period_context": period_label,
-                    "period_contexts": (period_label,),
-                    "options": options,
-                }
-            )
-    return contexts
-
-
-def _group_final_recommendation_contexts(contexts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    grouped: dict[tuple[str, str, str, str], dict[str, Any]] = {}
-    for context in contexts:
-        form_type = str(context.get("form_type") or "")
-        metric = str(context.get("metric") or "")
-        statement = str(context.get("statement") or "")
-        options = tuple(context.get("options") or ())
-        key = (form_type, metric, statement, _final_recommendation_options_key(options))
-        if key not in grouped:
-            grouped[key] = {
-                "form_type": form_type,
-                "metric": metric,
-                "statement": statement,
-                "period_context": "",
-                "period_contexts": [],
-                "options": options,
-            }
-        grouped_context = grouped[key]
-        grouped_context["period_contexts"].extend(context.get("period_contexts") or ())
-
-    grouped_contexts: list[dict[str, Any]] = []
-    for grouped_context in grouped.values():
-        form_type = str(grouped_context.get("form_type") or "")
-        period_contexts = tuple(str(value) for value in grouped_context.get("period_contexts") or () if str(value))
-        grouped_context["period_contexts"] = period_contexts
-        grouped_context["period_context"] = _format_formula_period_labels_for_report(
-            period_contexts,
-            form_type=form_type,
-        )
-        grouped_contexts.append(grouped_context)
-    return grouped_contexts
-
-
-def _final_recommendation_options_key(options: tuple[dict[str, object], ...]) -> str:
-    return json.dumps(list(options), sort_keys=True, separators=(",", ":"), default=str)
-
-
-def _final_recommendation_options(
-    *,
-    semantic_candidate: str,
-    formula_recommendations: list[dict[str, str]],
-    zero_recommendations: list[dict[str, str]],
-) -> tuple[dict[str, object], ...]:
-    options: list[dict[str, object]] = []
-    if semantic_candidate:
-        options.append(
-            {
-                "option_id": "semantic_1",
-                "option_type": FINAL_OPTION_SEMANTIC_CANDIDATE,
-                "value": semantic_candidate,
-                "evidence": "highest semantic candidate for this metric and period",
-            }
-        )
-
-    formulas_by_value: dict[str, list[dict[str, str]]] = {}
-    for recommendation in formula_recommendations:
-        formula = str(recommendation.get("formula") or "")
-        if formula:
-            formulas_by_value.setdefault(formula, []).append(recommendation)
-    for index, (formula, recommendations) in enumerate(formulas_by_value.items(), start=1):
-        options.append(
-            {
-                "option_id": f"formula_{index}",
-                "option_type": FINAL_OPTION_FORMULA,
-                "value": formula,
-                "evidence": _final_formula_option_evidence(recommendations),
-            }
-        )
-
-    if zero_recommendations:
-        options.append(
-            {
-                "option_id": "zero_1",
-                "option_type": FINAL_OPTION_ZERO,
-                "value": "0",
-                "evidence": _final_formula_option_evidence(zero_recommendations),
-            }
-        )
-    return tuple(options)
-
-
-def _final_formula_option_evidence(recommendations: list[dict[str, str]]) -> str:
-    providers = _join_unique_texts([str(row.get("provider") or "") for row in recommendations])
-    statuses = _join_unique_texts([str(row.get("validation_status") or "") for row in recommendations])
-    confidences = _join_unique_texts([str(row.get("confidence") or "") for row in recommendations])
-    reasons = _join_unique_texts([str(row.get("reason") or "") for row in recommendations])
-    return "; ".join(
-        part
-        for part in (
-            f"providers: {providers}" if providers else "",
-            f"validation: {statuses}" if statuses else "",
-            f"confidence: {confidences}" if confidences else "",
-            f"reason: {reasons}" if reasons else "",
-        )
-        if part
-    )
-
-
-def _validate_final_recommendation_result(
-    result: FinalRecommendationProviderResult,
-    *,
-    options: tuple[dict[str, object], ...],
-) -> FinalRecommendationProviderResult:
-    if result.provider_status not in {
-        FINAL_RECOMMENDATION_STATUS_SELECTED,
-        FINAL_RECOMMENDATION_STATUS_NO_OPTIONS,
-    }:
-        return result
-    if result.selected_option_type == FINAL_OPTION_NO_RECOMMENDATION:
-        return result
-    selected = next(
-        (
-            option
-            for option in options
-            if option.get("option_id") == result.selected_option_id
-            and option.get("option_type") == result.selected_option_type
-        ),
-        None,
-    )
-    if selected is None:
-        return replace(
-            result,
-            provider_status=FINAL_RECOMMENDATION_STATUS_FAILED,
-            selected_option_type=FINAL_OPTION_NO_RECOMMENDATION,
-            selected_option_id="",
-            final_recommendation="",
-            confidence=0.0,
-            error="Final recommendation selected an option not present in the supplied options.",
-        )
-    expected_value = "0" if result.selected_option_type == FINAL_OPTION_ZERO else str(selected.get("value") or "")
-    return replace(result, final_recommendation=expected_value)
-
-
-def _final_recommendation_diagnostic_row(
-    *,
-    result: FinalRecommendationProviderResult,
-    form_type: str,
-    options: tuple[dict[str, object], ...],
-    final_context_hash: str,
-    cache_status: str,
-    cache_warning: str,
-) -> dict[str, Any]:
-    return {
-        "target_metric_name": result.target_metric_name,
-        "statement_type": result.statement_type,
-        "form_type": _normal_report_form(form_type),
-        "period_context": result.period_context,
-        "provider_name": result.provider_name,
-        "model_name": result.model_name,
-        "provider_status": result.provider_status,
-        "selected_option_type": result.selected_option_type,
-        "selected_option_id": result.selected_option_id,
-        "final_recommendation": result.final_recommendation,
-        "confidence": result.confidence,
-        "reason": result.reason,
-        "uncertainty": result.uncertainty,
-        "option_count": len(options),
-        "options": json.dumps(list(options), sort_keys=True),
-        "final_context_hash": final_context_hash,
-        "cache_status": cache_status,
-        "prompt_version": result.prompt_version,
-        "error": result.error,
-        "cache_warning": cache_warning,
-    }
-
-
-def _final_recommendation_summary_rows(
-    *,
-    diagnostics: list[dict[str, Any]],
-    provider: Any,
-    cache_dir: Path,
-) -> list[dict[str, Any]]:
-    selected = sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_SELECTED for row in diagnostics)
-    no_options = sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_NO_OPTIONS for row in diagnostics)
-    unavailable = sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_UNAVAILABLE for row in diagnostics)
-    failed = sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_FAILED for row in diagnostics)
-    return [
-        {
-            "evidence_item": "final recommendation model",
-            "value": "run",
-            "notes": f"{provider.provider_name} ({provider.model_name})",
-        },
-        {
-            "evidence_item": "final recommendation contexts",
-            "value": len(diagnostics),
-            "notes": "One context per missing metric, statement, and report period with available options.",
-        },
-        {
-            "evidence_item": "final recommendations selected",
-            "value": selected,
-            "notes": f"no_recommendation={no_options}; unavailable={unavailable}; failed={failed}",
-        },
-        {
-            "evidence_item": "final recommendation cache directory",
-            "value": str(cache_dir),
-            "notes": "Exact-context cache for report-only final recommendations.",
-        },
-    ]
-
-
 def _formula_proposal_targets(
     target_raw_fact_coverage: list[dict[str, Any]],
     *,
@@ -1764,15 +1330,6 @@ def _formula_progress(
     progress(f"[formula proposals] {message}")
 
 
-def _final_progress(
-    progress: Callable[[str], None] | None,
-    message: str,
-) -> None:
-    if progress is None:
-        return
-    progress(f"[final recommendations] {message}")
-
-
 def _formula_progress_start(
     progress: Callable[[str], None] | None,
     *,
@@ -1817,36 +1374,6 @@ def _formula_context_progress_label(context: FormulaProposalContext) -> str:
     return details or context.context_id
 
 
-def _final_context_progress_label(
-    *,
-    metric: str,
-    statement: str,
-    period_context: str,
-    options: tuple[dict[str, object], ...],
-) -> str:
-    counts: dict[str, int] = {}
-    for option in options:
-        option_type = str(option.get("option_type") or "unknown")
-        counts[option_type] = counts.get(option_type, 0) + 1
-    option_summary = ", ".join(
-        f"{option_type}={counts[option_type]}"
-        for option_type in (
-            FINAL_OPTION_FORMULA,
-            FINAL_OPTION_SEMANTIC_CANDIDATE,
-            FINAL_OPTION_ZERO,
-            FINAL_OPTION_NO_RECOMMENDATION,
-            "unknown",
-        )
-        if counts.get(option_type)
-    )
-    option_note = f"{len(options)} option(s)"
-    if option_summary:
-        option_note = f"{option_note}: {option_summary}"
-    statement_label = statement or "unknown statement"
-    period_label = period_context or "unknown period"
-    return f"{metric} ({statement_label}) / {period_label}; {option_note}"
-
-
 def _formula_proposal_fact_pool(
     connection: sqlite3.Connection,
     *,
@@ -1860,7 +1387,11 @@ def _formula_proposal_fact_pool(
     }
     approved_alternate_keys = {
         (str(row.get("taxonomy") or ""), str(row.get("observed_raw_concept") or ""))
+<<<<<<< HEAD
         for row in _learned_mapping_rows(connection, cik, status="approved")
+=======
+        for row in _concept_mapping_rows(connection, cik, status="approved")
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
     }
     rows = _fetch_all(
         connection,
@@ -2024,13 +1555,6 @@ def _formula_proposal_provider_configs(settings: Settings | None):
     )
 
 
-def _final_recommendation_provider_config(settings: Settings | None):
-    return default_final_recommendation_provider_config(
-        openai_api_key=_secret_value(getattr(settings, "openai_api_key", None)),
-        openai_model=str(getattr(settings, "openai_final_recommendation_model", "") or "gpt-5.5"),
-    )
-
-
 def _formula_proposal_cache_dir(settings: Settings | None) -> Path:
     base_dir = getattr(settings, "knowledge_storage_dir", None) if settings is not None else None
     if base_dir is None:
@@ -2040,17 +1564,6 @@ def _formula_proposal_cache_dir(settings: Settings | None) -> Path:
         if not base_path.is_absolute():
             base_path = PROJECT_ROOT / base_path
     return base_path / FORMULA_PROPOSAL_CACHE_SUBDIR
-
-
-def _final_recommendation_cache_dir(settings: Settings | None) -> Path:
-    base_dir = getattr(settings, "knowledge_storage_dir", None) if settings is not None else None
-    if base_dir is None:
-        base_path = PROJECT_ROOT / "data_store" / "knowledge"
-    else:
-        base_path = Path(base_dir)
-        if not base_path.is_absolute():
-            base_path = PROJECT_ROOT / base_path
-    return base_path / FINAL_RECOMMENDATION_CACHE_SUBDIR
 
 
 def _secret_value(value: Any) -> str | None:
@@ -2365,7 +1878,10 @@ def _debt_recovery_results(
         return ()
     return recover_debt_metrics(
         _debt_recovery_source_metrics(connection, company_id),
+<<<<<<< HEAD
         candidate_metric_names=(),
+=======
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
     )
 
 
@@ -2595,7 +2111,7 @@ def _debt_recovery_component_rows(results: tuple[MetricRecoveryResult, ...]) -> 
                     "zero_if_absent": _yes_no(policy.zero_if_absent) if policy is not None else "",
                     "component_availability": _component_availability(component.component_status),
                     "component_status": component.component_status,
-                    "candidate_metric_names": _join_values(component.candidate_metric_names),
+                    "component_metric_names": _join_values(component.metric_names),
                     "component_value": _report_decimal(component.value_numeric),
                     "unit": component.unit or "",
                     "source_metric_ids": _join_values(component.source_metric_ids),
@@ -2616,8 +2132,6 @@ def _component_availability(component_status: str) -> str:
         return "not found; optional component assumed zero"
     if component_status == COMPONENT_MISSING_REQUIRED:
         return "not found; required component missing"
-    if component_status == COMPONENT_CANDIDATE_REVIEW_REQUIRED:
-        return "candidate only; not approved for recovery"
     if component_status == COMPONENT_AMBIGUOUS:
         return "found but ambiguous; not used"
     return component_status
@@ -2642,7 +2156,11 @@ def _mapping_profile_reuse_rows(
     approved_learned_mappings: list[dict[str, Any]],
     unknown_xbrl_concepts: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
+<<<<<<< HEAD
     """Summarize direct mapping and learned-mapping reuse evidence for the report."""
+=======
+    """Summarize hard-mapping reuse evidence for the report."""
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
     industry_labels = assignment.assigned_industry_labels
     catalog_mappings = mapping_candidates_by_key(industry_labels)
     missing_targets = [
@@ -2660,13 +2178,6 @@ def _mapping_profile_reuse_rows(
         for row in target_raw_fact_coverage
         if row.get("status") == STATUS_FOUND_UNMAPPED
     ]
-    missing_metric_names = sorted(
-        {
-            str(row.get("internal_metric_name"))
-            for row in missing_targets
-            if row.get("internal_metric_name")
-        }
-    )
     return [
         {
             "evidence_item": "approved hard industry labels",
@@ -2698,6 +2209,7 @@ def _mapping_profile_reuse_rows(
             ),
         },
         {
+<<<<<<< HEAD
             "evidence_item": "missing target metrics for formula review",
             "value": len(missing_metric_names),
             "evidence_source": "target raw fact coverage",
@@ -2707,6 +2219,8 @@ def _mapping_profile_reuse_rows(
             ),
         },
         {
+=======
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
             "evidence_item": "mapping expansion review pool",
             "value": len(unknown_xbrl_concepts),
             "evidence_source": "raw_xbrl_facts minus approved/catalog mappings",
@@ -2714,6 +2228,10 @@ def _mapping_profile_reuse_rows(
         },
     ]
 
+<<<<<<< HEAD
+=======
+
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 def _scope_count_summary(rows: list[dict[str, Any]]) -> str:
     if not rows:
         return "none"
@@ -2779,7 +2297,11 @@ def _supported_mapping_context(
         )
     )
     catalog_mappings = mapping_candidates_by_key(industry_labels)
+<<<<<<< HEAD
     approved_mapping_rows = _learned_mapping_rows(connection, cik, status="approved")
+=======
+    approved_mapping_rows = _concept_mapping_rows(connection, cik, status="approved")
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
     approved_keys = {
         (str(row["taxonomy"]), str(row["observed_raw_concept"]))
         for row in approved_mapping_rows
@@ -2941,7 +2463,11 @@ def _alternate_xbrl_tags(connection: sqlite3.Connection, company_id: int | None)
         "SELECT cik FROM companies WHERE company_id = ?",
         [company_id],
     )
+<<<<<<< HEAD
     for row in _learned_mapping_rows(
+=======
+    for row in _concept_mapping_rows(
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
         connection,
         company.get("cik"),
         status="approved",
@@ -3031,11 +2557,14 @@ def _inline_xbrl_coverage(
     )
 
 
+<<<<<<< HEAD
 def _learned_mapping_rows(
+=======
+def _concept_mapping_rows(
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
     connection: sqlite3.Connection,
     cik: str | None,
     *,
-    company_id: int | None = None,
     status: str,
 ) -> list[dict[str, Any]]:
     if not cik:
@@ -3078,17 +2607,12 @@ def _learned_mapping_rows(
         [status, cik, cik],
     )
     rendered_rows: list[dict[str, Any]] = []
-    period_coverage_by_key = _semantic_candidate_period_coverage(
-        connection,
-        cik=cik,
-        company_id=company_id,
-        rows=rows,
-    )
     for row in rows:
 <<<<<<< HEAD
         row.pop("evidence_json", "{}")
 =======
         evidence = _mapping_evidence(row.pop("evidence_json", "{}"))
+<<<<<<< HEAD
         target_taxonomy = str(evidence.get("target_candidate_taxonomy") or "")
         target_concept = str(evidence.get("target_candidate_xbrl_concept") or "")
         coverage_by_form = period_coverage_by_key.get(
@@ -3099,6 +2623,8 @@ def _learned_mapping_rows(
             {},
         )
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
+=======
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
         rendered_rows.append(
             {
                 **row,
@@ -3107,6 +2633,7 @@ def _learned_mapping_rows(
                     if row.get("taxonomy") and row.get("observed_raw_concept")
                     else ""
                 ),
+<<<<<<< HEAD
 <<<<<<< HEAD
 =======
                 "target_candidate_xbrl_concept": (
@@ -3137,11 +2664,15 @@ def _learned_mapping_rows(
                 "period_coverage_10k": coverage_by_form.get("10-K", ""),
                 "period_coverage_10q": coverage_by_form.get("10-Q", ""),
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
+=======
+                "evidence": evidence,
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
             }
         )
     return rendered_rows
 
 
+<<<<<<< HEAD
 <<<<<<< HEAD
 =======
 def _semantic_candidate_period_coverage(
@@ -3242,6 +2773,8 @@ def _active_periods_by_form(
     return grouped
 
 
+=======
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 def _normal_report_form(value: Any) -> str:
     text = str(value or "").strip().upper()
     if text in {"10-K", "10-K/A"}:
@@ -3565,8 +3098,6 @@ def format_saved_report(run: ExperimentRun, *, full_report: bool = False) -> str
     lines.extend(_markdown_table(run.session_after_snapshot.get("found_unmapped_target_facts") or []))
     lines.extend(["", "Inline XBRL Extension Coverage:"])
     lines.extend(_markdown_table(run.session_after_snapshot.get("inline_xbrl_coverage") or []))
-    lines.extend(["", "Semantic Mapping Candidates (Review Required):"])
-    lines.extend(_markdown_table(run.session_after_snapshot.get("semantic_mapping_candidates") or []))
     lines.extend(["", "Approved Learned XBRL Mappings:"])
     lines.extend(_markdown_table(run.session_after_snapshot.get("approved_learned_mappings") or []))
     lines.extend(["", "Alternate SEC/XBRL Tags For Same Business Metric:"])
@@ -4156,7 +3687,7 @@ def format_saved_report(run: ExperimentRun, *, full_report: bool = False) -> str
     lines.extend(
         [
             "",
-            "Boundary: semantic candidates, formulas, and zero-target recommendations are review evidence only. They do not populate `financial_metrics` or feed indicators without approval.",
+            "Boundary: formula and zero-target recommendations are review evidence only. They do not populate `financial_metrics` or feed indicators without approval.",
         ]
     )
     if run.error:
@@ -4167,18 +3698,6 @@ def format_saved_report(run: ExperimentRun, *, full_report: bool = False) -> str
 
     lines.extend(["", "## 1. Target Metrics Mapping Status", ""])
     lines.extend(_markdown_table(_target_metric_status_rows(run.session_after_snapshot)))
-
-    lines.extend(["", "## 2. Semantic Candidates For Missing Targets", ""])
-    for form_type in FORMS:
-        lines.extend(["", f"### {form_type}", ""])
-        lines.extend(
-            _markdown_table(
-                _semantic_candidate_rows_for_missing_targets(
-                    run.session_after_snapshot,
-                    form_type=form_type,
-                )
-            )
-        )
 
     formula_annotations: dict[str, str] = {}
 
@@ -4195,18 +3714,6 @@ def format_saved_report(run: ExperimentRun, *, full_report: bool = False) -> str
         )
         lines.extend(_formula_annotation_lines_for_rows(formula_rows, formula_annotations))
 
-    lines.extend(["", "## 4. Final Recommendations For Missing Targets", ""])
-    for form_type in FORMS:
-        lines.extend(["", f"### {form_type}", ""])
-        lines.extend(
-            _markdown_table(
-                _final_recommendation_rows_for_missing_targets(
-                    run.session_after_snapshot,
-                    form_type=form_type,
-                    formula_annotations=formula_annotations,
-                )
-            )
-        )
     return "\n".join(lines)
 
 
@@ -4214,20 +3721,13 @@ def _saved_compact_summary_rows(run: ExperimentRun, *, full_report: bool) -> lis
     snapshot = run.session_after_snapshot
     company = snapshot.get("company") or run.setup_snapshot.get("company") or {}
     target_status_rows = _target_metric_status_rows(snapshot)
-    semantic_rows_by_form = {
-        form_type: _semantic_candidate_rows_for_missing_targets(snapshot, form_type=form_type)
-        for form_type in FORMS
-    }
     formula_rows_by_form = {
         form_type: _proposed_formula_rows_for_missing_targets(snapshot, form_type=form_type)
         for form_type in FORMS
     }
     formula_summary = _summary_rows_by_item(snapshot.get("formula_proposal_summary") or [])
-    final_summary = _summary_rows_by_item(snapshot.get("final_recommendation_summary") or [])
     diagnostics = snapshot.get("formula_proposal_diagnostics") or []
-    final_diagnostics = snapshot.get("final_recommendation_diagnostics") or []
     formula_panel = formula_summary.get("formula proposal model panel", {})
-    final_model = final_summary.get("final recommendation model", {})
     report_output = "saved Plan 2.5 target mapping report"
     if full_report:
         report_output = "saved Plan 2.5 target mapping report; --full-report kept for CLI compatibility"
@@ -4253,8 +3753,6 @@ def _saved_compact_summary_rows(run: ExperimentRun, *, full_report: bool) -> lis
         {"Item": "Target metrics checked", "Value": len(target_status_rows)},
         {"Item": "Mapped target metrics", "Value": _count_rows_with_report_value(target_status_rows, "Mapping status", "mapped")},
         {"Item": "Missing target metrics", "Value": _count_rows_with_report_value(target_status_rows, "Mapping status", "missing")},
-        {"Item": "10-K semantic candidate rows listed", "Value": len(semantic_rows_by_form["10-K"])},
-        {"Item": "10-Q semantic candidate rows listed", "Value": len(semantic_rows_by_form["10-Q"])},
         {"Item": "10-K proposed formula rows listed", "Value": len(formula_rows_by_form["10-K"])},
         {"Item": "10-Q proposed formula rows listed", "Value": len(formula_rows_by_form["10-Q"])},
         {
@@ -4269,15 +3767,6 @@ def _saved_compact_summary_rows(run: ExperimentRun, *, full_report: bool) -> lis
         {
             "Item": "Zero-target evidence rows",
             "Value": sum(row.get("provider_status") == PROVIDER_STATUS_TARGET_ZERO for row in diagnostics),
-        },
-        {
-            "Item": "Final recommendation model",
-            "Value": final_model.get("notes") or final_model.get("value") or "not_run",
-        },
-        {"Item": "Final recommendation contexts", "Value": len(final_diagnostics)},
-        {
-            "Item": "Final recommendations selected",
-            "Value": sum(row.get("provider_status") == FINAL_RECOMMENDATION_STATUS_SELECTED for row in final_diagnostics),
         },
         {"Item": "Recovered rows inserted into `financial_metrics`", "Value": 0},
         {"Item": "Used by indicators", "Value": "No"},
@@ -4310,38 +3799,6 @@ def _target_metric_status_rows(snapshot: dict[str, Any]) -> list[dict[str, Any]]
             str(item.get("Metric") or ""),
             str(item.get("Statement") or ""),
         ),
-    )
-
-
-def _semantic_candidate_rows_for_missing_targets(
-    snapshot: dict[str, Any],
-    *,
-    form_type: str,
-) -> list[dict[str, Any]]:
-    missing_metrics = _missing_metric_names(snapshot)
-    rows: list[dict[str, Any]] = []
-    coverage_key = _period_coverage_key(form_type)
-    for row in snapshot.get("semantic_mapping_candidates") or []:
-        metric = str(row.get("metric_name") or "")
-        if metric not in missing_metrics:
-            continue
-        period_coverage = str(row.get(coverage_key) or "")
-        if not period_coverage:
-            continue
-        rows.append(
-            {
-                "Metric": metric,
-                "Statement": row.get("statement_type") or "",
-                "Recommended concepts by semantic similarity": _strip_concept_prefixes(row.get("observed_xbrl_concept") or ""),
-                "Semantic similarity": row.get("semantic_similarity") or "",
-                "Period coverage": period_coverage,
-                "Observed label": row.get("observed_label") or "",
-                "Observed period types": row.get("observed_period_types") or "",
-            }
-        )
-    return _collapse_report_rows(
-        sorted(rows, key=_semantic_candidate_sort_key),
-        merge_columns=("Period coverage",),
     )
 
 
@@ -4559,98 +4016,6 @@ def _quarter_columns_for_concept_counts(periods: dict[str, set[str]]) -> list[in
     return [quarter for quarter in (1, 2, 3, 4) if quarter in set(observed) or quarter <= 3]
 
 
-def _final_recommendation_rows_for_missing_targets(
-    snapshot: dict[str, Any],
-    *,
-    form_type: str,
-    formula_annotations: dict[str, str] | None = None,
-) -> list[dict[str, Any]]:
-    missing_metrics = _missing_metric_names(snapshot)
-    statement_by_metric = {
-        str(row.get("internal_metric_name") or ""): str(row.get("statement_type") or "")
-        for row in snapshot.get("metric_coverage_resolution") or []
-        if str(row.get("internal_metric_name") or "") in missing_metrics
-    }
-    semantic_by_period = _semantic_options_by_metric_period(snapshot, form_type=form_type)
-    formula_by_period = _formula_recommendations_by_metric_period(
-        snapshot,
-        form_type=form_type,
-        provider_statuses={PROVIDER_STATUS_PROPOSED},
-    )
-    zero_by_period = _formula_recommendations_by_metric_period(
-        snapshot,
-        form_type=form_type,
-        provider_statuses={PROVIDER_STATUS_TARGET_ZERO},
-    )
-    final_by_period = _final_recommendations_by_metric_period(snapshot, form_type=form_type)
-
-    rows: list[dict[str, Any]] = []
-    keys = set(semantic_by_period) | set(formula_by_period) | set(zero_by_period)
-    for metric, statement, period_label in sorted(
-        keys,
-        key=lambda key: (
-            key[0],
-            key[1],
-            -_first_formula_period_sort_value(key[2], form_type=form_type),
-        ),
-    ):
-        semantic_candidate = semantic_by_period.get((metric, statement, period_label), "")
-        formula_recommendations = formula_by_period.get((metric, statement, period_label), [])
-        zero_recommendations = zero_by_period.get((metric, statement, period_label), [])
-        final_result = final_by_period.get((metric, statement, period_label))
-        rows.append(
-            {
-                "Metric": metric,
-                "Statement": statement or statement_by_metric.get(metric, ""),
-                "Period context": period_label,
-                "Semantic candidate": semantic_candidate,
-                "Formula evidence": _recommendation_formula_summary(
-                    formula_recommendations,
-                    formula_annotations=formula_annotations,
-                ),
-                "Zero evidence": _recommendation_formula_summary(
-                    zero_recommendations,
-                    formula_annotations=formula_annotations,
-                ),
-                "Final recommendation": _final_recommendation_display(
-                    final_result,
-                    has_options=bool(semantic_candidate or formula_recommendations or zero_recommendations),
-                    formula_annotations=formula_annotations,
-                ),
-            }
-        )
-    return _collapse_final_recommendation_rows(rows, form_type=form_type)
-
-
-def _semantic_options_by_metric_period(
-    snapshot: dict[str, Any],
-    *,
-    form_type: str,
-) -> dict[tuple[str, str, str], str]:
-    missing_metrics = _missing_metric_names(snapshot)
-    best_by_period: dict[tuple[str, str, str], tuple[float, str]] = {}
-    coverage_key = _period_coverage_key(form_type)
-    for row in snapshot.get("semantic_mapping_candidates") or []:
-        metric = str(row.get("metric_name") or "")
-        if metric not in missing_metrics:
-            continue
-        period_coverage = str(row.get(coverage_key) or "")
-        if not period_coverage:
-            continue
-        similarity = _as_float(row.get("semantic_similarity"))
-        candidate = _strip_concept_prefixes(row.get("observed_xbrl_concept") or "")
-        if not candidate:
-            continue
-        option = f"{candidate} ({similarity:.2f})"
-        statement = str(row.get("statement_type") or "")
-        for period_label in _period_labels_for_report_value(period_coverage, form_type=form_type):
-            key = (metric, statement, period_label)
-            current = best_by_period.get(key)
-            if current is None or similarity > current[0]:
-                best_by_period[key] = (similarity, option)
-    return {key: option for key, (_, option) in best_by_period.items()}
-
-
 def _formula_recommendations_by_metric_period(
     snapshot: dict[str, Any],
     *,
@@ -4704,112 +4069,6 @@ def _recommendation_formula_summary(
         _formula_text_for_table(recommendation["formula"], formula_annotations=formula_annotations)
         for recommendation in recommendations
         if recommendation.get("formula")
-    )
-
-
-def _final_recommendations_by_metric_period(
-    snapshot: dict[str, Any],
-    *,
-    form_type: str,
-) -> dict[tuple[str, str, str], dict[str, Any]]:
-    recommendations: dict[tuple[str, str, str], dict[str, Any]] = {}
-    normalized_form = _normal_report_form(form_type)
-    for row in snapshot.get("final_recommendation_diagnostics") or []:
-        if not _final_recommendation_row_matches_form(row, form_type=form_type):
-            continue
-        period_label = _formula_period_context_for_report(row.get("period_context"), form_type=form_type)
-        if not period_label:
-            continue
-        if normalized_form == "10-Q" and "q4" in period_label.lower():
-            continue
-        metric = str(row.get("target_metric_name") or "")
-        statement = str(row.get("statement_type") or "")
-        if metric:
-            recommendations[(metric, statement, period_label)] = row
-    return recommendations
-
-
-def _final_recommendation_row_matches_form(row: dict[str, Any], *, form_type: str) -> bool:
-    normalized_form = _normal_report_form(form_type)
-    row_form = _normal_report_form(row.get("form_type"))
-    if row_form:
-        return row_form == normalized_form
-
-    forms = {_normal_report_form(value) for value in _split_joined_values(row.get("forms"))}
-    forms.discard("")
-    if forms:
-        return normalized_form in forms
-
-    period_context = str(row.get("period_context") or "")
-    has_quarter_context = bool(_quarter_labels_from_context(period_context) or _quarter_ranges_from_context(period_context))
-    if normalized_form == "10-Q":
-        return has_quarter_context
-    if normalized_form == "10-K":
-        return not has_quarter_context
-    return False
-
-
-def _final_recommendation_display(
-    result: dict[str, Any] | None,
-    *,
-    has_options: bool,
-    formula_annotations: dict[str, str] | None = None,
-) -> str:
-    if result is None:
-        return "needs_review" if has_options else ""
-    status = str(result.get("provider_status") or "")
-    selected_type = str(result.get("selected_option_type") or "")
-    value = str(result.get("final_recommendation") or "")
-    if status != FINAL_RECOMMENDATION_STATUS_SELECTED:
-        return "needs_review" if has_options else ""
-    if selected_type == FINAL_OPTION_ZERO:
-        return "0"
-    if selected_type == FINAL_OPTION_FORMULA:
-        return _formula_text_for_table(value, formula_annotations=formula_annotations)
-    if selected_type == FINAL_OPTION_SEMANTIC_CANDIDATE:
-        return _strip_concept_prefixes(value)
-    if selected_type == FINAL_OPTION_NO_RECOMMENDATION:
-        return "needs_review" if has_options else ""
-    return "needs_review" if has_options else ""
-
-
-def _collapse_final_recommendation_rows(
-    rows: list[dict[str, Any]],
-    *,
-    form_type: str,
-) -> list[dict[str, Any]]:
-    grouped: dict[tuple[tuple[str, Any], ...], dict[str, Any]] = {}
-    periods_by_key: dict[tuple[tuple[str, Any], ...], list[str]] = {}
-    for row in rows:
-        key = tuple(
-            (column, value)
-            for column, value in row.items()
-            if column != "Period context"
-        )
-        if key not in grouped:
-            grouped[key] = dict(row)
-            periods_by_key[key] = []
-        period_context = str(row.get("Period context") or "")
-        if period_context:
-            periods_by_key[key].append(period_context)
-
-    collapsed: list[dict[str, Any]] = []
-    for key, row in grouped.items():
-        row["Period context"] = _format_formula_period_labels_for_report(
-            periods_by_key.get(key, ()),
-            form_type=form_type,
-        )
-        collapsed.append(row)
-    return sorted(
-        collapsed,
-        key=lambda row: (
-            str(row.get("Metric") or ""),
-            str(row.get("Statement") or ""),
-            -_first_formula_period_sort_value(str(row.get("Period context") or ""), form_type=form_type),
-            str(row.get("Semantic candidate") or ""),
-            str(row.get("Formula evidence") or ""),
-            str(row.get("Zero evidence") or ""),
-        ),
     )
 
 
@@ -4893,14 +4152,6 @@ def _period_coverage_key(form_type: str) -> str:
     if normalized == "10-Q":
         return "period_coverage_10q"
     return ""
-
-
-def _semantic_candidate_sort_key(row: dict[str, Any]) -> tuple[str, float, str]:
-    return (
-        str(row.get("Metric") or ""),
-        -_as_float(row.get("Semantic similarity")),
-        str(row.get("Recommended concepts by semantic similarity") or ""),
-    )
 
 
 def _diagnostic_row_matches_form(row: dict[str, Any], form_type: str) -> bool:
@@ -5369,7 +4620,7 @@ def format_compact_report(run: ExperimentRun, *, full_report: bool = False) -> s
         [
             "",
             "Saved Report",
-            "  milestone25_mapping_report contains compact summary, target metric status, 10-K/10-Q semantic candidates, and 10-K/10-Q proposed formulas.",
+            "  milestone25_mapping_report contains compact summary, target metric status, and 10-K/10-Q proposed formulas.",
         ]
     )
     return "\n".join(lines)
@@ -5896,23 +5147,17 @@ def _compact_formula_proposals(snapshot: dict[str, Any], *, indent: str) -> list
 
 def _compact_adaptive_mapping(snapshot: dict[str, Any], *, indent: str) -> list[str]:
     inline_rows = snapshot.get("inline_xbrl_coverage") or []
-    candidates = snapshot.get("semantic_mapping_candidates") or []
     approved = snapshot.get("approved_learned_mappings") or []
     profile_rows = {
         row.get("evidence_item"): row
         for row in snapshot.get("mapping_profile_reuse") or []
     }
-    discovery = profile_rows.get("semantic discovery status", {})
     profile = profile_rows.get("approved company concept profile reuse", {})
     return [
         f"{indent}approved company concept profile reused: "
         f"{profile.get('value') or 'not available'}",
         f"{indent}Inline XBRL facts stored: "
         f"{_format_presentation_number(sum(int(row.get('raw_fact_rows') or 0) for row in inline_rows))}",
-        f"{indent}semantic discovery status: "
-        f"{discovery.get('value') or 'not available'}",
-        f"{indent}semantic candidates awaiting review: "
-        f"{_format_presentation_number(len(candidates))}",
         f"{indent}approved learned mappings: {_format_presentation_number(len(approved))}",
     ]
 

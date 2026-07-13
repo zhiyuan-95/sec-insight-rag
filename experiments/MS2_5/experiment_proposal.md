@@ -68,7 +68,7 @@ This experiment covers:
 - target raw fact coverage for the assigned hard industry labels, including
   found, missing, and found-but-unmapped target facts
 - metric-first coverage resolution that groups target tags, approved
-  alternates, semantic candidates, and formula/zero diagnostics into one
+  alternates, and formula/zero diagnostics into one
   reviewer or LLM choice surface per internal metric
 - alternate SEC/XBRL tags that map to the same internal business metric
 - unknown SEC/XBRL concepts not currently mapped to base financial metrics
@@ -89,7 +89,7 @@ This experiment covers:
   CSV exports
 =======
 - report-only LLM formula proposal diagnostics for unresolved target concepts
-  after hard mapping and semantic mapping, using period-scoped raw fact pools
+  after hard mapping, using period-scoped raw fact pools
   that include found targets, mapped base metrics, approved alternates, and
   unknown/unmapped raw facts, with target-compatible unit filtering,
   statement-first prompting, active-period context coverage, and exact-context
@@ -99,10 +99,15 @@ This experiment covers:
   skip reasons, formula versions, and source metric/raw fact IDs
 - saved Plan 2.5 target mapping report with a compact summary, mapped/missing
   target metric status with common-base versus industry-special classification,
+<<<<<<< HEAD
   semantic candidates for missing metrics split into 10-K and 10-Q active-window
   subsections, and proposed formula rows split into 10-K and 10-Q active-window
   subsections with taxonomy prefixes removed from displayed concept values
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
+=======
+  and proposed formula rows split into 10-K and 10-Q active-window subsections
+  with taxonomy prefixes removed from displayed concept values
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 
 This experiment does not cover derived indicators, deterministic analytics,
 retrieval indexes, Gemini calls, RAG answers, frontend behavior, durable
@@ -236,10 +241,6 @@ Rules:
 - while formula proposals run, the terminal prints process progress: how many
   missing targets were selected, which missing metric/statement is being
   handled, each period context, and the final context count
-- after formula proposals complete, the terminal prints final recommendation
-  progress: the final recommendation model, each grouped recommendation request,
-  the period option contexts covered by that request, option counts by type, and
-  selected/no-recommendation/unavailable/failed completion counts
 - `--full-report` is accepted for compatibility; it does not add old
   target-level, provider-level, raw-fact, or unknown-concept appendices
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
@@ -322,9 +323,7 @@ Sections:
 0. Compact Summary
 0A. XBRL Concepts Provided By Period
 1. Target Metrics Mapping Status
-2. Semantic Candidates For Missing Targets
 3. Proposed Formulas For Formula Recommendations
-4. Final Recommendations For Missing Targets
 
 Section 0A presents the count of distinct selected XBRL concepts provided to
 formula generation for each period, deduped across provider/model calls. It
@@ -333,45 +332,23 @@ Section 1 lists every target metric, marks it as mapped or missing, and labels
 the metric source as common base or the actual hard-industry label name.
 Section 1 is sorted by metric type and uses this column order: Metric type,
 Metric, Statement, Mapping status, Mapped target concepts, Coverage detail,
-Approved alternates, Target XBRL concepts checked. Section 2 lists semantic
-candidates only for missing target metrics, omits the target-concept column, and
-splits rows into 10-K and 10-Q active-window subsections with period coverage.
-When all active periods are covered, period coverage is abbreviated as a start
-and end range such as `active 10-K periods: 2021 FY - 2025 FY` or
-`active 10-Q periods: 2023 Q1 - 2026 Q2`. Section 3 lists proposed formula
-evidence only for missing target metrics and splits rows into 10-K and 10-Q
-active-window subsections. Agreement rows should collapse when the full
+Approved alternates, Target XBRL concepts checked. Section 3 lists proposed
+formula evidence only for missing target metrics and splits rows into 10-K and
+10-Q active-window subsections. Agreement rows should collapse when the full
 provider/formula decision set is the same. When providers disagree for a period,
 show separate provider rows instead of putting multiple provider formulas in the
 same Formula cell. Provider-specific disagreement rows may still collapse across
 periods when the same provider gives the same formula. Section 3 should not
-include Target concept, Components, or recommendation columns; final choice
-language belongs in Section 4. Section 3 period context should show only compact filing periods:
+include Target concept, Components, or recommendation columns. Section 3
+period context should show only compact filing periods:
 10-K rows use years such as `2023` or `2023-2025`, and 10-Q rows use
 year-quarter labels such as `2021 q1` or `2021 q1 - 2021 q3`; omit raw suffixes
 such as period type, unit, and form. 10-Q report labels should not show Q4.
 If a formula is too long for the Formula column, the Formula cell should show
 an annotation such as `[F1]`, and the full formula should be listed under the
 table in a Formula annotations block.
-Section 4 is the period-level final recommendation section, split into 10-K
-and 10-Q subsections. Each row represents one missing metric for one period
-group and shows the semantic candidate, proposed formula evidence, and possible
-zero evidence that apply to that same period group. A separate final
-recommendation LLM call chooses exactly one option from those supplied choices:
-one proposed formula, the semantic candidate, `0`, or no recommendation when
-the evidence is insufficient. Periods with the same metric, statement, and
-identical option set should share one final recommendation call, then expand the
-selected answer back to each covered period. When those recommended solutions
-and the final choice are identical across periods, Section 4 should collapse
-them into one row and compact the Period context like Section 3.
-Formula evidence should show only formula text, without provider/model source
-details. Final recommendation should show the selected recommendation value
-itself: the formula text, the semantic candidate, or `0` for zero-target
-recommendations. If the final model is unavailable, fails, or chooses an
-invalid option, the row should show `needs_review`. When Section 3 annotated a
-selected formula, Section 4 should reuse that annotation instead of reprinting
-the long formula. Displayed concept values should omit taxonomy prefixes such
-as `us-gaap:` or `custom:`.
+Displayed concept values should omit taxonomy prefixes such as `us-gaap:` or
+`custom:`.
 
 The compact summary should include setup ingestion duration and unchanged-company
 reuse duration as evidence for the local MVP performance expectations. It should
@@ -401,23 +378,25 @@ should say `needs_review` so the LLM does not sound like the final approver.
 - Reuse `src/processing/mapping_catalog.py` for approved mapping candidates and
   target raw fact coverage.
 - Reuse `src/processing/metric_coverage.py` to collapse tag-level evidence into
-  one metric-level review row before asking an LLM or reviewer to choose among
-  semantic candidate, formula-from-raw-concepts, zero-target, or no-evidence.
+  one metric-level review row before asking an LLM or reviewer to evaluate
+  formula-from-raw-concepts, zero-target, or no-evidence.
 - Reuse `src/ingestion/inline_xbrl.py` and Arelle for active filing extension
   taxonomy loading; keep normalization in `src/processing/inline_xbrl.py`.
+<<<<<<< HEAD
 - Reuse `src/processing/metric_targets.py` for canonical target definitions and
   missing-target diagnostics.
 - Read approved learned mappings from `xbrl_concept_mappings`; only approved
   learned mappings can supplement the source-controlled catalog.
 - Do not generate model-similarity mapping candidates.
+=======
+- Read approved learned mappings from `xbrl_concept_mappings`; only approved
+  mappings can participate in hard mapping.
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 - Keep LLM formula proposal prompt text in `src/analyze/prompts.py`, provider
   calls in `src/analyze/xbrl_formula_proposals.py`, and period context
   construction, target-compatible unit filtering, exact-cache reuse, and deterministic validation in
   `src/processing/formula_proposals.py`. The provider panel is Gemini plus
-  OpenAI `gpt-4.1-mini`. The Section 4 final recommendation step is a separate
-  OpenAI call using `OPENAI_FINAL_RECOMMENDATION_MODEL`, defaulting to
-  `gpt-5.5`, and it has its own exact-context cache under
-  `data_store/knowledge/final_recommendations/`.
+  OpenAI `gpt-4.1-mini`.
 - Treat LLM formula proposals as report-only evidence. Do not approve mappings,
   persist recovered values, or feed indicators from model confidence or model
   agreement. A model may also return a report-only zero-target decision when
@@ -484,8 +463,7 @@ data/exports/ms2_5/
 <<<<<<< HEAD
 =======
 The saved report should use Markdown tables for the compact summary, target
-metric mapping status, semantic candidates for missing targets, and proposed
-formulas for formula recommendations.
+metric mapping status, and proposed formulas for formula recommendations.
 Table cells should be padded to the column width so headers and values align in
 the text report.
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)

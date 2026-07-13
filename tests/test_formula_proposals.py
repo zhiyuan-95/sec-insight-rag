@@ -1,17 +1,10 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from decimal import Decimal
 
-from src.analyze import xbrl_formula_proposals
-from src.analyze.xbrl_formula_proposals import (
-    default_final_recommendation_provider_config,
-    default_formula_proposal_provider_configs,
-)
+from src.analyze.xbrl_formula_proposals import default_formula_proposal_provider_configs
 from src.processing.formula_proposals import (
-    FINAL_OPTION_FORMULA,
-    FINAL_RECOMMENDATION_STATUS_SELECTED,
     PROVIDER_STATUS_TARGET_ZERO,
     STATEMENT_RELATIONSHIP_CROSS,
     STATEMENT_RELATIONSHIP_SAME,
@@ -22,22 +15,16 @@ from src.processing.formula_proposals import (
     VALIDATION_STATUS_FAILED,
     VALIDATION_STATUS_VALIDATED,
     VALIDATION_STATUS_ZERO_EVIDENCE,
-    FinalRecommendationProviderResult,
-    FinalRecommendationResponse,
     FormulaProposalComponentResponse,
     FormulaProposalFact,
     FormulaProposalProviderResult,
     FormulaProposalResponse,
     FormulaProposalTarget,
     build_formula_proposal_contexts,
-    coerce_final_recommendation_response,
     coerce_formula_proposal_response,
-    final_recommendation_context_fingerprint,
     formula_context_fingerprint,
-    load_final_recommendation_cache,
     load_formula_proposal_cache,
     provider_result_from_response,
-    save_final_recommendation_cache,
     save_formula_proposal_cache,
     validate_formula_proposal,
 )
@@ -53,80 +40,6 @@ def test_formula_proposal_provider_configs_use_gemini_and_openai_only() -> None:
         ("gemini", "gemini-2.5-flash"),
         ("openai", "gpt-4.1-mini"),
     ]
-
-
-def test_final_recommendation_provider_config_uses_openai_better_model() -> None:
-    config = default_final_recommendation_provider_config(openai_api_key="openai-key")
-
-    assert config.provider_name == "openai"
-    assert config.model_name == "gpt-5.5"
-    assert config.api_key == "openai-key"
-
-
-def test_final_recommendation_openai_call_omits_temperature_for_gpt55(monkeypatch) -> None:
-    captured_payload: dict[str, object] = {}
-
-    def fake_post_json(url: str, payload: dict[str, object], *, headers: dict[str, str]):
-        captured_payload.update(payload)
-        return {
-            "output_text": json.dumps(
-                {
-                    "selected_option_type": "formula",
-                    "selected_option_id": "formula_1",
-                    "final_recommendation": "debt_current = LongTermDebtCurrent",
-                    "confidence": 0.9,
-                    "reason": "The formula option is directly supported.",
-                    "uncertainty": "Review before persistence.",
-                }
-            )
-        }
-
-    monkeypatch.setattr(xbrl_formula_proposals, "_post_json", fake_post_json)
-    provider = default_final_recommendation_provider_config(openai_api_key="openai-key")
-
-    result = xbrl_formula_proposals.generate_final_recommendation(
-        ticker="TEST",
-        cik="0000000000",
-        target_metric_name="debt_current",
-        statement_type="balance_sheet",
-        period_context="2025",
-        decision_context={
-            "target_metric_name": "debt_current",
-            "statement_type": "balance_sheet",
-            "period_context": "2025",
-            "options": (
-                {
-                    "option_id": "formula_1",
-                    "option_type": FINAL_OPTION_FORMULA,
-                    "value": "debt_current = LongTermDebtCurrent",
-                    "evidence": "validated formula option",
-                },
-            ),
-        },
-        provider=provider,
-    )
-
-    assert "temperature" not in captured_payload
-    assert result.provider_status == FINAL_RECOMMENDATION_STATUS_SELECTED
-    assert result.final_recommendation == "debt_current = LongTermDebtCurrent"
-
-
-def test_final_recommendation_response_coerces_selected_formula() -> None:
-    response = coerce_final_recommendation_response(
-        {
-            "selected_option_type": "formula",
-            "selected_option_id": "formula_1",
-            "final_recommendation": "debt_current = LongTermDebtCurrent",
-            "confidence": 0.9,
-            "reason": "Formula evidence is strongest for this period.",
-            "uncertainty": "Review before persistence.",
-        }
-    )
-
-    assert isinstance(response, FinalRecommendationResponse)
-    assert response.selected_option_type == FINAL_OPTION_FORMULA
-    assert response.selected_option_id == "formula_1"
-    assert response.final_recommendation == "debt_current = LongTermDebtCurrent"
 
 
 def test_formula_proposal_validator_allows_found_target_fact_components() -> None:
@@ -370,62 +283,6 @@ def test_formula_proposal_cache_round_trips_structured_success(tmp_path: Path) -
     assert loaded is not None
     assert loaded.provider_status == "proposed"
     assert loaded.components[0].concept == "ShortTermBorrowings"
-
-
-def test_final_recommendation_cache_round_trips_structured_success(tmp_path: Path) -> None:
-    options = (
-        {
-            "option_id": "formula_1",
-            "option_type": FINAL_OPTION_FORMULA,
-            "value": "debt_current = LongTermDebtCurrent",
-            "evidence": "providers agreed",
-        },
-    )
-    final_hash, payload = final_recommendation_context_fingerprint(
-        target_metric_name="debt_current",
-        statement_type="balance_sheet",
-        period_context="2025",
-        options=options,
-        provider_name="openai",
-        model_name="gpt-5.5",
-    )
-    result = FinalRecommendationProviderResult(
-        provider_name="openai",
-        model_name="gpt-5.5",
-        target_metric_name="debt_current",
-        statement_type="balance_sheet",
-        period_context="2025",
-        provider_status=FINAL_RECOMMENDATION_STATUS_SELECTED,
-        selected_option_type=FINAL_OPTION_FORMULA,
-        selected_option_id="formula_1",
-        final_recommendation="debt_current = LongTermDebtCurrent",
-        confidence=0.9,
-        reason="test final recommendation",
-        uncertainty="test",
-    )
-
-    write_warning = save_final_recommendation_cache(
-        cache_dir=tmp_path,
-        final_context_hash=final_hash,
-        fingerprint_payload=payload,
-        result=result,
-    )
-    loaded, read_warning = load_final_recommendation_cache(
-        cache_dir=tmp_path,
-        final_context_hash=final_hash,
-        target_metric_name="debt_current",
-        statement_type="balance_sheet",
-        period_context="2025",
-        provider_name="openai",
-        model_name="gpt-5.5",
-    )
-
-    assert write_warning == ""
-    assert read_warning == ""
-    assert loaded is not None
-    assert loaded.provider_status == FINAL_RECOMMENDATION_STATUS_SELECTED
-    assert loaded.selected_option_id == "formula_1"
-    assert loaded.final_recommendation == "debt_current = LongTermDebtCurrent"
 
 
 def _target(concept: str, metric_name: str) -> FormulaProposalTarget:

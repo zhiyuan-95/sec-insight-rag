@@ -9,7 +9,6 @@ from src.processing.metric_coverage import (
     METRIC_COVERAGE_NEEDS_LLM_RESOLUTION,
     METRIC_COVERAGE_NO_EVIDENCE,
     RESOLUTION_OPTION_FORMULA,
-    RESOLUTION_OPTION_SEMANTIC,
     RESOLUTION_OPTION_ZERO,
     metric_coverage_report_rows,
     resolve_metric_coverage,
@@ -27,8 +26,12 @@ def test_resolve_metric_coverage_prefers_existing_mapping() -> None:
                 alternate_mapped_concepts="us-gaap:Revenue",
             ),
         ],
-        semantic_candidate_rows=[
-            _semantic_candidate("revenue", "custom:CustomerRevenue")
+        formula_diagnostic_rows=[
+            _formula_row(
+                "revenue",
+                provider_status="proposed",
+                validation_status="validated_component_pool",
+            )
         ],
     )
 
@@ -62,9 +65,6 @@ def test_resolve_metric_coverage_exposes_llm_choice_options() -> None:
         target_coverage_rows=[
             _target("debt_current", "us-gaap:DebtCurrent", STATUS_MISSING_TARGET)
         ],
-        semantic_candidate_rows=[
-            _semantic_candidate("debt_current", "custom:CurrentDebtEquivalent")
-        ],
         formula_diagnostic_rows=[
             _formula_row(
                 "debt_current",
@@ -82,13 +82,11 @@ def test_resolve_metric_coverage_exposes_llm_choice_options() -> None:
     resolution = resolutions[0]
     assert resolution.coverage_status == METRIC_COVERAGE_NEEDS_LLM_RESOLUTION
     assert resolution.llm_choice_options == (
-        RESOLUTION_OPTION_SEMANTIC,
         RESOLUTION_OPTION_FORMULA,
         RESOLUTION_OPTION_ZERO,
     )
     rows = metric_coverage_report_rows(resolutions)
     assert rows[0]["reviewer_action"] == "llm_choose_mapping_formula_or_zero"
-    assert rows[0]["semantic_candidates"] == "custom:CurrentDebtEquivalent"
     assert rows[0]["formula_evidence"] == "proposed=1; validated=1; no_formula=0"
     assert rows[0]["zero_evidence"] == "proposed=1; validated=1"
 
@@ -127,19 +125,6 @@ def _target(
         "target_raw_concept": concept,
         "status": status,
         "alternate_mapped_concepts": alternate_mapped_concepts,
-    }
-
-
-def _semantic_candidate(
-    metric_name: str,
-    observed_xbrl_concept: str,
-    *,
-    statement_type: str = "balance_sheet",
-) -> dict[str, object]:
-    return {
-        "metric_name": metric_name,
-        "statement_type": statement_type,
-        "observed_xbrl_concept": observed_xbrl_concept,
     }
 
 

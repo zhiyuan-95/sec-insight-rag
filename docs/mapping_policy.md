@@ -47,6 +47,7 @@ Raw fact ingestion should remain broad. Metric mapping should remain selective.
   mappings after ingestion/review, and reused on later ingestions until labels
   or evidence indicate it is stale.
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 - semantic mapping candidate: a possible mapping suggested by vector
   similarity. It requires review and must not populate `financial_metrics`
@@ -56,6 +57,11 @@ Raw fact ingestion should remain broad. Metric mapping should remain selective.
   diagnostics so the next reviewer or LLM choice is about one internal metric,
   not each raw target tag.
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
+=======
+- metric coverage resolution: a metric-level review packet that combines target
+  tag coverage, approved alternates, and formula/zero diagnostics so the next
+  reviewer or LLM choice is about one internal metric, not each raw target tag.
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 - missing target XBRL concept: a target or candidate XBRL concept expected for
   the company's approved industry labels but not found after deterministic
   mapping.
@@ -73,16 +79,17 @@ Raw fact ingestion should remain broad. Metric mapping should remain selective.
 =======
 - Round 1 hard mapping: direct deterministic matching from known candidate XBRL
   concept names to observed XBRL concepts.
-- Round 2 semantic mapping: vector comparison between missing target XBRL
-  concept vectors and unknown company XBRL concept vectors.
 - canonical mapping flow: candidate XBRL concept -> observed XBRL concept ->
   raw XBRL fact -> approved mapping -> system financial metric.
-- semantic review flow: unknown XBRL concept -> semantic mapping candidate ->
-  reviewed approved mapping.
 - metric resolution review flow: missing internal metric -> one evidence packet
+<<<<<<< HEAD
   -> reviewer/LLM chooses semantic candidate, formula from raw concepts, zero
   target, or no evidence -> approved decision before any persisted metric use.
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
+=======
+  -> reviewer/LLM recommends formula from raw concepts, zero target, or no
+  evidence -> approved decision before any persisted metric use.
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 
 ## Broad Raw Ingestion
 
@@ -207,6 +214,7 @@ Do not create new internal metrics only to reduce the unknown concept count.
 Only add a mapping when the raw concept has a reviewed business meaning in the
 system.
 
+<<<<<<< HEAD
 ## Direct And Learned Mapping
 
 Mapping runs through deterministic inputs only:
@@ -229,6 +237,18 @@ When a human later approves a learned mapping, that mapping may use global,
 industry, or company scope. Future ingestion runs load it as deterministic
 mapping state and may populate `financial_metrics` when the same observed XBRL
 concept appears again.
+=======
+## Hard Mapping And Missing Target Review
+
+Mapping runs through deterministic hard mapping only:
+
+1. source-controlled mappings from `src/processing/mapping_catalog.py`
+2. previously approved learned mappings from `xbrl_concept_mappings`
+
+Only those approved mappings can create `financial_metrics` rows. Missing target
+metrics do not trigger candidate mapping generation. They remain unavailable as
+base metrics until a source-controlled or approved learned mapping covers them.
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 
 Unresolved coverage should be reviewed at the internal-metric level. The metric
 coverage resolver groups all target tags for one metric and presents one review
@@ -236,10 +256,9 @@ surface with:
 
 1. existing mapped target evidence
 2. approved alternate concept coverage
-3. semantic candidates from Round 2
-4. formula-from-raw-concepts diagnostics
-5. zero-target diagnostics with affirmative same-period evidence
-6. no-evidence cases
+3. formula-from-raw-concepts diagnostics
+4. zero-target diagnostics with affirmative same-period evidence
+5. no-evidence cases
 
 The LLM or reviewer may recommend one unresolved path, but only a reviewed
 mapping can populate `financial_metrics`. Formula and zero-target choices are
@@ -252,7 +271,11 @@ period coverage instead of triggering another provider request for each period.
 The governing rule is:
 
 ```text
+<<<<<<< HEAD
 catalog and approved mappings populate metrics; diagnostics only inform review
+=======
+hard mappings populate metrics; formula/zero recommendations remain report evidence
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 ```
 
 ## Approved Company Concept Profile
@@ -272,15 +295,20 @@ The profile is mapping state, not an ingestion filter. Raw ingestion remains
 broad on every run. The profile only controls which observed raw facts are
 allowed to populate `financial_metrics`.
 
+<<<<<<< HEAD
 Normal refreshes should load the approved company concept profile first and
 reuse it whenever the same observed concepts appear in new raw facts. Review
 the profile when evidence says it may be incomplete or stale, for example:
+=======
+Normal refreshes should load the approved company concept profile first. The
+report should surface missing targets for formula/zero review when evidence says
+the profile may be incomplete or stale, for example:
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 
 - the approved hard industry labels changed
 - a newer 10-K causes label reclassification
 - an approved concept disappears from new active periods
 - a required indicator input becomes missing
-- a new issuer-extension concept appears for a missing target metric
 - a reviewer rejects or invalidates an existing mapping
 
 This keeps later ingestion fast while preserving mapping quality and traceability.
@@ -299,12 +327,22 @@ segment_only
 not_applicable
 ```
 
+<<<<<<< HEAD
 Unknown SEC/XBRL concepts are not failures by default. They are raw evidence and
 review inputs.
 
 Learned mapping workflow statuses are separate. Automated ingestion only uses
 `approved`; `candidate` and `rejected` are for explicit review history when
 present:
+=======
+Unknown SEC/XBRL concepts are not failures by default. They are raw evidence for
+later mapping review.
+
+Only approved learned mappings participate in the current hard-mapping flow.
+Older local databases may still contain historical review rows with these
+statuses, but the current missing-target process does not generate new
+candidate rows:
+>>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 
 ```text
 candidate
@@ -344,8 +382,6 @@ The MS2.5 report should show:
 - a compact summary of the run and review-only boundary
 - every target metric marked as mapped or missing, with common-base versus
   industry-special classification
-- semantic mapping candidates only for missing target metrics, split into 10-K
-  and 10-Q active-window sections with period coverage
 - proposed formula or zero rows only for missing target metrics, split into 10-K
   and 10-Q active-window sections with period context
 - displayed concept values without taxonomy prefixes such as `us-gaap:` or
@@ -355,5 +391,5 @@ The MS2.5 report should show:
 Detailed raw-fact coverage, company labels, Inline XBRL coverage, approved
 learned mappings, provider-level formula diagnostics, cache details, and
 unknown concepts remain available in SQLite and CSV exports. The Markdown
-report presents evidence for the later semantic/formula/zero choice. It does
-not decide pass/fail or approve mappings.
+report presents formula/zero evidence for later review. It does not decide
+pass/fail or approve mappings.
