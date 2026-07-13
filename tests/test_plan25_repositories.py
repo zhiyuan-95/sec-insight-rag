@@ -1,18 +1,102 @@
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+
+import pytest
 
 from src.processing import NormalizedFact
 from src.storage import (
     CompanyRecord,
     CompanyRepository,
+    ConceptMappingRecord,
+    ConceptMappingRepository,
     FilingRecord,
     FilingRepository,
     FinancialMetric,
     FinancialMetricRepository,
+    MAPPING_SCOPE_COMPANY,
+    MAPPING_STATUS_APPROVED,
     RawFactRepository,
     connect_sqlite,
 )
+
+
+def _approved_mapping() -> ConceptMappingRecord:
+    return ConceptMappingRecord(
+        taxonomy="custom",
+        concept="CustomerRevenueGross",
+        metric_name="revenue",
+        statement_type="income_statement",
+        scope_type=MAPPING_SCOPE_COMPANY,
+        scope_value="0000320193",
+        status=MAPPING_STATUS_APPROVED,
+        confidence=0.9,
+        match_method="manual_review",
+        evidence={"reason": "initial evidence"},
+        reviewed_by="first-reviewer",
+        reviewed_at="2026-07-12T00:00:00+00:00",
+    )
+
+
+def test_concept_mapping_repository_updates_approved_mapping_metadata(
+    tmp_path: Path,
+) -> None:
+    with connect_sqlite(tmp_path / "stock.db") as connection:
+        repository = ConceptMappingRepository(connection)
+        repository.initialize()
+        mapping = _approved_mapping()
+
+        assert repository.upsert_mappings((mapping,)) == 1
+        first = repository.list_for_company(
+            "0000320193",
+            (),
+            status=MAPPING_STATUS_APPROVED,
+        )[0]
+
+        assert repository.upsert_mappings(
+            (
+                replace(
+                    mapping,
+                    confidence=0.95,
+                    evidence={"reason": "updated evidence"},
+                    reviewed_by="second-reviewer",
+                    reviewed_at="2026-07-13T00:00:00+00:00",
+                ),
+            )
+        ) == 1
+        updated = repository.list_for_company(
+            "0000320193",
+            (),
+            status=MAPPING_STATUS_APPROVED,
+        )[0]
+
+    assert updated.mapping_id == first.mapping_id
+    assert updated.confidence == 0.95
+    assert updated.evidence == {"reason": "updated evidence"}
+    assert updated.reviewed_by == "second-reviewer"
+    assert updated.reviewed_at == "2026-07-13T00:00:00+00:00"
+
+
+@pytest.mark.parametrize(
+    ("mapping", "error_match"),
+    [
+        (replace(_approved_mapping(), status="candidate"), "Unknown mapping status"),
+        (replace(_approved_mapping(), reviewed_by=None), "require reviewed_by"),
+        (replace(_approved_mapping(), scope_value=""), "require scope_value"),
+    ],
+)
+def test_concept_mapping_repository_rejects_non_approved_or_unreviewed_rows(
+    tmp_path: Path,
+    mapping: ConceptMappingRecord,
+    error_match: str,
+) -> None:
+    with connect_sqlite(tmp_path / "stock.db") as connection:
+        repository = ConceptMappingRepository(connection)
+        repository.initialize()
+
+        with pytest.raises(ValueError, match=error_match):
+            repository.upsert_mappings((mapping,))
 
 
 def test_company_repository_upserts_company_and_refresh_state(tmp_path: Path) -> None:

@@ -51,11 +51,22 @@ def _assert_formula_progress_output(output: str) -> None:
     assert "[formula proposals]" in output
     assert "missing target(s) found" in output
     assert "Missing targets selected:" in output
-    assert "Handling missing target 1/1:" in output
-    assert "Context 1/" in output
+    assert "Handling missing target" not in output
+    assert "Prepared context" not in output
+    assert "target-context assignment(s) across" in output
+    assert "Batch context 1/" in output
     assert "Formula proposal generation complete:" in output
+    _assert_report_generation_output(output)
     assert "reused cached recommendation" not in output
     assert "reused identical context from this run" not in output
+
+
+def _assert_report_generation_output(output: str, report_path: Path | None = None) -> None:
+    assert "Report generation complete:" in output
+    assert " second(s); saved report: " in output
+    if report_path is not None:
+        assert str(report_path) in output
+    assert "# Plan 2.5 Target Mapping Report" not in output
 
 
 def test_milestone25_formula_rows_collapse_same_recommended_components() -> None:
@@ -160,7 +171,8 @@ def test_milestone25_formula_rows_collapse_same_recommended_components() -> None
             "Metric": "debt_current",
             "Statement": "balance_sheet",
             "Period context": "2024-2025",
-            "Providers": "gemini (gemini-2.5-flash); openai (gpt-4.1-mini)",
+            "Providers": "gemini-2.5-flash; gpt-4.1-mini",
+            "LLM result count": 4,
             "Formula": "debt_current = LongTermDebtCurrent",
             "Validation status": "validated_component_pool",
             "Confidence": "0.80; 0.90",
@@ -175,7 +187,8 @@ def test_milestone25_formula_rows_collapse_same_recommended_components() -> None
                 "2021 q1 - 2021 q3, 2022 q1 - 2022 q3, 2023 q1 - 2023 q3, "
                 "2024 q1 - 2024 q3, 2025 q1 - 2025 q3"
             ),
-            "Providers": "gemini (gemini-2.5-flash)",
+            "Providers": "gemini-2.5-flash",
+            "LLM result count": 1,
             "Formula": "debt_current = LongTermDebtCurrent",
             "Validation status": "validated_component_pool",
             "Confidence": "0.80",
@@ -324,19 +337,183 @@ def test_milestone25_formula_rows_do_not_overlap_when_provider_periods_disagree(
     assert [row["Period context"] for row in formula_rows] == [
         "2024-2025",
         "2025",
-        "2024",
-        "2022-2023",
+        "2022-2024",
     ]
     assert "2021-2024" not in [row["Period context"] for row in formula_rows]
-    assert formula_rows[0]["Providers"] == "gemini (gemini-2.5-flash)"
+    assert formula_rows[0]["Providers"] == "gemini-2.5-flash"
+    assert formula_rows[0]["LLM result count"] == 2
     assert formula_rows[0]["Formula"] == "debt_current = LongTermDebtCurrent + CommercialPaper"
-    assert formula_rows[1]["Providers"] == "openai (gpt-4.1-mini)"
+    assert formula_rows[1]["Providers"] == "gpt-4.1-mini"
+    assert formula_rows[1]["LLM result count"] == 1
     assert formula_rows[1]["Formula"] == "debt_current = LongTermDebtCurrent + OtherLiabilitiesCurrent"
-    assert formula_rows[2]["Providers"] == "openai (gpt-4.1-mini)"
+    assert formula_rows[2]["Providers"] == "gpt-4.1-mini; gemini-2.5-flash"
+    assert formula_rows[2]["LLM result count"] == 5
     assert formula_rows[2]["Formula"] == "debt_current = LongTermDebtCurrent"
-    assert formula_rows[3]["Formula"] == "debt_current = LongTermDebtCurrent"
-    assert formula_rows[3]["Providers"] == "gemini (gemini-2.5-flash); openai (gpt-4.1-mini)"
     assert all("Components" not in row for row in formula_rows)
+
+
+def test_milestone25_formula_rows_group_same_zero_formula_with_different_evidence() -> None:
+    experiment = _load_experiment_module()
+    snapshot = {
+        "metric_coverage_resolution": [
+            {
+                "internal_metric_name": "capital_expenditure",
+                "statement_type": "cash_flow_statement",
+                "coverage_status": "needs_llm_resolution",
+            }
+        ],
+        "formula_proposal_diagnostics": [
+            {
+                "target_metric_name": "capital_expenditure",
+                "target_primary_statement": "cash_flow_statement",
+                "period_context": "10-K periods: 2025 FY / duration / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "gemini",
+                "model_name": "gemini-2.5-flash",
+                "provider_status": "target_zero",
+                "formula_expression": "capital_expenditure = 0",
+                "components": "",
+                "validation_status": "validation_failed",
+                "confidence": "0.90",
+                "reason": "no capital expenditure facts",
+                "context_id": "annual-2025",
+                "formula_context_hash": "gemini-hash",
+            },
+            {
+                "target_metric_name": "capital_expenditure",
+                "target_primary_statement": "cash_flow_statement",
+                "period_context": "10-K periods: 2024 FY / duration / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "openai",
+                "model_name": "gpt-4.1-mini",
+                "provider_status": "target_zero",
+                "formula_expression": "target = 0",
+                "components": "+ us-gaap:PaymentsToAcquireProductiveAssets",
+                "validation_status": "validation_failed",
+                "confidence": "0.80",
+                "reason": "absence of PP&E acquisition payments",
+                "context_id": "annual-2024",
+                "formula_context_hash": "openai-hash",
+            },
+        ],
+    }
+
+    formula_rows = experiment._proposed_formula_rows_for_missing_targets(
+        snapshot,
+        form_type="10-K",
+    )
+
+    assert formula_rows == [
+        {
+            "Metric": "capital_expenditure",
+            "Statement": "cash_flow_statement",
+            "Period context": "2024-2025",
+            "Providers": "gemini-2.5-flash; gpt-4.1-mini",
+            "LLM result count": 2,
+            "Formula": "capital_expenditure = 0",
+            "Validation status": "validation_failed",
+            "Confidence": "0.90; 0.80",
+            "Reason": "no capital expenditure facts; absence of PP&E acquisition payments",
+        }
+    ]
+
+
+def test_milestone25_provider_outcome_gap_rows_show_non_recommendations() -> None:
+    experiment = _load_experiment_module()
+    snapshot = {
+        "metric_coverage_resolution": [
+            {
+                "internal_metric_name": "debt_current",
+                "statement_type": "balance_sheet",
+                "coverage_status": "needs_llm_resolution",
+            }
+        ],
+        "formula_proposal_diagnostics": [
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "period_context": "10-K periods: 2025 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "gemini",
+                "model_name": "gemini-2.5-flash",
+                "provider_status": "proposed",
+                "formula_expression": "DebtCurrent = + us-gaap:LongTermDebtCurrent",
+                "components": "+ us-gaap:LongTermDebtCurrent",
+                "validation_status": "validation_failed",
+                "confidence": "0.80",
+                "reason": "same component evidence",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "period_context": "10-K periods: 2025 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "openai",
+                "model_name": "gpt-4.1-mini",
+                "provider_status": "no_formula",
+                "formula_expression": "",
+                "components": "",
+                "validation_status": "not_applicable",
+                "validation_skip_reason": "no_formula",
+                "confidence": "0.20",
+                "reason": "insufficient same-period debt facts",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "period_context": "10-K periods: 2024 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "gemini",
+                "model_name": "gemini-2.5-flash",
+                "provider_status": "provider_failed",
+                "formula_expression": "",
+                "components": "",
+                "validation_status": "not_applicable",
+                "validation_skip_reason": "provider_failed",
+                "confidence": "0.00",
+                "error": "test provider failure",
+            },
+            {
+                "target_metric_name": "debt_current",
+                "target_primary_statement": "balance_sheet",
+                "period_context": "10-K periods: 2024 FY / instant / USD / 10-K",
+                "forms": "10-K",
+                "provider_name": "openai",
+                "model_name": "gpt-4.1-mini",
+                "provider_status": "no_formula",
+                "formula_expression": "",
+                "components": "",
+                "validation_status": "not_applicable",
+                "validation_skip_reason": "no_formula",
+                "confidence": "0.10",
+                "reason": "no support",
+            },
+        ],
+    }
+
+    rows = experiment._formula_provider_outcome_gap_rows_for_missing_targets(
+        snapshot,
+        form_type="10-K",
+    )
+
+    assert rows == [
+        {
+            "Metric": "debt_current",
+            "Statement": "balance_sheet",
+            "Period context": "2025",
+            "Recommendation coverage": "partial_model_recommendation",
+            "Model outcomes": "gemini-2.5-flash=proposed/validation_failed; gpt-4.1-mini=no_formula/not_applicable",
+            "Non-recommendation detail": "gpt-4.1-mini: no_formula - insufficient same-period debt facts",
+        },
+        {
+            "Metric": "debt_current",
+            "Statement": "balance_sheet",
+            "Period context": "2024",
+            "Recommendation coverage": "no_formula_recommendation",
+            "Model outcomes": "gemini-2.5-flash=provider_failed/not_applicable; gpt-4.1-mini=no_formula/not_applicable",
+            "Non-recommendation detail": "gemini-2.5-flash: provider_failed - test provider failure; gpt-4.1-mini: no_formula - no support",
+        },
+    ]
 
 
 def test_milestone25_xbrl_concepts_provided_counts_by_period() -> None:
@@ -429,7 +606,7 @@ def test_milestone25_experiment_presents_first_time_ingestion(
 
     assert exit_code == 0
     assert calls == ["TEST", "TEST"]
-    assert output == ""
+    _assert_report_generation_output(output, tmp_path / "experiment_report.md")
     assert "# Plan 2.5 Target Mapping Report" in report
 <<<<<<< HEAD
     assert "## 1. Target Metrics Mapping Status" in report
@@ -495,7 +672,7 @@ def test_milestone25_experiment_reports_missing_sec_user_agent(
     report = (tmp_path / "experiment_report.md").read_text(encoding="utf-8")
 
     assert exit_code == 1
-    assert output == ""
+    _assert_report_generation_output(output, tmp_path / "experiment_report.md")
     assert "Execution Warning" in report
     assert "SEC_USER_AGENT is required for live SEC experiment runs" in report
 
@@ -573,7 +750,7 @@ def test_milestone25_uses_ticker_specific_default_report_path(
     report = report_path.read_text(encoding="utf-8")
 
     assert exit_code == 1
-    assert output == ""
+    _assert_report_generation_output(output, report_path)
     assert report_path.exists()
     assert "SEC_USER_AGENT is required for live SEC experiment runs" in report
 
@@ -610,7 +787,7 @@ def test_milestone25_write_report_flag_preserves_markdown_artifact(
     report = (tmp_path / "experiment_report.md").read_text(encoding="utf-8")
 
     assert exit_code == 0
-    assert output == ""
+    _assert_report_generation_output(output, tmp_path / "experiment_report.md")
     assert "saved Plan 2.5 target mapping report" in report
 <<<<<<< HEAD
     assert "Target Metrics Mapping Status" in report
@@ -669,7 +846,7 @@ def test_milestone25_saves_warning_when_csv_export_is_locked(
     report = (tmp_path / "experiment_report.md").read_text(encoding="utf-8")
 
     assert exit_code == 0
-    assert output == ""
+    _assert_report_generation_output(output, tmp_path / "experiment_report.md")
     assert "# Plan 2.5 Target Mapping Report" in report
     assert "CSV export skipped for financial_metrics" in report
 <<<<<<< HEAD
@@ -714,7 +891,7 @@ def test_milestone25_full_report_flag_prints_detailed_markdown(
     report = (tmp_path / "experiment_report.md").read_text(encoding="utf-8")
 
     assert exit_code == 0
-    assert output == ""
+    _assert_report_generation_output(output, tmp_path / "experiment_report.md")
     assert "# Plan 2.5 Target Mapping Report" in report
 <<<<<<< HEAD
     assert "--full-report kept for CLI compatibility" in report
@@ -1143,11 +1320,15 @@ def test_milestone25_report_shows_report_only_debt_recovery_diagnostics(
     report = (tmp_path / "experiment_report.md").read_text(encoding="utf-8")
 
     assert exit_code == 0
+<<<<<<< HEAD
     assert output == ""
 <<<<<<< HEAD
     assert "Debt Recovery Formula Catalog:" not in report
     assert "Debt Recovery Diagnostics Summary:" not in report
 =======
+=======
+    _assert_report_generation_output(output, tmp_path / "experiment_report.md")
+>>>>>>> 007dd04 (Refine evidence report generation and normalization)
     assert "Debt Recovery Formula Catalog" not in report
     assert "Report-Only Debt Recovery Diagnostics" not in report
     assert "Debt Recovery Diagnostic Rows" not in report
@@ -1494,6 +1675,7 @@ def test_milestone25_formula_proposals_reuse_failed_provider_result_within_run(
     _assert_formula_progress_output(output)
     assert len(provider_calls) == 1
 <<<<<<< HEAD
+<<<<<<< HEAD
     assert "Formula diagnostics run" in report
     assert "Formula proposals returned" in report
     assert "provider_failed" not in report
@@ -1501,10 +1683,243 @@ def test_milestone25_formula_proposals_reuse_failed_provider_result_within_run(
 =======
     assert "provider_failed" not in report
     assert "test provider failure" not in report
+=======
+    assert "Provider Outcomes Without Formula Recommendation" in report
+    assert "provider_failed" in report
+    assert "test provider failure" in report
+>>>>>>> 007dd04 (Refine evidence report generation and normalization)
     assert "No rows to display." in _report_section(
         report,
         "## 3. Proposed Formulas For Formula Recommendations",
     )
+
+
+def test_milestone25_formula_proposals_batch_targets_by_statement_group(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    experiment = _load_experiment_module()
+    db_path = tmp_path / "experiment.db"
+    target_rows = _formula_batch_target_rows(experiment)
+    progress: list[str] = []
+    with connect_sqlite(db_path) as connection:
+        company_id = _seed_formula_batch_company(connection)
+
+        def fake_provider_configs(settings):
+            return (SimpleNamespace(provider_name="fake_provider", model_name="fake_model", api_key="test"),)
+
+        batch_calls: list[tuple[tuple[str, ...], str]] = []
+        single_calls: list[str] = []
+
+        def fake_generate_formula_proposal_batch(
+            *,
+            ticker: str,
+            cik: str,
+            targets,
+            fact_pool,
+            formula_context,
+            provider,
+        ) -> tuple[FormulaProposalProviderResult, ...]:
+            batch_calls.append(
+                (
+                    tuple(target.target_metric_name for target in targets),
+                    str(formula_context["target_primary_statement"]),
+                )
+            )
+            assert len({target.statement_type for target in targets}) == 1
+            return tuple(
+                _formula_provider_result(
+                    provider=provider,
+                    target=target,
+                    component_concept="CashAndCashEquivalentsAtCarryingValue",
+                )
+                for target in targets
+            )
+
+        def fake_generate_formula_proposal(
+            *,
+            ticker: str,
+            cik: str,
+            target,
+            fact_pool,
+            formula_context,
+            provider,
+        ) -> FormulaProposalProviderResult:
+            single_calls.append(target.target_metric_name)
+            return _formula_provider_result(
+                provider=provider,
+                target=target,
+                component_concept="Revenues",
+            )
+
+        monkeypatch.setattr(experiment, "_formula_proposal_provider_configs", fake_provider_configs)
+        monkeypatch.setattr(experiment, "generate_formula_proposal_batch", fake_generate_formula_proposal_batch)
+        monkeypatch.setattr(experiment, "generate_formula_proposal", fake_generate_formula_proposal)
+
+        snapshot = experiment._formula_proposal_snapshot(
+            connection,
+            ticker="TEST",
+            cik="0000000001",
+            company_id=company_id,
+            target_raw_fact_coverage=target_rows,
+            enabled=True,
+            settings=SimpleNamespace(knowledge_storage_dir=tmp_path / "knowledge"),
+            target_limit=None,
+            progress=progress.append,
+        )
+
+    assert batch_calls == [(("current_assets", "current_liabilities"), "balance_sheet")]
+    assert single_calls == ["gross_profit"]
+    assert "statement-scoped batch context(s)" in "\n".join(progress)
+    assert {
+        row["target_metric_name"]
+        for row in snapshot["diagnostics"]
+        if row.get("provider_name")
+    } == {"current_assets", "current_liabilities", "gross_profit"}
+
+
+def test_milestone25_formula_proposals_fallback_to_single_when_batch_unusable(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    experiment = _load_experiment_module()
+    db_path = tmp_path / "experiment.db"
+    target_rows = _formula_batch_target_rows(experiment)[:2]
+    progress: list[str] = []
+    with connect_sqlite(db_path) as connection:
+        company_id = _seed_formula_batch_company(connection)
+
+        def fake_provider_configs(settings):
+            return (SimpleNamespace(provider_name="fake_provider", model_name="fake_model", api_key="test"),)
+
+        single_calls: list[str] = []
+
+        def fake_generate_formula_proposal_batch(**kwargs):
+            raise ValueError("missing target in batch response")
+
+        def fake_generate_formula_proposal(
+            *,
+            ticker: str,
+            cik: str,
+            target,
+            fact_pool,
+            formula_context,
+            provider,
+        ) -> FormulaProposalProviderResult:
+            single_calls.append(target.target_metric_name)
+            return _formula_provider_result(
+                provider=provider,
+                target=target,
+                component_concept="CashAndCashEquivalentsAtCarryingValue",
+            )
+
+        monkeypatch.setattr(experiment, "_formula_proposal_provider_configs", fake_provider_configs)
+        monkeypatch.setattr(experiment, "generate_formula_proposal_batch", fake_generate_formula_proposal_batch)
+        monkeypatch.setattr(experiment, "generate_formula_proposal", fake_generate_formula_proposal)
+
+        snapshot = experiment._formula_proposal_snapshot(
+            connection,
+            ticker="TEST",
+            cik="0000000001",
+            company_id=company_id,
+            target_raw_fact_coverage=target_rows,
+            enabled=True,
+            settings=SimpleNamespace(knowledge_storage_dir=tmp_path / "knowledge"),
+            target_limit=None,
+            progress=progress.append,
+        )
+
+    assert single_calls == ["current_assets", "current_liabilities"]
+    assert "falling back to single-target calls" in "\n".join(progress)
+    assert len([row for row in snapshot["diagnostics"] if row.get("provider_name")]) == 2
+
+
+def test_milestone25_formula_proposals_exclude_cached_targets_from_batch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    experiment = _load_experiment_module()
+    db_path = tmp_path / "experiment.db"
+    target_rows = _formula_batch_target_rows(experiment)[:2]
+    settings = SimpleNamespace(knowledge_storage_dir=tmp_path / "knowledge")
+    with connect_sqlite(db_path) as connection:
+        company_id = _seed_formula_batch_company(connection)
+        fact_pool = experiment._formula_proposal_fact_pool(
+            connection,
+            company_id=company_id,
+            cik="0000000001",
+            target_raw_fact_coverage=target_rows,
+        )
+        cached_target = experiment._formula_proposal_targets(target_rows, target_limit=None)[0]
+        cached_context = experiment.build_formula_proposal_contexts(target=cached_target, fact_pool=fact_pool)[0]
+        formula_hash, fingerprint_payload = experiment.formula_context_fingerprint(
+            target=cached_target,
+            context=cached_context,
+            provider_name="fake_provider",
+            model_name="fake_model",
+        )
+        experiment.save_formula_proposal_cache(
+            cache_dir=experiment._formula_proposal_cache_dir(settings),
+            formula_context_hash=formula_hash,
+            fingerprint_payload=fingerprint_payload,
+            result=_formula_provider_result(
+                provider=SimpleNamespace(provider_name="fake_provider", model_name="fake_model"),
+                target=cached_target,
+                component_concept="CashAndCashEquivalentsAtCarryingValue",
+            ),
+        )
+
+        def fake_provider_configs(settings):
+            return (SimpleNamespace(provider_name="fake_provider", model_name="fake_model", api_key="test"),)
+
+        batch_calls: list[tuple[str, ...]] = []
+        single_calls: list[str] = []
+
+        def fake_generate_formula_proposal_batch(*, targets, **kwargs):
+            batch_calls.append(tuple(target.target_metric_name for target in targets))
+            return ()
+
+        def fake_generate_formula_proposal(
+            *,
+            ticker: str,
+            cik: str,
+            target,
+            fact_pool,
+            formula_context,
+            provider,
+        ) -> FormulaProposalProviderResult:
+            single_calls.append(target.target_metric_name)
+            return _formula_provider_result(
+                provider=provider,
+                target=target,
+                component_concept="CashAndCashEquivalentsAtCarryingValue",
+            )
+
+        monkeypatch.setattr(experiment, "_formula_proposal_provider_configs", fake_provider_configs)
+        monkeypatch.setattr(experiment, "generate_formula_proposal_batch", fake_generate_formula_proposal_batch)
+        monkeypatch.setattr(experiment, "generate_formula_proposal", fake_generate_formula_proposal)
+
+        snapshot = experiment._formula_proposal_snapshot(
+            connection,
+            ticker="TEST",
+            cik="0000000001",
+            company_id=company_id,
+            target_raw_fact_coverage=target_rows,
+            enabled=True,
+            settings=settings,
+            target_limit=None,
+            progress=None,
+        )
+
+    assert batch_calls == []
+    assert single_calls == ["current_liabilities"]
+    rows_by_metric = {
+        row["target_metric_name"]: row
+        for row in snapshot["diagnostics"]
+        if row.get("provider_name")
+    }
+    assert rows_by_metric["current_assets"]["cache_status"] == "reused_exact_context"
+    assert rows_by_metric["current_liabilities"]["cache_status"] == "generated_new"
 
 
 def test_milestone25_formula_proposal_fact_pool_uses_active_filing_periods_only(
@@ -1617,7 +2032,7 @@ def test_milestone25_report_presents_new_filings_when_sec_update_ingests_them(
 
     assert exit_code == 0
     assert calls == ["TEST", "TEST"]
-    assert output == ""
+    _assert_report_generation_output(output, tmp_path / "experiment_report.md")
     assert "Company in system" in report
     assert "Update check needed this session" in report
     assert "SEC update check performed" in report
@@ -1630,6 +2045,136 @@ def test_milestone25_report_presents_new_filings_when_sec_update_ingests_them(
 =======
     assert "10-Q accession test-10q-new" in report
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
+
+
+def _seed_formula_batch_company(connection) -> int:
+    initialize_database(connection)
+    raw_repository = RawFactRepository(connection)
+    company_repository = CompanyRepository(connection)
+    filing_repository = FilingRepository(connection)
+    raw_repository.initialize()
+    company = company_repository.upsert_company(
+        CompanyRecord(
+            cik="0000000001",
+            name="Test Company",
+            ticker="TEST",
+        )
+    )
+    assert company.company_id is not None
+    filing_repository.upsert_filings(
+        company.company_id,
+        [
+            FilingRecord(
+                company_id=company.company_id,
+                accession_number="batch-10k",
+                form_type="10-K",
+                filing_date=date(2025, 2, 15),
+                fiscal_year=2025,
+                fiscal_period="FY",
+                is_active_window=True,
+            ),
+        ],
+    )
+    raw_repository.upsert_facts(
+        [
+            _fact(
+                form="10-K",
+                accession_number="batch-10k",
+                concept="CashAndCashEquivalentsAtCarryingValue",
+                label="Cash and cash equivalents",
+                period_type="instant",
+                start_date=None,
+                end_date=date(2025, 12, 31),
+            ),
+            _fact(
+                form="10-K",
+                accession_number="batch-10k",
+                concept="AccountsReceivableNetCurrent",
+                label="Accounts receivable",
+                period_type="instant",
+                start_date=None,
+                end_date=date(2025, 12, 31),
+            ),
+            _fact(
+                form="10-K",
+                accession_number="batch-10k",
+                concept="Revenues",
+                label="Revenue",
+                period_type="duration",
+            ),
+            _fact(
+                form="10-K",
+                accession_number="batch-10k",
+                concept="CostOfRevenue",
+                label="Cost of revenue",
+                period_type="duration",
+            ),
+        ]
+    )
+    return company.company_id
+
+
+def _formula_batch_target_rows(experiment) -> list[dict[str, str]]:
+    return [
+        {
+            "status": experiment.STATUS_MISSING_TARGET,
+            "internal_metric_name": "current_assets",
+            "statement_type": "balance_sheet",
+            "target_xbrl_concept": "us-gaap:AssetsCurrent",
+            "taxonomy": "us-gaap",
+            "target_raw_concept": "AssetsCurrent",
+            "industry_label": "Common Base",
+        },
+        {
+            "status": experiment.STATUS_MISSING_TARGET,
+            "internal_metric_name": "current_liabilities",
+            "statement_type": "balance_sheet",
+            "target_xbrl_concept": "us-gaap:LiabilitiesCurrent",
+            "taxonomy": "us-gaap",
+            "target_raw_concept": "LiabilitiesCurrent",
+            "industry_label": "Common Base",
+        },
+        {
+            "status": experiment.STATUS_MISSING_TARGET,
+            "internal_metric_name": "gross_profit",
+            "statement_type": "income_statement",
+            "target_xbrl_concept": "us-gaap:GrossProfit",
+            "taxonomy": "us-gaap",
+            "target_raw_concept": "GrossProfit",
+            "industry_label": "Common Base",
+        },
+    ]
+
+
+def _formula_provider_result(
+    *,
+    provider,
+    target,
+    component_concept: str,
+) -> FormulaProposalProviderResult:
+    return FormulaProposalProviderResult(
+        provider_name=provider.provider_name,
+        model_name=provider.model_name,
+        target_metric_name=target.target_metric_name,
+        target_xbrl_concept=target.target_xbrl_concept,
+        provider_status="proposed",
+        no_formula=False,
+        target_is_zero=False,
+        formula_expression=f"{target.target_metric_name} = us-gaap:{component_concept}",
+        components=(
+            FormulaProposalComponentResponse(
+                component_name=component_concept,
+                taxonomy="us-gaap",
+                concept=component_concept,
+                operator="+",
+                role="same statement component",
+                reason="The component is in the eligible same-period raw fact pool.",
+            ),
+        ),
+        confidence=0.8,
+        reason="test proposal",
+        uncertainty="review required",
+    )
 
 
 def _fake_ingest_company(calls: list[str]):

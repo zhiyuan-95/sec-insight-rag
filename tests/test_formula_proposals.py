@@ -3,9 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 from decimal import Decimal
 
-from src.analyze.xbrl_formula_proposals import default_formula_proposal_provider_configs
+import pytest
+
+from src.analyze.xbrl_formula_proposals import (
+    FormulaProposalProviderConfig,
+    default_formula_proposal_provider_configs,
+    generate_formula_proposal_batch,
+)
 from src.processing.formula_proposals import (
+    PROVIDER_STATUS_FAILED,
     PROVIDER_STATUS_TARGET_ZERO,
+    PROVIDER_STATUS_UNAVAILABLE,
     STATEMENT_RELATIONSHIP_CROSS,
     STATEMENT_RELATIONSHIP_SAME,
     VALIDATION_SKIP_CIRCULAR_COMPONENT,
@@ -16,12 +24,15 @@ from src.processing.formula_proposals import (
     VALIDATION_STATUS_VALIDATED,
     VALIDATION_STATUS_ZERO_EVIDENCE,
     FormulaProposalComponentResponse,
+    FormulaProposalBatchResponse,
     FormulaProposalFact,
     FormulaProposalProviderResult,
     FormulaProposalResponse,
     FormulaProposalTarget,
     build_formula_proposal_contexts,
+    coerce_formula_proposal_batch_response,
     coerce_formula_proposal_response,
+    formula_batch_group_key,
     formula_context_fingerprint,
     load_formula_proposal_cache,
     provider_result_from_response,
@@ -146,6 +157,195 @@ def test_formula_proposal_contexts_keep_different_concept_pools_separate() -> No
     assert [len(context.prompt_fact_pool) for context in contexts] == [2, 1]
 
 
+def test_formula_batch_response_coerces_multiple_target_payload() -> None:
+    response = coerce_formula_proposal_batch_response(
+        {
+            "proposals": [
+                {
+                    "no_formula": False,
+                    "target_is_zero": False,
+                    "target_metric_name": "current_assets",
+                    "target_xbrl_concept": "us-gaap:AssetsCurrent",
+                    "formula_expression": "current_assets = us-gaap:CashAndCashEquivalentsAtCarryingValue",
+                    "components": [
+                        {
+                            "component_name": "cash",
+                            "taxonomy": "us-gaap",
+                            "concept": "CashAndCashEquivalentsAtCarryingValue",
+                            "operator": "+",
+                            "role": "current asset component",
+                            "reason": "same statement raw fact",
+                        }
+                    ],
+                    "confidence": 0.7,
+                    "reason": "test",
+                    "uncertainty": "review",
+                },
+                {
+                    "no_formula": True,
+                    "target_is_zero": False,
+                    "target_metric_name": "accounts_receivable",
+                    "target_xbrl_concept": "us-gaap:AccountsReceivableNetCurrent",
+                    "formula_expression": "",
+                    "components": [],
+                    "confidence": 0.2,
+                    "reason": "insufficient facts",
+                    "uncertainty": "review",
+                },
+            ]
+        }
+    )
+
+    assert isinstance(response, FormulaProposalBatchResponse)
+    assert [proposal.target_metric_name for proposal in response.proposals] == [
+        "current_assets",
+        "accounts_receivable",
+    ]
+
+
+def test_generate_formula_proposal_batch_reorders_results_by_target_identity() -> None:
+    targets = [
+        _target("AssetsCurrent", "current_assets"),
+        _target("LiabilitiesCurrent", "current_liabilities"),
+    ]
+    payload = {
+        "proposals": [
+            _batch_proposal_payload(targets[1]),
+            _batch_proposal_payload(targets[0]),
+        ]
+    }
+
+    results = generate_formula_proposal_batch(
+        ticker="TEST",
+        cik="0000000001",
+        targets=targets,
+        fact_pool=[],
+        provider=_batch_provider(),
+        generate_json=lambda prompt, schema, model: payload,
+    )
+
+    assert [result.target_metric_name for result in results] == [
+        "current_assets",
+        "current_liabilities",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("case", "error_match"),
+    [
+        ("non_object", "non-object payload"),
+        ("omitted", "returned 1 proposal"),
+        ("duplicate", "duplicate target"),
+        ("unexpected", "unexpected target"),
+    ],
+)
+def test_generate_formula_proposal_batch_rejects_unusable_target_sets(
+    case: str,
+    error_match: str,
+) -> None:
+    targets = [
+        _target("AssetsCurrent", "current_assets"),
+        _target("LiabilitiesCurrent", "current_liabilities"),
+    ]
+    payload: object
+    if case == "non_object":
+        payload = []
+    else:
+        proposals = [_batch_proposal_payload(targets[0])]
+        if case == "duplicate":
+            proposals.append(_batch_proposal_payload(targets[0]))
+        elif case == "unexpected":
+            proposals.append(
+                _batch_proposal_payload(_target("Equity", "stockholders_equity"))
+            )
+        payload = {"proposals": proposals}
+
+    with pytest.raises(ValueError, match=error_match):
+        generate_formula_proposal_batch(
+            ticker="TEST",
+            cik="0000000001",
+            targets=targets,
+            fact_pool=[],
+            provider=_batch_provider(),
+            generate_json=lambda prompt, schema, model: payload,
+        )
+
+
+def test_generate_formula_proposal_batch_reports_provider_exception_per_target() -> None:
+    targets = [
+        _target("AssetsCurrent", "current_assets"),
+        _target("LiabilitiesCurrent", "current_liabilities"),
+    ]
+
+    def fail_generation(prompt, schema, model):
+        raise RuntimeError("provider unavailable during test")
+
+    results = generate_formula_proposal_batch(
+        ticker="TEST",
+        cik="0000000001",
+        targets=targets,
+        fact_pool=[],
+        provider=_batch_provider(),
+        generate_json=fail_generation,
+    )
+
+    assert [result.provider_status for result in results] == [
+        PROVIDER_STATUS_FAILED,
+        PROVIDER_STATUS_FAILED,
+    ]
+
+
+def test_generate_formula_proposal_batch_reports_missing_api_key_per_target() -> None:
+    targets = [
+        _target("AssetsCurrent", "current_assets"),
+        _target("LiabilitiesCurrent", "current_liabilities"),
+    ]
+
+    results = generate_formula_proposal_batch(
+        ticker="TEST",
+        cik="0000000001",
+        targets=targets,
+        fact_pool=[],
+        provider=FormulaProposalProviderConfig(
+            provider_name="test_provider",
+            model_name="test_model",
+            api_key=None,
+        ),
+    )
+
+    assert [result.provider_status for result in results] == [
+        PROVIDER_STATUS_UNAVAILABLE,
+        PROVIDER_STATUS_UNAVAILABLE,
+    ]
+
+
+def test_formula_batch_group_key_allows_same_statement_contexts_only() -> None:
+    assets_target = _target("AssetsCurrent", "current_assets")
+    receivables_target = _target("AccountsReceivableNetCurrent", "accounts_receivable")
+    revenue_target = FormulaProposalTarget(
+        target_metric_name="revenue",
+        target_xbrl_concept="us-gaap:Revenues",
+        taxonomy="us-gaap",
+        concept="Revenues",
+        statement_type="income_statement",
+    )
+    facts = (
+        _fact("CashAndCashEquivalentsAtCarryingValue", 1),
+        _fact("AccountsReceivableNetCurrent", 2),
+    )
+    revenue_facts = (
+        _fact("Revenues", 3, period_type="duration", mapped_statement_type="income_statement"),
+        _fact("CostOfRevenue", 4, period_type="duration", mapped_statement_type="income_statement"),
+    )
+
+    assets_context = build_formula_proposal_contexts(target=assets_target, fact_pool=facts)[0]
+    receivables_context = build_formula_proposal_contexts(target=receivables_target, fact_pool=facts)[0]
+    revenue_context = build_formula_proposal_contexts(target=revenue_target, fact_pool=revenue_facts)[0]
+
+    assert formula_batch_group_key(assets_context) == formula_batch_group_key(receivables_context)
+    assert formula_batch_group_key(assets_context) != formula_batch_group_key(revenue_context)
+
+
 def test_formula_proposal_contexts_filter_monetary_targets_to_currency_units() -> None:
     target = _target("DebtCurrent", "debt_current")
     facts = (
@@ -159,6 +359,49 @@ def test_formula_proposal_contexts_filter_monetary_targets_to_currency_units() -
     assert len(contexts) == 1
     assert contexts[0].period_context["unit"] == "USD"
     assert [row["concept"] for row in contexts[0].prompt_fact_pool] == ["ShortTermBorrowings"]
+
+
+def test_formula_proposal_contexts_keep_primary_monetary_unit_per_period() -> None:
+    target = _target("DebtCurrent", "debt_current")
+    facts = (
+        _fact("DebtInstrumentFaceAmount", 1, unit="EUR"),
+        _fact("ShortTermBorrowings", 2, unit="USD"),
+        _fact("CommercialPaper", 3, unit="USD"),
+    )
+
+    contexts = build_formula_proposal_contexts(target=target, fact_pool=facts)
+
+    assert len(contexts) == 1
+    assert contexts[0].period_context["unit"] == "USD"
+    assert [row["concept"] for row in contexts[0].prompt_fact_pool] == [
+        "CommercialPaper",
+        "ShortTermBorrowings",
+    ]
+
+
+def test_formula_proposal_contexts_keep_only_available_monetary_unit() -> None:
+    target = _target("DebtCurrent", "debt_current")
+    facts = (_fact("DebtInstrumentFaceAmount", 1, unit="EUR"),)
+
+    contexts = build_formula_proposal_contexts(target=target, fact_pool=facts)
+
+    assert len(contexts) == 1
+    assert contexts[0].period_context["unit"] == "EUR"
+    assert [row["concept"] for row in contexts[0].prompt_fact_pool] == ["DebtInstrumentFaceAmount"]
+
+
+def test_formula_proposal_contexts_choose_primary_monetary_unit_per_period() -> None:
+    target = _target("DebtCurrent", "debt_current")
+    facts = (
+        _fact("ShortTermBorrowings", 1, unit="USD", fiscal_year=2025, accession_number="a"),
+        _fact("DebtInstrumentFaceAmount", 2, unit="EUR", fiscal_year=2025, accession_number="a"),
+        _fact("DebtInstrumentFaceAmount", 3, unit="EUR", fiscal_year=2024, accession_number="b"),
+    )
+
+    contexts = build_formula_proposal_contexts(target=target, fact_pool=facts)
+
+    assert len(contexts) == 2
+    assert [context.period_context["unit"] for context in contexts] == ["USD", "EUR"]
 
 
 def test_formula_proposal_contexts_fall_back_when_no_compatible_unit_exists() -> None:
@@ -293,6 +536,24 @@ def _target(concept: str, metric_name: str) -> FormulaProposalTarget:
         concept=concept,
         statement_type="balance_sheet",
     )
+
+
+def _batch_provider() -> FormulaProposalProviderConfig:
+    return FormulaProposalProviderConfig(
+        provider_name="test_provider",
+        model_name="test_model",
+        api_key="test-key",
+    )
+
+
+def _batch_proposal_payload(target: FormulaProposalTarget) -> dict[str, object]:
+    return {
+        "no_formula": True,
+        "target_metric_name": target.target_metric_name,
+        "target_xbrl_concept": target.target_xbrl_concept,
+        "reason": "No supported formula in the supplied fact pool.",
+        "uncertainty": "Review required.",
+    }
 
 
 def _proposal(

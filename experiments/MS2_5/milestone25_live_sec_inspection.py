@@ -23,6 +23,7 @@ from src.config import Settings, load_settings
 from src.analyze.xbrl_formula_proposals import (
     default_formula_proposal_provider_configs,
     generate_formula_proposal,
+    generate_formula_proposal_batch,
 )
 from src.ingestion import (
     FilingNotFoundError,
@@ -86,10 +87,13 @@ from src.processing.formula_proposals import (
     FormulaProposalTarget,
     FormulaProposalValidationResult,
     build_formula_proposal_contexts,
+    formula_batch_context_prompt_payload,
+    formula_batch_group_key,
     consensus_label,
     formula_context_fingerprint,
     formula_context_prompt_payload,
     load_formula_proposal_cache,
+    provider_failed_result,
     save_formula_proposal_cache,
     validate_formula_proposal,
 )
@@ -108,6 +112,26 @@ STATUS_FOUND_MAPPED_ALTERNATE = "found_mapped_alternate"
 MARKDOWN_CELL_MAX_CHARS = 120
 =======
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
+
+
+@dataclass(frozen=True)
+class _FormulaProposalAssignment:
+    """One missing target paired with one eligible formula context."""
+
+    target: FormulaProposalTarget
+    context: FormulaProposalContext
+
+
+@dataclass(frozen=True)
+class _FormulaProviderWorkItem:
+    """One provider request slot for a target/context assignment."""
+
+    assignment_index: int
+    provider_index: int
+    formula_context_hash: str
+    fingerprint_payload: dict[str, object]
+    cache_warning: str = ""
+
 
 TARGET_COVERAGE_REPORT_COLUMNS = (
     "industry_label",
@@ -1062,16 +1086,11 @@ def _formula_proposal_snapshot(
     context_count = 0
     available_context_count = 0
     skipped_context_count = 0
+    assignments: list[_FormulaProposalAssignment] = []
 
-    for target_index, target in enumerate(targets, start=1):
+    for target in targets:
         formula_contexts = build_formula_proposal_contexts(target=target, fact_pool=fact_pool)
         available_context_count += len(formula_contexts)
-        _formula_progress(
-            progress,
-            f"Handling missing target {target_index}/{len(targets)}: "
-            f"{_formula_target_progress_label(target)}; "
-            f"{len(formula_contexts)} period context(s).",
-        )
         if not formula_contexts:
             skipped_context_count += 1
             _formula_progress(
@@ -1080,156 +1099,217 @@ def _formula_proposal_snapshot(
             )
             diagnostics.append(_formula_proposal_no_context_row(target))
             continue
-        for context_index, formula_context in enumerate(formula_contexts, start=1):
+        for formula_context in formula_contexts:
             context_count += 1
-            _formula_progress(
-                progress,
-                f"  Context {context_index}/{len(formula_contexts)}: "
-                f"{_formula_context_progress_label(formula_context)}; "
-                f"{len(provider_configs)} provider request(s).",
+            assignments.append(_FormulaProposalAssignment(target=target, context=formula_context))
+
+    assignment_results: dict[int, list[FormulaProposalProviderResult | None]] = {}
+    assignment_cache_statuses: dict[int, list[str]] = {}
+    assignment_cache_warnings: dict[int, list[str]] = {}
+    assignment_context_hashes: dict[int, list[str]] = {}
+    uncached_groups: dict[tuple[int, str], list[_FormulaProviderWorkItem]] = {}
+    pending_work_by_hash: dict[str, _FormulaProviderWorkItem] = {}
+    pending_duplicates_by_hash: dict[str, list[_FormulaProviderWorkItem]] = {}
+    statement_batch_keys = {formula_batch_group_key(assignment.context) for assignment in assignments}
+    if assignments:
+        _formula_progress(
+            progress,
+            "Prepared "
+            f"{len(assignments)} target-context assignment(s) across "
+            f"{len(statement_batch_keys)} statement-scoped batch context(s).",
+        )
+
+    for assignment_index, assignment in enumerate(assignments):
+        assignment_results[assignment_index] = [None] * len(provider_configs)
+        assignment_cache_statuses[assignment_index] = [""] * len(provider_configs)
+        assignment_cache_warnings[assignment_index] = [""] * len(provider_configs)
+        assignment_context_hashes[assignment_index] = [""] * len(provider_configs)
+        for provider_index, provider in enumerate(provider_configs):
+            formula_hash, fingerprint_payload = formula_context_fingerprint(
+                target=assignment.target,
+                context=assignment.context,
+                provider_name=provider.provider_name,
+                model_name=provider.model_name,
             )
-            provider_results: list[FormulaProposalProviderResult] = []
-            cache_statuses: list[str] = []
-            cache_warnings: list[str] = []
-            context_hashes: list[str] = []
-            for provider in provider_configs:
-                formula_hash, fingerprint_payload = formula_context_fingerprint(
-                    target=target,
-                    context=formula_context,
-                    provider_name=provider.provider_name,
-                    model_name=provider.model_name,
+            assignment_context_hashes[assignment_index][provider_index] = formula_hash
+            run_cached = run_provider_results.get(formula_hash)
+            if run_cached is not None:
+                result, cache_status, cache_warning = run_cached
+                assignment_results[assignment_index][provider_index] = result
+                assignment_cache_statuses[assignment_index][provider_index] = (
+                    CACHE_STATUS_REUSED_EXACT_CONTEXT
+                    if cache_status == CACHE_STATUS_GENERATED_NEW
+                    else cache_status
                 )
-                context_hashes.append(formula_hash)
-                run_cached = run_provider_results.get(formula_hash)
-                if run_cached is not None:
-                    result, cache_status, cache_warning = run_cached
-                    provider_results.append(result)
-                    cache_statuses.append(
-                        CACHE_STATUS_REUSED_EXACT_CONTEXT
-                        if cache_status == CACHE_STATUS_GENERATED_NEW
-                        else cache_status
-                    )
-                    cache_warnings.append(cache_warning)
-                    continue
-                cached_result, cache_warning = load_formula_proposal_cache(
-                    cache_dir=cache_dir,
-                    formula_context_hash=formula_hash,
-                    target=target,
-                    provider_name=provider.provider_name,
-                    model_name=provider.model_name,
+                assignment_cache_warnings[assignment_index][provider_index] = cache_warning
+                continue
+
+            cached_result, cache_warning = load_formula_proposal_cache(
+                cache_dir=cache_dir,
+                formula_context_hash=formula_hash,
+                target=assignment.target,
+                provider_name=provider.provider_name,
+                model_name=provider.model_name,
+            )
+            if cached_result is not None:
+                assignment_results[assignment_index][provider_index] = cached_result
+                assignment_cache_statuses[assignment_index][provider_index] = CACHE_STATUS_REUSED_EXACT_CONTEXT
+                assignment_cache_warnings[assignment_index][provider_index] = cache_warning
+                run_provider_results[formula_hash] = (
+                    cached_result,
+                    CACHE_STATUS_REUSED_EXACT_CONTEXT,
+                    cache_warning,
                 )
-                if cached_result is not None:
-                    provider_results.append(cached_result)
-                    cache_statuses.append(CACHE_STATUS_REUSED_EXACT_CONTEXT)
-                    cache_warnings.append(cache_warning)
-                    run_provider_results[formula_hash] = (
-                        cached_result,
-                        CACHE_STATUS_REUSED_EXACT_CONTEXT,
-                        cache_warning,
-                    )
-                    continue
+                continue
+
+            work_item = _FormulaProviderWorkItem(
+                assignment_index=assignment_index,
+                provider_index=provider_index,
+                formula_context_hash=formula_hash,
+                fingerprint_payload=fingerprint_payload,
+                cache_warning=cache_warning,
+            )
+            existing_pending = pending_work_by_hash.get(formula_hash)
+            if existing_pending is not None:
+                pending_duplicates_by_hash.setdefault(formula_hash, []).append(work_item)
+                continue
+
+            batch_key = formula_batch_group_key(assignment.context)
+            pending_work_by_hash[formula_hash] = work_item
+            uncached_groups.setdefault((provider_index, batch_key), []).append(
+                work_item
+            )
+
+    for batch_index, ((provider_index, batch_key), work_items) in enumerate(uncached_groups.items(), start=1):
+        provider = provider_configs[provider_index]
+        representative = assignments[work_items[0].assignment_index]
+        _formula_progress(
+            progress,
+            f"  Batch context {batch_index}/{len(uncached_groups)}: "
+            f"{representative.context.target_primary_statement}; "
+            f"{_formula_context_progress_label(representative.context)}; "
+            f"{len(work_items)} target(s); provider {provider.provider_name}/{provider.model_name}.",
+        )
+        if len(work_items) > 1:
+            results_by_assignment = _generate_formula_batch_results(
+                ticker=ticker,
+                cik=cik,
+                assignments=assignments,
+                work_items=work_items,
+                provider=provider,
+                batch_key=batch_key,
+                progress=progress,
+            )
+        else:
+            results_by_assignment = {}
+        for work_item in work_items:
+            result = results_by_assignment.get(work_item.assignment_index)
+            if result is None:
+                assignment = assignments[work_item.assignment_index]
                 prompt_context = formula_context_prompt_payload(
-                    context=formula_context,
-                    formula_context_hash=formula_hash,
+                    context=assignment.context,
+                    formula_context_hash=work_item.formula_context_hash,
                 )
                 result = generate_formula_proposal(
                     ticker=ticker,
                     cik=cik,
-                    target=target,
-                    fact_pool=list(formula_context.prompt_fact_pool),
+                    target=assignment.target,
+                    fact_pool=list(assignment.context.prompt_fact_pool),
                     formula_context=prompt_context,
                     provider=provider,
                 )
-                provider_results.append(result)
-                if result.provider_status in {
-                    PROVIDER_STATUS_PROPOSED,
-                    PROVIDER_STATUS_TARGET_ZERO,
-                    PROVIDER_STATUS_NO_FORMULA,
-                }:
-                    write_warning = save_formula_proposal_cache(
-                        cache_dir=cache_dir,
-                        formula_context_hash=formula_hash,
-                        fingerprint_payload=fingerprint_payload,
-                        result=result,
-                    )
-                    cache_statuses.append(CACHE_STATUS_GENERATED_NEW)
-                    result_cache_warning = cache_warning or write_warning
-                    cache_warnings.append(result_cache_warning)
-                    run_provider_results[formula_hash] = (
-                        result,
-                        CACHE_STATUS_GENERATED_NEW,
-                        result_cache_warning,
-                    )
-                elif cache_warning:
-                    cache_statuses.append(CACHE_STATUS_ENTRY_INVALID)
-                    cache_warnings.append(cache_warning)
-                    run_provider_results[formula_hash] = (
-                        result,
-                        CACHE_STATUS_ENTRY_INVALID,
-                        cache_warning,
-                    )
-                else:
-                    cache_statuses.append(CACHE_STATUS_UNAVAILABLE)
-                    cache_warnings.append("")
-                    run_provider_results[formula_hash] = (
-                        result,
-                        CACHE_STATUS_UNAVAILABLE,
-                        "",
-                    )
-            provider_results_tuple = tuple(provider_results)
-            validations = tuple(
-                validate_formula_proposal(
-                    target=target,
-                    proposal=proposal,
-                    fact_pool=formula_context.facts,
-                    statement_relationship_by_key=formula_context.statement_relationship_by_key,
-                )
-                for proposal in provider_results_tuple
+            cache_status, cache_warning = _record_formula_provider_result(
+                cache_dir=cache_dir,
+                formula_context_hash=work_item.formula_context_hash,
+                fingerprint_payload=work_item.fingerprint_payload,
+                result=result,
+                cache_warning=work_item.cache_warning,
+                run_provider_results=run_provider_results,
             )
-            adjusted_cache_statuses = tuple(
-                CACHE_STATUS_REUSED_VALIDATION_FAILED
-                if cache_status == CACHE_STATUS_REUSED_EXACT_CONTEXT
-                and (
-                    (
-                        proposal.provider_status == PROVIDER_STATUS_PROPOSED
-                        and validation.validation_status != VALIDATION_STATUS_VALIDATED
-                    )
-                    or (
-                        proposal.provider_status == PROVIDER_STATUS_TARGET_ZERO
-                        and validation.validation_status != VALIDATION_STATUS_ZERO_EVIDENCE
-                    )
+            assignment_results[work_item.assignment_index][provider_index] = result
+            assignment_cache_statuses[work_item.assignment_index][provider_index] = cache_status
+            assignment_cache_warnings[work_item.assignment_index][provider_index] = cache_warning
+            for duplicate in pending_duplicates_by_hash.get(work_item.formula_context_hash, ()):
+                assignment_results[duplicate.assignment_index][provider_index] = result
+                assignment_cache_statuses[duplicate.assignment_index][provider_index] = (
+                    CACHE_STATUS_REUSED_EXACT_CONTEXT
+                    if cache_status == CACHE_STATUS_GENERATED_NEW
+                    else cache_status
                 )
-                else cache_status
-                for cache_status, validation, proposal in zip(cache_statuses, validations, provider_results_tuple, strict=False)
+                assignment_cache_warnings[duplicate.assignment_index][provider_index] = cache_warning
+
+    for assignment_index, assignment in enumerate(assignments):
+        provider_results = [
+            result
+            if result is not None
+            else provider_failed_result(
+                provider_name=provider.provider_name,
+                model_name=provider.model_name,
+                target=assignment.target,
+                error="formula provider result was not recorded",
             )
-            agreement_label = consensus_label(provider_results_tuple, validations)
-            consensus_counts[agreement_label] = consensus_counts.get(agreement_label, 0) + 1
-            diagnostics.extend(
-                _formula_proposal_diagnostic_rows(
-                    target=target,
-                    context=formula_context,
-                    proposals=provider_results_tuple,
-                    validations=validations,
-                    agreement_label=agreement_label,
-                    formula_context_hashes=tuple(context_hashes),
-                    cache_statuses=adjusted_cache_statuses,
-                    cache_warnings=tuple(cache_warnings),
+            for result, provider in zip(assignment_results[assignment_index], provider_configs, strict=False)
+        ]
+        cache_statuses = [
+            status or CACHE_STATUS_UNAVAILABLE
+            for status in assignment_cache_statuses[assignment_index]
+        ]
+        cache_warnings = assignment_cache_warnings[assignment_index]
+        context_hashes = assignment_context_hashes[assignment_index]
+        provider_results_tuple = tuple(provider_results)
+        validations = tuple(
+            validate_formula_proposal(
+                target=assignment.target,
+                proposal=proposal,
+                fact_pool=assignment.context.facts,
+                statement_relationship_by_key=assignment.context.statement_relationship_by_key,
+            )
+            for proposal in provider_results_tuple
+        )
+        adjusted_cache_statuses = tuple(
+            CACHE_STATUS_REUSED_VALIDATION_FAILED
+            if cache_status == CACHE_STATUS_REUSED_EXACT_CONTEXT
+            and (
+                (
+                    proposal.provider_status == PROVIDER_STATUS_PROPOSED
+                    and validation.validation_status != VALIDATION_STATUS_VALIDATED
+                )
+                or (
+                    proposal.provider_status == PROVIDER_STATUS_TARGET_ZERO
+                    and validation.validation_status != VALIDATION_STATUS_ZERO_EVIDENCE
                 )
             )
-            components.extend(
-                _formula_proposal_component_rows(
-                    target=target,
-                    context=formula_context,
-                    proposals=provider_results_tuple,
-                )
+            else cache_status
+            for cache_status, validation, proposal in zip(cache_statuses, validations, provider_results_tuple, strict=False)
+        )
+        agreement_label = consensus_label(provider_results_tuple, validations)
+        consensus_counts[agreement_label] = consensus_counts.get(agreement_label, 0) + 1
+        diagnostics.extend(
+            _formula_proposal_diagnostic_rows(
+                target=assignment.target,
+                context=assignment.context,
+                proposals=provider_results_tuple,
+                validations=validations,
+                agreement_label=agreement_label,
+                formula_context_hashes=tuple(context_hashes),
+                cache_statuses=adjusted_cache_statuses,
+                cache_warnings=tuple(cache_warnings),
             )
+        )
+        components.extend(
+            _formula_proposal_component_rows(
+                target=assignment.target,
+                context=assignment.context,
+                proposals=provider_results_tuple,
+            )
+        )
 
     _formula_progress(
         progress,
         "Formula proposal generation complete: "
-        f"{len(targets)} missing target(s), "
-        f"{context_count} context(s), "
-        f"{len(diagnostics)} provider diagnostic row(s).",
+        f"{len(targets)} missing target(s) processed through "
+        f"{len(assignments)} target-context assignment(s) across "
+        f"{len(statement_batch_keys)} statement-scoped batch context(s)."
     )
     return {
         "summary": _formula_proposal_summary_rows(
@@ -1247,6 +1327,100 @@ def _formula_proposal_snapshot(
         "components": components,
         "fact_pool_summary": fact_pool_summary,
     }
+
+
+def _generate_formula_batch_results(
+    *,
+    ticker: str,
+    cik: str,
+    assignments: list[_FormulaProposalAssignment],
+    work_items: list[_FormulaProviderWorkItem],
+    provider: Any,
+    batch_key: str,
+    progress: Callable[[str], None] | None,
+) -> dict[int, FormulaProposalProviderResult]:
+    selected_assignments = [assignments[item.assignment_index] for item in work_items]
+    statement_groups = {
+        assignment.context.target_primary_statement.strip() or "unknown_statement"
+        for assignment in selected_assignments
+    }
+    if len(statement_groups) != 1:
+        _formula_progress(
+            progress,
+            "  Batch skipped because work items crossed statement groups; falling back to single-target calls.",
+        )
+        return {}
+    representative = selected_assignments[0]
+    try:
+        results = generate_formula_proposal_batch(
+            ticker=ticker,
+            cik=cik,
+            targets=[assignment.target for assignment in selected_assignments],
+            fact_pool=list(representative.context.prompt_fact_pool),
+            formula_context=formula_batch_context_prompt_payload(
+                context=representative.context,
+                formula_batch_group_key=batch_key,
+            ),
+            provider=provider,
+        )
+    except Exception as exc:
+        _formula_progress(
+            progress,
+            f"  Batch response could not be used ({exc}); falling back to single-target calls.",
+        )
+        return {}
+    if len(results) != len(work_items):
+        _formula_progress(
+            progress,
+            "  Batch response returned an unexpected target count; falling back to single-target calls.",
+        )
+        return {}
+    return {
+        work_item.assignment_index: result
+        for work_item, result in zip(work_items, results, strict=False)
+    }
+
+
+def _record_formula_provider_result(
+    *,
+    cache_dir: Path,
+    formula_context_hash: str,
+    fingerprint_payload: dict[str, object],
+    result: FormulaProposalProviderResult,
+    cache_warning: str,
+    run_provider_results: dict[str, tuple[FormulaProposalProviderResult, str, str]],
+) -> tuple[str, str]:
+    if result.provider_status in {
+        PROVIDER_STATUS_PROPOSED,
+        PROVIDER_STATUS_TARGET_ZERO,
+        PROVIDER_STATUS_NO_FORMULA,
+    }:
+        write_warning = save_formula_proposal_cache(
+            cache_dir=cache_dir,
+            formula_context_hash=formula_context_hash,
+            fingerprint_payload=fingerprint_payload,
+            result=result,
+        )
+        result_cache_warning = cache_warning or write_warning
+        run_provider_results[formula_context_hash] = (
+            result,
+            CACHE_STATUS_GENERATED_NEW,
+            result_cache_warning,
+        )
+        return CACHE_STATUS_GENERATED_NEW, result_cache_warning
+    if cache_warning:
+        run_provider_results[formula_context_hash] = (
+            result,
+            CACHE_STATUS_ENTRY_INVALID,
+            cache_warning,
+        )
+        return CACHE_STATUS_ENTRY_INVALID, cache_warning
+    run_provider_results[formula_context_hash] = (
+        result,
+        CACHE_STATUS_UNAVAILABLE,
+        "",
+    )
+    return CACHE_STATUS_UNAVAILABLE, ""
 
 
 def _formula_proposal_not_run_summary() -> list[dict[str, Any]]:
@@ -3713,6 +3887,13 @@ def format_saved_report(run: ExperimentRun, *, full_report: bool = False) -> str
             _markdown_table(formula_rows)
         )
         lines.extend(_formula_annotation_lines_for_rows(formula_rows, formula_annotations))
+        provider_outcome_rows = _formula_provider_outcome_gap_rows_for_missing_targets(
+            run.session_after_snapshot,
+            form_type=form_type,
+        )
+        if provider_outcome_rows:
+            lines.extend(["", "#### Provider Outcomes Without Formula Recommendation", ""])
+            lines.extend(_markdown_table(provider_outcome_rows))
 
     return "\n".join(lines)
 
@@ -3728,6 +3909,11 @@ def _saved_compact_summary_rows(run: ExperimentRun, *, full_report: bool) -> lis
     formula_summary = _summary_rows_by_item(snapshot.get("formula_proposal_summary") or [])
     diagnostics = snapshot.get("formula_proposal_diagnostics") or []
     formula_panel = formula_summary.get("formula proposal model panel", {})
+    non_recommendation_outcomes = sum(
+        row.get("provider_status")
+        in {PROVIDER_STATUS_NO_FORMULA, PROVIDER_STATUS_UNAVAILABLE, PROVIDER_STATUS_FAILED}
+        for row in diagnostics
+    )
     report_output = "saved Plan 2.5 target mapping report"
     if full_report:
         report_output = "saved Plan 2.5 target mapping report; --full-report kept for CLI compatibility"
@@ -3767,6 +3953,10 @@ def _saved_compact_summary_rows(run: ExperimentRun, *, full_report: bool) -> lis
         {
             "Item": "Zero-target evidence rows",
             "Value": sum(row.get("provider_status") == PROVIDER_STATUS_TARGET_ZERO for row in diagnostics),
+        },
+        {
+            "Item": "Model outcomes without formula recommendation",
+            "Value": non_recommendation_outcomes,
         },
         {"Item": "Recovered rows inserted into `financial_metrics`", "Value": 0},
         {"Item": "Used by indicators", "Value": "No"},
@@ -3835,68 +4025,32 @@ def _proposed_formula_rows_for_missing_targets(
             "validation_status": str(row.get("validation_status") or ""),
             "confidence": str(row.get("confidence") or ""),
             "reason": str(row.get("reason") or ""),
+            "support_key": _formula_recommendation_support_key(row),
         }
         statement = str(row.get("target_primary_statement") or "")
         for period_label in period_labels:
             recommendations_by_period.setdefault((metric, statement, period_label), []).append(recommendation)
 
     rows: list[dict[str, Any]] = []
-    disagreement_grouped: dict[tuple[str, str, str, str, str], dict[str, Any]] = {}
-    grouped: dict[tuple[str, str, tuple[tuple[str, str, str], ...]], dict[str, Any]] = {}
+    grouped: dict[tuple[str, str, str], dict[str, Any]] = {}
     for (metric, statement, period_label), recommendations in recommendations_by_period.items():
         sorted_recommendations = _sorted_formula_recommendations(recommendations)
-        recommendation_formulas = {
-            (
+        for recommendation in sorted_recommendations:
+            key = (
+                metric,
+                statement,
                 recommendation["formula"],
-                recommendation["components"],
             )
-            for recommendation in sorted_recommendations
-        }
-        if len(recommendation_formulas) > 1:
-            for recommendation in sorted_recommendations:
-                key = (
-                    metric,
-                    statement,
-                    recommendation["provider"],
-                    recommendation["formula"],
-                    recommendation["components"],
-                )
-                if key not in disagreement_grouped:
-                    disagreement_grouped[key] = {
-                        "metric": metric,
-                        "statement": statement,
-                        "period_labels": [],
-                        "recommendations": [],
-                    }
-                disagreement_grouped[key]["period_labels"].append(period_label)
-                disagreement_grouped[key]["recommendations"].append(recommendation)
-            continue
-        recommendation_signature = tuple(
-            (
-                recommendation["provider"],
-                recommendation["formula"],
-                recommendation["components"],
-            )
-            for recommendation in sorted_recommendations
-        )
-        key = (metric, statement, recommendation_signature)
-        if key not in grouped:
-            grouped[key] = {
-                "metric": metric,
-                "statement": statement,
-                "period_labels": [],
-                "recommendations": sorted_recommendations,
-            }
-        grouped[key]["period_labels"].append(period_label)
+            if key not in grouped:
+                grouped[key] = {
+                    "metric": metric,
+                    "statement": statement,
+                    "period_labels": [],
+                    "recommendations": [],
+                }
+            grouped[key]["period_labels"].append(period_label)
+            grouped[key]["recommendations"].append(recommendation)
 
-    rows.extend(
-        _formula_report_row_from_period_group(
-            group,
-            form_type=form_type,
-            formula_annotations=formula_annotations,
-        )
-        for group in disagreement_grouped.values()
-    )
     rows.extend(
         _formula_report_row_from_period_group(
             group,
@@ -3913,6 +4067,96 @@ def _proposed_formula_rows_for_missing_targets(
             -_first_formula_period_sort_value(str(row.get("Period context") or ""), form_type=form_type),
             str(row.get("Providers") or ""),
             str(row.get("Formula") or ""),
+        ),
+    )
+
+
+def _formula_provider_outcome_gap_rows_for_missing_targets(
+    snapshot: dict[str, Any],
+    *,
+    form_type: str,
+) -> list[dict[str, Any]]:
+    missing_metrics = _missing_metric_names(snapshot)
+    diagnostics_by_period: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for row in snapshot.get("formula_proposal_diagnostics") or []:
+        metric = str(row.get("target_metric_name") or "")
+        if metric not in missing_metrics:
+            continue
+        if not row.get("provider_name"):
+            continue
+        if not _diagnostic_row_matches_form(row, form_type):
+            continue
+        statement = str(row.get("target_primary_statement") or "")
+        period_labels = _period_labels_for_report_value(
+            row.get("period_context"),
+            form_type=form_type,
+        )
+        for period_label in period_labels:
+            diagnostics_by_period.setdefault((metric, statement, period_label), []).append(row)
+
+    grouped: dict[tuple[str, str, str, str, str], list[str]] = {}
+    for (metric, statement, period_label), diagnostics in diagnostics_by_period.items():
+        statuses = {str(row.get("provider_status") or "") for row in diagnostics}
+        if statuses and statuses <= {PROVIDER_STATUS_PROPOSED, PROVIDER_STATUS_TARGET_ZERO}:
+            continue
+        has_recommendation = any(
+            status in {PROVIDER_STATUS_PROPOSED, PROVIDER_STATUS_TARGET_ZERO}
+            for status in statuses
+        )
+        recommendation_coverage = (
+            "partial_model_recommendation"
+            if has_recommendation
+            else "no_formula_recommendation"
+        )
+        sorted_diagnostics = sorted(diagnostics, key=_provider_label)
+        model_outcomes = _join_unique_texts(
+            _formula_provider_outcome_text(row)
+            for row in sorted_diagnostics
+        )
+        details = _join_unique_texts(
+            _formula_non_recommendation_detail(row)
+            for row in sorted_diagnostics
+            if row.get("provider_status")
+            in {PROVIDER_STATUS_NO_FORMULA, PROVIDER_STATUS_UNAVAILABLE, PROVIDER_STATUS_FAILED}
+        )
+        grouped.setdefault(
+            (
+                metric,
+                statement,
+                recommendation_coverage,
+                model_outcomes,
+                details,
+            ),
+            [],
+        ).append(period_label)
+
+    rows = [
+        {
+            "Metric": metric,
+            "Statement": statement,
+            "Period context": _format_formula_period_labels_for_report(
+                period_labels,
+                form_type=form_type,
+            ),
+            "Recommendation coverage": recommendation_coverage,
+            "Model outcomes": model_outcomes,
+            "Non-recommendation detail": details,
+        }
+        for (
+            metric,
+            statement,
+            recommendation_coverage,
+            model_outcomes,
+            details,
+        ), period_labels in grouped.items()
+    ]
+    return sorted(
+        rows,
+        key=lambda row: (
+            str(row.get("Metric") or ""),
+            str(row.get("Statement") or ""),
+            -_first_formula_period_sort_value(str(row.get("Period context") or ""), form_type=form_type),
+            str(row.get("Model outcomes") or ""),
         ),
     )
 
@@ -4168,9 +4412,41 @@ def _diagnostic_row_matches_form(row: dict[str, Any], form_type: str) -> bool:
 def _provider_label(row: dict[str, Any]) -> str:
     provider = str(row.get("provider_name") or "").strip()
     model = str(row.get("model_name") or "").strip()
-    if provider and model:
-        return f"{provider} ({model})"
-    return provider or model
+    return model or provider
+
+
+def _formula_provider_outcome_text(row: dict[str, Any]) -> str:
+    provider = _provider_label(row)
+    status = str(row.get("provider_status") or "unknown")
+    validation_status = str(row.get("validation_status") or "").strip()
+    if validation_status:
+        return f"{provider}={status}/{validation_status}"
+    return f"{provider}={status}"
+
+
+def _formula_non_recommendation_detail(row: dict[str, Any]) -> str:
+    provider = _provider_label(row)
+    status = str(row.get("provider_status") or "unknown")
+    detail = (
+        str(row.get("error") or "").strip()
+        or str(row.get("reason") or "").strip()
+        or str(row.get("validation_skip_reason") or "").strip()
+    )
+    if detail:
+        return f"{provider}: {status} - {detail}"
+    return f"{provider}: {status}"
+
+
+def _formula_recommendation_support_key(row: dict[str, Any]) -> str:
+    return "|".join(
+        part
+        for part in (
+            str(row.get("context_id") or row.get("period_context") or "").strip(),
+            _provider_label(row),
+            str(row.get("formula_context_hash") or "").strip(),
+        )
+        if part
+    )
 
 
 def _formula_expression_for_report(
@@ -4194,7 +4470,7 @@ def _component_formula_rhs(components: str) -> str:
 
 
 def _sorted_formula_recommendations(recommendations: Sequence[dict[str, str]]) -> list[dict[str, str]]:
-    unique: dict[tuple[str, str, str, str, str, str], dict[str, str]] = {}
+    unique: dict[tuple[str, str, str, str, str, str, str], dict[str, str]] = {}
     for recommendation in recommendations:
         key = (
             recommendation.get("provider", ""),
@@ -4203,6 +4479,7 @@ def _sorted_formula_recommendations(recommendations: Sequence[dict[str, str]]) -
             recommendation.get("validation_status", ""),
             recommendation.get("confidence", ""),
             recommendation.get("reason", ""),
+            recommendation.get("support_key", ""),
         )
         unique.setdefault(key, dict(recommendation))
     return sorted(
@@ -4230,6 +4507,7 @@ def _formula_report_row_from_period_group(
             form_type=form_type,
         ),
         "Providers": _join_unique_texts(recommendation["provider"] for recommendation in recommendations),
+        "LLM result count": _formula_recommendation_support_count(recommendations),
         "Formula": _format_formula_recommendation_field(
             recommendations,
             "formula",
@@ -4241,6 +4519,15 @@ def _formula_report_row_from_period_group(
         "Confidence": _join_unique_texts(recommendation["confidence"] for recommendation in recommendations),
         "Reason": _join_unique_texts(recommendation["reason"] for recommendation in recommendations),
     }
+
+
+def _formula_recommendation_support_count(recommendations: Sequence[dict[str, str]]) -> int:
+    support_keys = {
+        recommendation.get("support_key", "")
+        for recommendation in recommendations
+        if recommendation.get("support_key")
+    }
+    return len(support_keys) if support_keys else len(recommendations)
 
 
 def _format_formula_recommendation_field(
@@ -5000,7 +5287,14 @@ def _yes_no_unknown(value: bool | None) -> str:
 
 def _present_report(run: ExperimentRun, *, write_report: bool, full_report: bool) -> None:
     del write_report
+    report_started = time.perf_counter()
     _write_report(run, full_report=full_report)
+    report_duration_seconds = time.perf_counter() - report_started
+    print(
+        "Report generation complete: "
+        f"{_format_duration_seconds(report_duration_seconds)} second(s); "
+        f"saved report: {run.paths.report}"
+    )
 
 
 <<<<<<< HEAD

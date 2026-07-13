@@ -11,12 +11,18 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from src.analyze.prompts import build_xbrl_formula_proposal_prompt
+from src.analyze.prompts import (
+    build_xbrl_formula_proposal_batch_prompt,
+    build_xbrl_formula_proposal_prompt,
+)
 from src.processing.formula_proposals import (
+    FORMULA_PROPOSAL_BATCH_RESPONSE_JSON_SCHEMA,
     FORMULA_PROPOSAL_RESPONSE_JSON_SCHEMA,
+    FormulaProposalBatchResponse,
     FormulaProposalProviderResult,
     FormulaProposalResponse,
     FormulaProposalTarget,
+    coerce_formula_proposal_batch_response,
     coerce_formula_proposal_response,
     provider_failed_result,
     provider_result_from_response,
@@ -120,6 +126,87 @@ def generate_formula_proposal(
     )
 
 
+def generate_formula_proposal_batch(
+    *,
+    ticker: str,
+    cik: str,
+    targets: list[FormulaProposalTarget],
+    fact_pool: list[dict[str, object]],
+    provider: FormulaProposalProviderConfig,
+    formula_context: dict[str, object] | None = None,
+    generate_json: FormulaJsonGenerator | None = None,
+) -> tuple[FormulaProposalProviderResult, ...]:
+    """Generate one provider call for multiple same-statement targets.
+
+    Malformed or target-incomplete responses raise ``ValueError`` so callers can
+    retry the same work as single-target requests.
+    """
+    if not targets:
+        return ()
+    if not provider.api_key:
+        return tuple(
+            provider_unavailable_result(
+                provider_name=provider.provider_name,
+                model_name=provider.model_name,
+                target=target,
+                reason=f"{provider.provider_name} API key is not configured",
+            )
+            for target in targets
+        )
+    prompt = build_xbrl_formula_proposal_batch_prompt(
+        ticker=ticker,
+        cik=cik,
+        targets=[_target_prompt_payload(target) for target in targets],
+        fact_pool=fact_pool,
+        formula_context=formula_context,
+    )
+    try:
+        if generate_json is not None:
+            payload = generate_json(prompt, FormulaProposalBatchResponse, provider.model_name)
+        elif provider.provider_name == "gemini":
+            payload = _generate_gemini_batch_json(
+                prompt=prompt,
+                model=provider.model_name,
+                api_key=provider.api_key,
+            )
+        elif provider.provider_name == "openai":
+            payload = _generate_openai_json(
+                prompt=prompt,
+                model=provider.model_name,
+                api_key=provider.api_key,
+                schema=FORMULA_PROPOSAL_BATCH_RESPONSE_JSON_SCHEMA,
+                schema_name="xbrl_formula_proposal_batch",
+                system_content="Return only valid JSON for the requested XBRL formula proposal batch schema.",
+            )
+        else:
+            return tuple(
+                provider_unavailable_result(
+                    provider_name=provider.provider_name,
+                    model_name=provider.model_name,
+                    target=target,
+                    reason=f"unsupported formula proposal provider: {provider.provider_name}",
+                )
+                for target in targets
+            )
+    except Exception as exc:
+        return tuple(
+            provider_failed_result(
+                provider_name=provider.provider_name,
+                model_name=provider.model_name,
+                target=target,
+                error=str(exc),
+            )
+            for target in targets
+        )
+
+    batch_response = coerce_formula_proposal_batch_response(payload)
+    return _provider_results_from_batch_response(
+        provider=provider,
+        targets=targets,
+        response=batch_response,
+    )
+
+
 def _generate_gemini_json(*, prompt: str, model: str, api_key: str) -> object:
     try:
         from google import genai
@@ -133,6 +220,27 @@ def _generate_gemini_json(*, prompt: str, model: str, api_key: str) -> object:
         config={
             "response_mime_type": "application/json",
             "response_schema": FormulaProposalResponse,
+        },
+    )
+    parsed = getattr(response, "parsed", None)
+    if parsed is not None:
+        return parsed
+    return getattr(response, "text", "")
+
+
+def _generate_gemini_batch_json(*, prompt: str, model: str, api_key: str) -> object:
+    try:
+        from google import genai
+    except ImportError as exc:
+        raise RuntimeError("google-genai is not installed; cannot call Gemini") from exc
+
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model=model,
+        contents=prompt,
+        config={
+            "response_mime_type": "application/json",
+            "response_schema": FormulaProposalBatchResponse,
         },
     )
     parsed = getattr(response, "parsed", None)
@@ -230,3 +338,63 @@ def _target_prompt_payload(target: FormulaProposalTarget) -> dict[str, object]:
         "industry_label": target.industry_label,
         "notes": target.notes,
     }
+
+
+def _provider_results_from_batch_response(
+    *,
+    provider: FormulaProposalProviderConfig,
+    targets: list[FormulaProposalTarget],
+    response: FormulaProposalBatchResponse,
+) -> tuple[FormulaProposalProviderResult, ...]:
+    if len(response.proposals) != len(targets):
+        raise ValueError(
+            "formula proposal batch returned "
+            f"{len(response.proposals)} proposal(s) for {len(targets)} target(s)"
+        )
+    targets_by_key = {_target_response_key(target): target for target in targets}
+    if len(targets_by_key) != len(targets):
+        raise ValueError("formula proposal batch targets include duplicate identities")
+
+    responses_by_key: dict[tuple[str, str], FormulaProposalResponse] = {}
+    for proposal in response.proposals:
+        key = _response_key(proposal)
+        if key not in targets_by_key:
+            raise ValueError(
+                "formula proposal batch returned an unexpected target: "
+                f"{proposal.target_metric_name} / {proposal.target_xbrl_concept}"
+            )
+        if key in responses_by_key:
+            raise ValueError(
+                "formula proposal batch returned duplicate target: "
+                f"{proposal.target_metric_name} / {proposal.target_xbrl_concept}"
+            )
+        responses_by_key[key] = proposal
+
+    missing = [target for target in targets if _target_response_key(target) not in responses_by_key]
+    if missing:
+        names = ", ".join(target.target_metric_name for target in missing)
+        raise ValueError(f"formula proposal batch omitted target(s): {names}")
+
+    return tuple(
+        provider_result_from_response(
+            provider_name=provider.provider_name,
+            model_name=provider.model_name,
+            target=target,
+            response=responses_by_key[_target_response_key(target)],
+        )
+        for target in targets
+    )
+
+
+def _target_response_key(target: FormulaProposalTarget) -> tuple[str, str]:
+    return (
+        str(target.target_metric_name or "").strip().lower(),
+        str(target.target_xbrl_concept or "").strip().lower(),
+    )
+
+
+def _response_key(response: FormulaProposalResponse) -> tuple[str, str]:
+    return (
+        str(response.target_metric_name or "").strip().lower(),
+        str(response.target_xbrl_concept or "").strip().lower(),
+    )

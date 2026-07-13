@@ -92,8 +92,10 @@ This experiment covers:
   after hard mapping, using period-scoped raw fact pools
   that include found targets, mapped base metrics, approved alternates, and
   unknown/unmapped raw facts, with target-compatible unit filtering,
-  statement-first prompting, active-period context coverage, and exact-context
-  cache reuse for identical target/model/raw-concept pools
+  statement-first prompting, active-period context coverage, exact-context
+  cache reuse for identical target/model/raw-concept pools, and statement-scoped
+  batch provider calls for uncached missing targets with compatible raw-concept
+  contexts
 - report-only debt recovery diagnostics for missing `debt_current` and
   `debt_noncurrent`, including component statuses, assumed-zero components,
   skip reasons, formula versions, and source metric/raw fact IDs
@@ -218,6 +220,7 @@ Use `--no-formula-proposals` to skip provider calls for a cheaper report-only
 mapping run. Use `--formula-proposal-target-limit N` for a capped live-provider
 smoke test.
 The formula proposal panel evaluates active 10-K and 10-Q filing periods for
+<<<<<<< HEAD
 each missing metric. It sends each provider one request per distinct metric,
 unit, period type, form, statement bucket set, and raw concept pool. When
 multiple active periods expose the same pool, one model recommendation is shown
@@ -226,6 +229,21 @@ different raw concept pools, the report can show different period-scoped formula
 recommendations. The full eligible active-period raw fact pool remains
 available in SQLite and CSV export evidence.
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
+=======
+each missing metric. It loads exact per-target cache entries first, then sends
+each provider one request per statement-scoped batch context for uncached
+targets. A batch request may include multiple missing metrics only when they
+share the same statement group, primary monetary unit, period type, form,
+statement bucket set, and raw concept pool; different statement groups are sent
+separately. For monetary targets, secondary monetary currencies in the same
+filing period are suppressed from provider contexts instead of becoming separate
+LLM requests or being mixed into the primary unit pool. When multiple active
+periods expose the same pool, one model recommendation is shown with period
+coverage for all matching periods. When active periods expose different raw
+concept pools, the report can show different period-scoped formula
+recommendations. The full eligible active-period raw fact pool, including
+secondary currency facts, remains available in SQLite and CSV export evidence.
+>>>>>>> 007dd04 (Refine evidence report generation and normalization)
 
 Rules:
 
@@ -240,7 +258,8 @@ Rules:
 =======
 - while formula proposals run, the terminal prints process progress: how many
   missing targets were selected, which missing metric/statement is being
-  handled, each period context, and the final context count
+  handled, each statement-scoped context, each batch context, and the final
+  context count
 - `--full-report` is accepted for compatibility; it does not add old
   target-level, provider-level, raw-fact, or unknown-concept appendices
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
@@ -334,12 +353,16 @@ Section 1 is sorted by metric type and uses this column order: Metric type,
 Metric, Statement, Mapping status, Mapped target concepts, Coverage detail,
 Approved alternates, Target XBRL concepts checked. Section 3 lists proposed
 formula evidence only for missing target metrics and splits rows into 10-K and
-10-Q active-window subsections. Agreement rows should collapse when the full
-provider/formula decision set is the same. When providers disagree for a period,
-show separate provider rows instead of putting multiple provider formulas in the
-same Formula cell. Provider-specific disagreement rows may still collapse across
-periods when the same provider gives the same formula. Section 3 should not
-include Target concept, Components, or recommendation columns. Section 3
+10-Q active-window subsections. Section 3 should group rows by missing metric,
+statement, and displayed formula so identical recommended formulas can collapse
+across periods and provider/model results even when the providers cite different
+component or zero-evidence details. The `LLM result count` column should count
+distinct target/context/model formula results supporting the displayed formula,
+not display-period labels expanded from one result. When a target/context/model
+returns `no_formula`, `provider_unavailable`, or `provider_failed`, Section 3
+should show a compact provider outcome row for that period context so missing
+recommendation coverage is visible. Section 3 should not include
+Target concept, Components, or recommendation columns. Section 3
 period context should show only compact filing periods:
 10-K rows use years such as `2023` or `2023-2025`, and 10-Q rows use
 year-quarter labels such as `2021 q1` or `2021 q1 - 2021 q3`; omit raw suffixes
@@ -394,7 +417,8 @@ should say `needs_review` so the LLM does not sound like the final approver.
 >>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 - Keep LLM formula proposal prompt text in `src/analyze/prompts.py`, provider
   calls in `src/analyze/xbrl_formula_proposals.py`, and period context
-  construction, target-compatible unit filtering, exact-cache reuse, and deterministic validation in
+  construction, target-compatible unit filtering, statement-scoped batch
+  grouping, exact-cache reuse, and deterministic validation in
   `src/processing/formula_proposals.py`. The provider panel is Gemini plus
   OpenAI `gpt-4.1-mini`.
 - Treat LLM formula proposals as report-only evidence. Do not approve mappings,
@@ -430,10 +454,19 @@ should say `needs_review` so the LLM does not sound like the final approver.
 - Save the compact Plan 2.5 target mapping report to
   `milestone25_mapping_report_<TICKER>.md` by default without printing the
   report body to the terminal.
+<<<<<<< HEAD
 - Keep target-level, provider-level, raw-fact, unknown-concept, validation,
   cache, and component diagnostic tables out of the saved Markdown report.
   Source rows remain available in SQLite and CSV exports.
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
+=======
+- Keep target-level, raw-fact, unknown-concept, validation, cache, and component
+  diagnostic tables out of the saved Markdown report. Keep full provider-level
+  diagnostics out too, except for the compact Section 3 provider outcome rows
+  that expose `no_formula`, `provider_unavailable`, or `provider_failed`
+  recommendation coverage gaps. Source rows remain available in SQLite and CSV
+  exports.
+>>>>>>> 007dd04 (Refine evidence report generation and normalization)
 - Accept `--write-report` as a compatibility flag, not as a separate output
   mode.
 - Store Decimal-compatible numeric text values as they come from the storage

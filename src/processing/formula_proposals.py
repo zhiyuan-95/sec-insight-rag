@@ -15,7 +15,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
-FORMULA_PROPOSAL_PROMPT_VERSION = "xbrl_formula_proposal_v3"
+FORMULA_PROPOSAL_PROMPT_VERSION = "xbrl_formula_proposal_v4"
 FORMULA_CONTEXT_FINGERPRINT_VERSION = "formula_context_v1"
 FORMULA_PROPOSAL_CACHE_SCHEMA_VERSION = "formula_proposal_cache_v1"
 STATEMENT_BUCKET_CLASSIFIER_VERSION = "statement_bucket_v1"
@@ -130,6 +130,12 @@ class FormulaProposalResponse(BaseModel):
     @classmethod
     def strip_response_text(cls, value: str) -> str:
         return str(value or "").strip()
+
+
+class FormulaProposalBatchResponse(BaseModel):
+    """Structured model response for multiple same-statement targets."""
+
+    proposals: list[FormulaProposalResponse] = Field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -300,6 +306,19 @@ FORMULA_PROPOSAL_RESPONSE_JSON_SCHEMA: dict[str, Any] = {
     },
 }
 
+FORMULA_PROPOSAL_BATCH_RESPONSE_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["proposals"],
+    "properties": {
+        "proposals": {
+            "type": "array",
+            "items": FORMULA_PROPOSAL_RESPONSE_JSON_SCHEMA,
+        },
+    },
+}
+
+
 def provider_unavailable_result(
     *,
     provider_name: str,
@@ -395,6 +414,19 @@ def coerce_formula_proposal_response(payload: object) -> FormulaProposalResponse
     return FormulaProposalResponse.model_validate(payload)
 
 
+def coerce_formula_proposal_batch_response(payload: object) -> FormulaProposalBatchResponse:
+    """Coerce a provider payload into the shared batch proposal schema."""
+    if isinstance(payload, FormulaProposalBatchResponse):
+        return payload
+    if isinstance(payload, BaseModel):
+        payload = payload.model_dump()
+    if isinstance(payload, str):
+        payload = json.loads(_extract_json_text(payload))
+    if not isinstance(payload, dict):
+        raise ValueError("formula proposal batch provider returned a non-object payload")
+    return FormulaProposalBatchResponse.model_validate(payload)
+
+
 def build_formula_proposal_contexts(
     *,
     target: FormulaProposalTarget,
@@ -414,6 +446,7 @@ def build_formula_proposal_contexts(
     unit_compatible_facts = _target_unit_compatible_facts(target=target, facts=eligible_facts)
     if unit_compatible_facts:
         eligible_facts = unit_compatible_facts
+    eligible_facts = _primary_monetary_unit_facts(target=target, facts=eligible_facts)
 
     grouped: dict[tuple[str, str, str, int | None, str, str], list[FormulaProposalFact]] = {}
     for fact in eligible_facts:
@@ -501,6 +534,38 @@ def formula_context_fingerprint(
     return _stable_hash(payload), payload
 
 
+def formula_batch_group_key(context: FormulaProposalContext) -> str:
+    """Return the provider-batch key for same-statement compatible contexts."""
+    context_payload = dict(context.base_fingerprint_payload)
+    context_payload.pop("target_metric_name", None)
+    context_payload.pop("target_xbrl_concept", None)
+    context_payload["target_primary_statement"] = context.target_primary_statement
+    payload = {
+        "batch_group_version": "statement_scoped_formula_batch_v1",
+        "context": context_payload,
+    }
+    return _stable_hash(payload)
+
+
+def formula_batch_context_prompt_payload(
+    *,
+    context: FormulaProposalContext,
+    formula_batch_group_key: str,
+) -> dict[str, object]:
+    """Return context metadata for one same-statement batch prompt."""
+    payload = formula_context_prompt_payload(
+        context=context,
+        formula_context_hash=formula_batch_group_key,
+    )
+    payload["formula_batch_group_key"] = formula_batch_group_key
+    payload["formula_context_hash"] = ""
+    payload["batch_policy"] = {
+        "statement_scope": "All targets in this request share target_primary_statement.",
+        "fan_out": "Return one independent proposal per supplied missing target.",
+    }
+    return payload
+
+
 def _target_unit_compatible_facts(
     *,
     target: FormulaProposalTarget,
@@ -514,6 +579,54 @@ def _target_unit_compatible_facts(
     if unit_family == _UNIT_FAMILY_MONETARY:
         return tuple(fact for fact in facts if _is_monetary_unit(fact.unit))
     return ()
+
+
+def _primary_monetary_unit_facts(
+    *,
+    target: FormulaProposalTarget,
+    facts: tuple[FormulaProposalFact, ...],
+) -> tuple[FormulaProposalFact, ...]:
+    if _target_unit_family(target) != _UNIT_FAMILY_MONETARY:
+        return facts
+
+    grouped: dict[tuple[str, str, int | None, str, str], list[FormulaProposalFact]] = {}
+    for fact in facts:
+        grouped.setdefault(_period_context_without_unit_key(fact), []).append(fact)
+
+    filtered: list[FormulaProposalFact] = []
+    for group_facts in grouped.values():
+        unit_counts: Counter[str] = Counter(
+            _currency_unit_key(fact.unit)
+            for fact in group_facts
+            if _is_monetary_unit(fact.unit)
+        )
+        if len(unit_counts) <= 1:
+            filtered.extend(group_facts)
+            continue
+        primary_unit = min(
+            unit_counts,
+            key=lambda unit: (
+                -unit_counts[unit],
+                0 if unit == "USD" else 1,
+                unit,
+            ),
+        )
+        filtered.extend(
+            fact
+            for fact in group_facts
+            if _currency_unit_key(fact.unit) == primary_unit
+        )
+    return tuple(filtered)
+
+
+def _period_context_without_unit_key(fact: FormulaProposalFact) -> tuple[str, str, int | None, str, str]:
+    return (
+        fact.accession_number.strip(),
+        fact.period_type.strip(),
+        fact.fiscal_year,
+        (fact.fiscal_period or "").strip().upper(),
+        fact.form.strip(),
+    )
 
 
 def _target_unit_family(target: FormulaProposalTarget) -> str:
@@ -539,10 +652,14 @@ def _is_share_unit(unit: str) -> bool:
 
 
 def _is_monetary_unit(unit: str) -> bool:
-    normalized = unit.strip().upper()
+    normalized = _currency_unit_key(unit)
     if "/" in normalized:
         return False
     return normalized in _COMMON_CURRENCY_UNITS
+
+
+def _currency_unit_key(unit: str) -> str:
+    return unit.strip().upper()
 
 
 def formula_context_prompt_payload(

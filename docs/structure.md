@@ -61,7 +61,7 @@ src/ingestion/company.py
   +-- src/storage/industry_labels_repository.py
   |     -> persist reusable company hard-industry labels and evidence
   +-- src/storage/concept_mappings_repository.py
-  |     -> persist candidate, approved, and rejected learned mappings
+  |     -> persist approved learned mappings used by hard mapping
   +-- src/storage/filings_repository.py
   |     -> persist filing inventory and active-window state
   +-- src/storage/metrics_repository.py
@@ -265,8 +265,12 @@ experiments/
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 =======
 - `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 ingestion and mapping examination harness. It covers persistent isolated storage, update checks, active-window evidence, persisted industry labels, target and raw-fact coverage, Inline XBRL extensions, approved learned mappings, report-only LLM formula proposal diagnostics, unknown/alternate tags, financial metric lineage, saved reports, and SQLite/CSV evidence.
+<<<<<<< HEAD
 - `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that saves `experiments/MS2_5/milestone25_mapping_report_<TICKER>.md` without printing the report body. The saved report is a compact Plan 2.5 target mapping report with section 0 compact summary, section 0A distinct selected XBRL concept counts by period for formula generation, section 1 mapped/missing target metric status sorted by metric type with common-base or actual hard-industry labels, and section 3 proposed formula evidence for missing targets split into 10-K and 10-Q active-window subsections. The old Section 2 and Section 4 tables are no longer produced. Section 0A dedupes provider/model calls, uses a yearly 10-K table, and uses a year-by-quarter 10-Q matrix. Section 3 agreement rows collapse only when the full provider/formula decision set is identical across periods. When providers disagree for a period, Section 3 shows separate provider rows instead of putting multiple provider formulas in the same Formula cell; those provider-specific disagreement rows may still collapse across periods when the same provider gives the same formula. Section 3 does not add Target concept, Components, or recommendation columns, and its period context uses compact filing labels such as `2023-2025` for 10-K rows and `2021 q1 - 2021 q3` for 10-Q rows instead of raw period type/unit/form suffixes. 10-Q report labels do not show Q4. Displayed concept values strip taxonomy prefixes such as `us-gaap:` and `custom:`. The compact summary records setup ingestion and unchanged-company reuse durations for performance review evidence. During formula proposal generation, the terminal prints missing-target count, selected missing metrics, period-context progress, and final context totals while still leaving provider-level cache details and the report body out of the terminal. Report-only formula proposal provider calls run by default, use only active 10-K and 10-Q filing-period raw facts, collapse duplicate missing target tags to one missing metric, and group identical raw-concept pools so each provider is called once per metric/pool while the report lists the covered periods. Use `--no-formula-proposals` to skip provider calls, and `--formula-proposals` remains a compatibility no-op. `--full-report` is retained as a compatibility flag and does not append the old diagnostic appendices. The script preserves `experiments/storage/experiment.db`, writes filing downloads under `experiments/storage/filings/`, exports supporting CSVs under `data/exports/ms2_5/`, and stores formula proposal cache entries under `data_store/knowledge/formula_proposals/` unless `KNOWLEDGE_STORAGE_DIR` overrides the location.
 >>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
+=======
+- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that saves `experiments/MS2_5/milestone25_mapping_report_<TICKER>.md` without printing the report body, then prints a one-line report generation duration and saved report path. The saved report is a compact Plan 2.5 target mapping report with section 0 compact summary, section 0A distinct selected XBRL concept counts by period for formula generation, section 1 mapped/missing target metric status sorted by metric type with common-base or actual hard-industry labels, and section 3 proposed formula evidence for missing targets split into 10-K and 10-Q active-window subsections. The old Section 2 and Section 4 tables are no longer produced. Section 0A dedupes provider/model calls, uses a yearly 10-K table, and uses a year-by-quarter 10-Q matrix. Section 3 groups rows by missing metric, statement, and displayed formula so identical recommended formulas can collapse across periods and provider/model results even when the providers cite different component or zero-evidence details. Section 3 also adds a compact provider-outcome table under a form only when a target/context/model returns `no_formula`, `provider_unavailable`, or `provider_failed`, so missing recommendation coverage stays visible without restoring the old full provider diagnostics. The `LLM result count` column counts distinct target/context/model formula results supporting the displayed formula; it does not count period labels expanded from one result. Section 3 does not add Target concept, Components, or recommendation columns, and its period context uses compact filing labels such as `2023-2025` for 10-K rows and `2021 q1 - 2021 q3` for 10-Q rows instead of raw period type/unit/form suffixes. 10-Q report labels do not show Q4. Displayed concept values strip taxonomy prefixes such as `us-gaap:` and `custom:`. The compact summary records setup ingestion and unchanged-company reuse durations for performance review evidence. During formula proposal generation, the terminal prints missing-target count, selected missing metrics, statement-scoped context progress, batch context progress, and final context totals while still leaving provider-level cache details and the report body out of the terminal. Report-only formula proposal provider calls run by default, use only active 10-K and 10-Q filing-period raw facts, keep only the primary monetary unit per filing period for monetary targets, collapse duplicate missing target tags to one missing metric, load exact per-target cache entries before new calls, and batch uncached targets only when they share the same statement group and compatible raw-concept context. Use `--no-formula-proposals` to skip provider calls, and `--formula-proposals` remains a compatibility no-op. `--full-report` is retained as a compatibility flag and does not append the old diagnostic appendices. The script preserves `experiments/storage/experiment.db`, writes filing downloads under `experiments/storage/filings/`, exports supporting CSVs under `data/exports/ms2_5/`, and stores formula proposal cache entries under `data_store/knowledge/formula_proposals/` unless `KNOWLEDGE_STORAGE_DIR` overrides the location.
+>>>>>>> 007dd04 (Refine evidence report generation and normalization)
 - `experiments/MS3/experiment_proposal.md`: Human-inspection proposal for the Milestone 3 indicator engine experiment. It defines active accession-window scope, yearly and quarterly indicator tables for the requested catalog, skipped-period reasons, formulas, and source-metric traceability output.
 - `experiments/MS3/milestone3_indicator_engine.py`: Runnable Milestone 3 experiment script that reads stored `financial_indicators` and writes a `.txt` report under `experiments/MS3` with active accession-window scope, yearly and quarterly indicator tables for the requested ticker or tickers, skipped reasons, formulas, and source traceability.
 - `experiments/MS4/experiment_proposal.md`: Human-inspection proposal for the Milestone 4 deterministic financial analytics experiment. It defines trend, comparison, gap, outlier, and chart-ready output.
@@ -399,7 +403,7 @@ Current files:
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
 =======
 - `mapping_targets.py`: Builds canonical target definitions and missing-target checks for hard-mapping coverage.
-- `formula_proposals.py`: Builds target-unit-compatible, statement-bucketed raw fact contexts for report-only LLM formula proposals, collapses identical period raw-concept pools into one provider context with period coverage, computes exact reusable formula context fingerprints, normalizes provider responses, caches successful structured formula, zero-target, or no-formula decisions, and deterministically validates formula components or cited zero-evidence facts against a representative same-period raw XBRL fact pool.
+- `formula_proposals.py`: Builds target-unit-compatible, statement-bucketed raw fact contexts for report-only LLM formula proposals, keeps only the primary monetary unit per filing period for monetary targets while preserving all raw units in storage/export evidence, collapses identical period raw-concept pools into one provider context with period coverage, computes exact reusable formula context fingerprints and statement-scoped batch keys, normalizes single-target and batch provider responses, caches successful structured formula, zero-target, or no-formula decisions per target/context/provider, and deterministically validates formula components or cited zero-evidence facts against a representative same-period raw XBRL fact pool.
 - `metric_coverage.py`: Collapses tag-level target coverage and formula/zero diagnostics into one metric-level review surface. It does not approve mappings, persist recovered values, or feed indicators.
 >>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
 - `active_window.py`: Selects the active analysis window: latest 5 fiscal years of 10-K data and latest 12 quarters of 10-Q data.
@@ -447,12 +451,23 @@ Key responsibilities:
 - Validate report-only LLM formula proposals for all unresolved targets against
   period-scoped raw XBRL fact pools, including found target facts, mapped
   metrics, approved alternates, and unknown/unmapped facts. The MS2.5 report
+<<<<<<< HEAD
   sends active target-unit-compatible contexts to the provider panel, reuses
   exact provider results when the target/model/raw-concept pool is identical
   across periods, keeps the full eligible fact pool visible as evidence, and
   shows target primary statement, period context, cache status, provider output,
   component or zero-evidence facts, and deterministic validation status.
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
+=======
+  sends active target-unit-compatible contexts to the provider panel, suppresses
+  secondary monetary currencies from provider contexts when a filing period has
+  a primary monetary unit, reuses exact provider results when the target/model/raw-concept pool is identical
+  across periods, batches uncached provider calls only within the same target
+  statement group and compatible raw-concept context, keeps the full eligible
+  fact pool visible as evidence, and shows target primary statement, period
+  context, cache status, provider output, component or zero-evidence facts, and
+  deterministic validation status.
+>>>>>>> 007dd04 (Refine evidence report generation and normalization)
 - Produce report-only debt recovery diagnostics for missing `debt_current` and
   `debt_noncurrent` from already mapped component metrics, while keeping
   recovered values out of `financial_metrics` and indicators.
@@ -562,8 +577,8 @@ LLM/RAG reasoning layer.
 Current files:
 
 - `industry_classification.py`: Gemini-backed hard-industry classifier for 10-K Item 1 Business, with strict label validation, high-confidence label keeping, and low-confidence label ignoring.
-- `xbrl_formula_proposals.py`: Provider orchestration for report-only missing-target formula proposals through Gemini and OpenAI `gpt-4.1-mini`; provider failures are reported rather than persisted.
-- `prompts.py`: Prompt templates, including the hard-industry classification prompt and statement-first period-scoped XBRL formula proposal prompt.
+- `xbrl_formula_proposals.py`: Provider orchestration for report-only missing-target formula proposals through Gemini and OpenAI `gpt-4.1-mini`; it supports single-target calls and statement-scoped batch calls, and provider failures are reported rather than persisted.
+- `prompts.py`: Prompt templates, including the hard-industry classification prompt and statement-first single-target and statement-scoped batch XBRL formula proposal prompts.
 - `__init__.py`: Package marker.
 
 Current status:
@@ -590,8 +605,14 @@ Current status:
   Formula proposal prompts use
   representative target-unit-compatible period contexts, statement-first
   component selection, optional evidence-backed zero-target decisions, and
+<<<<<<< HEAD
   exact context cache reuse for successful structured decisions.
 >>>>>>> 22949cb (Remove obsolete milestone 2.5 artifacts)
+=======
+  exact context cache reuse for successful structured decisions. Batch prompts
+  may ask for multiple missing targets together only when they share the same
+  target statement group and compatible raw-concept context.
+>>>>>>> 007dd04 (Refine evidence report generation and normalization)
 - Gemini/RAG answer synthesis is not implemented yet.
 
 Planned responsibilities:

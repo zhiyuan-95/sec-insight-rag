@@ -5,7 +5,7 @@ from __future__ import annotations
 from src.processing.company_industry_labels import HARD_INDUSTRY_LABELS
 
 INDUSTRY_CLASSIFICATION_PROMPT_VERSION = "industry_classification_v1"
-XBRL_FORMULA_PROPOSAL_PROMPT_VERSION = "xbrl_formula_proposal_v3"
+XBRL_FORMULA_PROPOSAL_PROMPT_VERSION = "xbrl_formula_proposal_v4"
 
 
 def build_industry_classification_prompt(
@@ -131,6 +131,93 @@ Company:
 
 Missing target:
 {target_json}
+
+Formula proposal context:
+{context_json}
+
+Eligible same-period raw SEC/XBRL fact pool:
+{facts_json}
+"""
+
+
+def build_xbrl_formula_proposal_batch_prompt(
+    *,
+    ticker: str,
+    cik: str,
+    targets: list[dict[str, object]],
+    fact_pool: list[dict[str, object]],
+    formula_context: dict[str, object] | None = None,
+) -> str:
+    """Build the prompt for multiple same-statement missing-target proposals."""
+    targets_json = _json_block(targets)
+    context_json = _json_block(formula_context or {})
+    facts_json = _json_block(fact_pool)
+    return f"""You are proposing report-only XBRL decisions for multiple missing target financial metrics.
+
+The system has already tried hard mapping. Your task is not to approve mappings.
+Your task is to decide, independently for each supplied missing target, whether
+the target can be composed from raw XBRL facts already observed for this company
+in the supplied same-period context, whether the target may reasonably be zero
+from other same-period evidence, or whether neither decision is supported.
+
+Batch scope:
+- Every missing target in this request belongs to the same target_primary_statement shown in the context.
+- Do not mix accounting logic across statement groups. Treat this as one statement-scoped batch only.
+- Return exactly one proposal for every supplied missing target and no proposals for targets not supplied.
+- Echo each target_metric_name and target_xbrl_concept exactly as supplied.
+- Each proposal must stand alone; do not make one target's formula depend on another missing target in this batch.
+
+Rules:
+- Use only raw SEC/XBRL facts listed in the eligible same-period fact pool.
+- Components may be found target facts, mapped base metric facts, approved alternates, or unknown/unmapped raw facts.
+- Do not use any supplied missing target itself as a component.
+- Prefer consolidated company-level facts over dimensional or segment facts.
+- All listed facts are from the period context shown below; do not mix in facts from another period.
+- Clearly reason from the target_primary_statement.
+- First try to build each formula using same_statement facts from that primary statement.
+- If same_statement facts are insufficient, you may use unclassified_same_period facts.
+- Use cross_statement facts only when no credible same-statement formula exists.
+- If you use a cross_statement fact, explain why the cross-statement reference is accounting-valid in the component role or reason.
+- Reference XBRL calculation/presentation logic when the listed concepts imply it; otherwise use common US GAAP presentation logic.
+- Do not invent concepts, values, units, or facts.
+- If the fact pool supports a credible formula, set no_formula to false, target_is_zero to false, and return formula components.
+- If a missing target is reasonably zero from affirmative same-period evidence, set no_formula to false, target_is_zero to true, set formula_expression to "target = 0", and cite the supporting raw facts in components as zero evidence.
+- Do not infer zero only because the target fact is missing. The supplied raw facts must provide affirmative evidence for a zero-target decision.
+- If neither a credible formula nor an evidence-backed zero-target decision is supported for a target, set no_formula to true and target_is_zero to false for that target.
+- Return JSON only. Do not include Markdown.
+
+Return JSON matching this schema:
+{{
+  "proposals": [
+    {{
+      "no_formula": false,
+      "target_is_zero": false,
+      "target_metric_name": "exact internal metric name from supplied targets",
+      "target_xbrl_concept": "exact taxonomy:Concept from supplied targets",
+      "formula_expression": "target = + us-gaap:ComponentA - custom:ComponentB",
+      "components": [
+        {{
+          "component_name": "plain English component name",
+          "taxonomy": "us-gaap",
+          "concept": "ComponentA",
+          "operator": "+",
+          "role": "why this component is part of the target",
+          "reason": "short evidence-based reason"
+        }}
+      ],
+      "confidence": 0.0,
+      "reason": "short accounting/XBRL explanation grounded only in the fact pool",
+      "uncertainty": "what could be wrong or what needs review"
+    }}
+  ]
+}}
+
+Company:
+- ticker: {ticker}
+- cik: {cik}
+
+Missing targets:
+{targets_json}
 
 Formula proposal context:
 {context_json}

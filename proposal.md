@@ -50,6 +50,7 @@ src/
    * Select target XBRL concept sets from common base candidates plus the industry-specific candidates for the company's approved hard labels.
    * Map selected raw XBRL facts into business-friendly base metrics grouped by financial statement type.
 <<<<<<< HEAD
+<<<<<<< HEAD
    * Run direct mapping from deterministic catalog entries and approved learned mappings only.
    * Do not generate model-similarity mapping candidates; only approved global, industry, or company-scoped mappings can populate base metrics.
 =======
@@ -57,6 +58,11 @@ src/
    * Store semantic matches as review-only candidates; only approved global, industry, or company-scoped mappings can populate base metrics.
    * Resolve unresolved mapping coverage at the internal-metric level before review, so an LLM or reviewer chooses among a semantic candidate, a formula from raw concepts, a zero-target decision, or no evidence for one metric at a time.
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
+=======
+   * Run deterministic catalog mapping through catalog entries and approved global, industry, or company-scoped learned mappings.
+   * Keep unresolved target coverage explicit instead of inferring a raw-concept mapping from similarity.
+   * Generate report-only formula, zero-target, or no-evidence diagnostics from active-window raw facts for unresolved metrics; these diagnostics must not populate base metrics or approve mappings.
+>>>>>>> 007dd04 (Refine evidence report generation and normalization)
    * Reuse an approved company concept profile on later ingestions when it still covers the required target metrics.
    * Preserve traceability from each base metric back to the source raw XBRL fact and filing.
 4. Derived indicator calculation
@@ -159,7 +165,7 @@ Use local storage for the MVP:
    * Filing metadata
    * Raw XBRL facts
    * Reusable company hard industry labels and label evidence
-   * Governed XBRL concept mapping candidates, approvals, and rejections
+   * Approved global, industry, and company-scoped XBRL concept mappings
    * Base financial metrics mapped from raw XBRL facts
    * Derived indicators
    * Financial data analysis results
@@ -172,7 +178,10 @@ Use local storage for the MVP:
 
    * Keep canonical filing chunks and source lineage in SQLite.
    * Use LlamaIndex-compatible local vector and keyword indexes as rebuildable retrieval artifacts for the MVP.
+<<<<<<< HEAD
    * Cache report-only formula proposal contexts and provider results for unresolved target metrics when that diagnostic panel is enabled.
+=======
+>>>>>>> 007dd04 (Refine evidence report generation and normalization)
 3. File storage
 
    * Save downloaded filings under the configured filings directory.
@@ -259,6 +268,7 @@ Example distinction:
    * Map selected raw XBRL facts into business-friendly base metrics by statement type through deterministic catalog entries and approved learned mappings.
    * Derive and reuse an approved company concept profile from approved global, industry, and company-scoped mappings.
 <<<<<<< HEAD
+<<<<<<< HEAD
    * Leave unresolved targets as missing for base metrics; LLM formula proposal evidence remains report-only.
    * Do not create model-generated mapping candidates or promote formula proposals into base metrics.
 =======
@@ -266,6 +276,11 @@ Example distinction:
    * Store semantic mapping candidates separately from approved mapping decisions; candidates must not create base metrics.
    * Present missing coverage as one internal-metric resolution choice rather than separate decisions for each target tag.
 >>>>>>> d0cfc84 (Refine SEC Insight RAG analysis and reporting)
+=======
+   * Keep unresolved target XBRL concepts explicit after deterministic and approved learned mapping.
+   * Generate report-only formula, zero-target, or no-evidence diagnostics from period-scoped active-window raw fact pools for unresolved metrics.
+   * Present missing coverage as one internal-metric review surface rather than separate decisions for each target tag; report-only LLM diagnostics must not create base metrics or approve mappings.
+>>>>>>> 007dd04 (Refine evidence report generation and normalization)
    * Preserve links from each base metric back to the source filing and raw XBRL fact.
    * Do not calculate derived indicators in this milestone.
 3. Indicator engine
@@ -320,8 +335,13 @@ Example distinction:
 * Hard industry label reuse, annual reclassification on a newer 10-K, and common-base fallback when Gemini labels are unavailable, invalid, or low confidence
 * Target XBRL concept selection from common base plus approved hard industry labels
 * Approved company concept profile reuse and staleness triggers
+<<<<<<< HEAD
 * Approved learned mapping reuse
 * Rejection of model-generated formula or mapping diagnostics as metric sources until a mapping is explicitly approved
+=======
+* Canonical missing-target detection through deterministic and approved learned mappings
+* Rejection of report-only formula and zero-target diagnostics as stored metric sources
+>>>>>>> 007dd04 (Refine evidence report generation and normalization)
 * Company, filing, and base metric repository behavior
 * Raw XBRL fact to base metric mapping
 * Derived indicator formulas, skipped reasons, source lineage, and persistence
@@ -337,7 +357,11 @@ Example distinction:
 * Ingest one known ticker from saved SEC fixtures.
 * Store normalized facts, filing metadata, hard industry labels, base metrics, and indicators in SQLite.
 * With mocked Gemini output, confirm high-confidence labels change target concept selection and low-confidence output falls back to common-base targets.
+<<<<<<< HEAD
 * Confirm an approved company concept profile can be reused when target coverage remains intact.
+=======
+* Confirm an approved company concept profile can be reused without unresolved-target provider calls when target coverage remains intact.
+>>>>>>> 007dd04 (Refine evidence report generation and normalization)
 * Generate financial data analysis results from stored facts and indicators.
 * Build, reuse, and safely replace retrieval generations while preserving the last complete generation after failures.
 * Retrieve fused vector and BM25 evidence whose chunk IDs and lineage match canonical SQLite rows.
@@ -346,7 +370,11 @@ Example distinction:
 
 **Manual acceptance tests**:
 
+<<<<<<< HEAD
 * Run the MS2.5 experiment and inspect target metric mapping status, approved learned mapping reuse, XBRL concept counts provided to formula generation, and proposed formula rows for unresolved targets.
+=======
+* Run the MS2.5 experiment and inspect label source, target XBRL concept coverage, approved company concept profile reuse, unknown concepts, annual/quarterly mapped metric tables, and report-only formula/zero diagnostics.
+>>>>>>> 007dd04 (Refine evidence report generation and normalization)
 * Run the MS3 experiment and inspect yearly and quarterly derived indicator tables with skipped reasons and source metric lineage.
 * Run the MS5 retrieval experiment and inspect active filing coverage, chunk lineage, generation state, and retrieved evidence.
 * Start the FastAPI backend.
@@ -381,8 +409,13 @@ The MVP is successful if it can:
 2. Store broad raw XBRL facts separately from mapped base financial metrics.
 3. Store company metadata, filing metadata, approved hard industry labels, and base financial metrics with source traceability.
 4. Select target XBRL concepts from common base plus approved hard industry labels.
+<<<<<<< HEAD
 5. Reuse approved company concept profiles for normal refreshes and review the profile when it is incomplete or stale.
 6. Keep formula proposal evidence report-only until a mapping is explicitly approved.
+=======
+5. Reuse approved company concept profiles for normal refreshes and keep incomplete target coverage explicit.
+6. Keep LLM formula and zero-target diagnostics report-only and out of stored base metrics and approved mappings.
+>>>>>>> 007dd04 (Refine evidence report generation and normalization)
 7. Calculate and store useful financial indicators.
 8. Run deterministic financial data analysis over raw facts and derived indicators.
 9. Export raw facts and derived indicators as CSV.
@@ -405,7 +438,11 @@ The first version will not include:
 * Investment recommendations
 * Automatic buy/sell ratings
 * Non-GAAP reconciliation beyond what is clearly available from filings
+<<<<<<< HEAD
 * Automatic approval of model-proposed XBRL concept mappings without review
+=======
+* Automatic approval of LLM-proposed XBRL mappings or formulas
+>>>>>>> 007dd04 (Refine evidence report generation and normalization)
 * A broader industry taxonomy beyond the fixed hard industry label set
 
 ### Deferred indicator extensions
