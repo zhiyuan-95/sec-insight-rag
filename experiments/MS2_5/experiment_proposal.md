@@ -83,14 +83,17 @@ This experiment covers:
   statement-first prompting, active-period context coverage, exact-context
   cache reuse for identical target/model/raw-concept pools, and statement-scoped
   batch provider calls for uncached missing targets with compatible raw-concept
-  contexts
+  contexts; deterministic validation uses actual fact dates inside comparative
+  filings, prefers undimensioned facts when dimensional variants coexist, and
+  rejects truly ambiguous same-date duplicates
 - report-only debt recovery diagnostics for missing `debt_current` and
   `debt_noncurrent`, including component statuses, assumed-zero components,
   skip reasons, formula versions, and source metric/raw fact IDs
 - saved Plan 2.5 target mapping report with a compact summary, mapped/missing
   target metric status with common-base versus industry-special classification,
   and proposed formula rows split into 10-K and 10-Q active-window subsections
-  with taxonomy prefixes removed from displayed concept values
+  with taxonomy prefixes removed from displayed concept values and explicit
+  period coverage for each provider on a grouped formula row
 
 This experiment does not cover derived indicators, deterministic analytics,
 retrieval indexes, Gemini calls, RAG answers, frontend behavior, durable
@@ -208,7 +211,8 @@ Rules:
 - the report body is not printed to the terminal
 - while formula proposals run, the terminal prints process progress: how many
   missing targets were selected, which missing metric/statement is being
-  handled, each statement-scoped context, each batch context, and the final
+  handled, total model outcomes and provider-context slots, each provider's
+  reused and live workload, each numbered live batch request, and the final
   context count
 - `--full-report` is accepted for compatibility; it does not add old
   target-level, provider-level, raw-fact, or unknown-concept appendices

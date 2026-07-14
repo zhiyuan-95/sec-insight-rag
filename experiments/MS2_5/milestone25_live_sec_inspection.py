@@ -156,6 +156,7 @@ PRESENTATION_NUMBER_EXCLUDED_HEADERS = {
     "filing_id",
     "fiscal_period",
     "fiscal_year",
+    "year",
     "frame",
     "id",
     "local_path",
@@ -180,6 +181,7 @@ PRESENTATION_NUMBER_EXCLUDED_HEADERS = {
 }
 MARKDOWN_FULL_TEXT_HEADERS = {
     "concepts provided",
+    "provider period coverage",
 }
 PRESENTATION_NUMBER_SUFFIXES = (
     (Decimal("1000000000000"), "T"),
@@ -1125,12 +1127,45 @@ def _formula_proposal_snapshot(
                 work_item
             )
 
+    if assignments:
+        total_model_outcomes = len(assignments) * len(provider_configs)
+        total_provider_context_slots = len(statement_batch_keys) * len(provider_configs)
+        live_batch_request_count = len(uncached_groups)
+        resolved_without_live_call_count = (
+            total_provider_context_slots - live_batch_request_count
+        )
+        _formula_progress(
+            progress,
+            "Formula proposal workload: "
+            f"{total_model_outcomes} model outcome(s); "
+            f"{total_provider_context_slots} provider-context batch slot(s): "
+            f"{resolved_without_live_call_count} resolved without a live call, "
+            f"{live_batch_request_count} live batch request(s).",
+        )
+        for provider_index, provider in enumerate(provider_configs):
+            reused_outcome_count = sum(
+                assignment_results[assignment_index][provider_index] is not None
+                for assignment_index in range(len(assignments))
+            )
+            provider_live_batch_count = sum(
+                group_provider_index == provider_index
+                for group_provider_index, _ in uncached_groups
+            )
+            _formula_progress(
+                progress,
+                f"Provider workload {provider.provider_name}/{provider.model_name}: "
+                f"{len(assignments)} model outcome(s); "
+                f"{reused_outcome_count} reused before live calls; "
+                f"{len(assignments) - reused_outcome_count} to generate across "
+                f"{provider_live_batch_count} live batch request(s).",
+            )
+
     for batch_index, ((provider_index, batch_key), work_items) in enumerate(uncached_groups.items(), start=1):
         provider = provider_configs[provider_index]
         representative = assignments[work_items[0].assignment_index]
         _formula_progress(
             progress,
-            f"  Batch context {batch_index}/{len(uncached_groups)}: "
+            f"  Live batch request {batch_index}/{len(uncached_groups)}: "
             f"{representative.context.target_primary_statement}; "
             f"{_formula_context_progress_label(representative.context)}; "
             f"{len(work_items)} target(s); provider {provider.provider_name}/{provider.model_name}.",
@@ -1539,6 +1574,7 @@ def _formula_proposal_fact_pool(
             f.fiscal_period,
             f.start_date,
             f.end_date,
+            COALESCE(f.dimensions_json, '[]') AS dimensions_json,
             COALESCE(NULLIF(active.form_type, ''), f.form) AS form,
             COALESCE(NULLIF(active.filing_date, ''), f.filed_date) AS filed_date,
             f.accession_number,
@@ -1584,6 +1620,7 @@ def _formula_proposal_fact_pool(
                 start_date=_date_from_text(row.get("start_date")),
                 end_date=_date_from_text(row.get("end_date")),
                 filed_date=_date_from_text(row.get("filed_date")),
+                has_dimensions=_formula_fact_has_dimensions(row.get("dimensions_json")),
                 mapping_status=_formula_fact_mapping_status(
                     taxonomy=taxonomy,
                     concept=concept,
@@ -1596,6 +1633,17 @@ def _formula_proposal_fact_pool(
             )
         )
     return tuple(facts)
+
+
+def _formula_fact_has_dimensions(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    try:
+        dimensions = json.loads(text)
+    except json.JSONDecodeError:
+        return True
+    return bool(dimensions)
 
 
 def _formula_fact_mapping_status(
@@ -3728,9 +3776,14 @@ def _proposed_formula_rows_for_missing_targets(
                     "metric": metric,
                     "statement": statement,
                     "period_labels": [],
+                    "provider_period_labels": {},
                     "recommendations": [],
                 }
             grouped[key]["period_labels"].append(period_label)
+            grouped[key]["provider_period_labels"].setdefault(
+                recommendation["provider"],
+                [],
+            ).append(period_label)
             grouped[key]["recommendations"].append(recommendation)
 
     rows.extend(
@@ -4219,6 +4272,10 @@ def _formula_report_row_from_period_group(
             form_type=form_type,
         ),
         "Providers": _join_unique_texts(recommendation["provider"] for recommendation in recommendations),
+        "Provider period coverage": _format_formula_provider_period_coverage(
+            group["provider_period_labels"],
+            form_type=form_type,
+        ),
         "LLM result count": _formula_recommendation_support_count(recommendations),
         "Formula": _format_formula_recommendation_field(
             recommendations,
@@ -4231,6 +4288,18 @@ def _formula_report_row_from_period_group(
         "Confidence": _join_unique_texts(recommendation["confidence"] for recommendation in recommendations),
         "Reason": _join_unique_texts(recommendation["reason"] for recommendation in recommendations),
     }
+
+
+def _format_formula_provider_period_coverage(
+    period_labels_by_provider: dict[str, list[str]],
+    *,
+    form_type: str,
+) -> str:
+    return "; ".join(
+        f"{provider}: "
+        f"{_format_formula_period_labels_for_report(period_labels, form_type=form_type)}"
+        for provider, period_labels in period_labels_by_provider.items()
+    )
 
 
 def _formula_recommendation_support_count(recommendations: Sequence[dict[str, str]]) -> int:

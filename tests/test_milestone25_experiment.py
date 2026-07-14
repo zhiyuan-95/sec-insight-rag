@@ -62,7 +62,10 @@ def _assert_formula_progress_output(output: str) -> None:
     assert "Handling missing target" not in output
     assert "Prepared context" not in output
     assert "target-context assignment(s) across" in output
-    assert "Batch context 1/" in output
+    assert "Formula proposal workload:" in output
+    assert "provider-context batch slot(s)" in output
+    assert "Provider workload" in output
+    assert "Live batch request 1/" in output
     assert "Formula proposal generation complete:" in output
     _assert_report_generation_output(output)
     assert "reused cached recommendation" not in output
@@ -180,6 +183,9 @@ def test_milestone25_formula_rows_collapse_same_recommended_components() -> None
             "Statement": "balance_sheet",
             "Period context": "2024-2025",
             "Providers": "gemini-2.5-flash; gpt-4.1-mini",
+            "Provider period coverage": (
+                "gemini-2.5-flash: 2024-2025; gpt-4.1-mini: 2024-2025"
+            ),
             "LLM result count": 4,
             "Formula": "debt_current = LongTermDebtCurrent",
             "Validation status": "validated_component_pool",
@@ -196,6 +202,10 @@ def test_milestone25_formula_rows_collapse_same_recommended_components() -> None
                 "2024 q1 - 2024 q3, 2025 q1 - 2025 q3"
             ),
             "Providers": "gemini-2.5-flash",
+            "Provider period coverage": (
+                "gemini-2.5-flash: 2021 q1 - 2021 q3, 2022 q1 - 2022 q3, "
+                "2023 q1 - 2023 q3, 2024 q1 - 2024 q3, 2025 q1 - 2025 q3"
+            ),
             "LLM result count": 1,
             "Formula": "debt_current = LongTermDebtCurrent",
             "Validation status": "validated_component_pool",
@@ -349,12 +359,17 @@ def test_milestone25_formula_rows_do_not_overlap_when_provider_periods_disagree(
     ]
     assert "2021-2024" not in [row["Period context"] for row in formula_rows]
     assert formula_rows[0]["Providers"] == "gemini-2.5-flash"
+    assert formula_rows[0]["Provider period coverage"] == "gemini-2.5-flash: 2024-2025"
     assert formula_rows[0]["LLM result count"] == 2
     assert formula_rows[0]["Formula"] == "debt_current = LongTermDebtCurrent + CommercialPaper"
     assert formula_rows[1]["Providers"] == "gpt-4.1-mini"
+    assert formula_rows[1]["Provider period coverage"] == "gpt-4.1-mini: 2025"
     assert formula_rows[1]["LLM result count"] == 1
     assert formula_rows[1]["Formula"] == "debt_current = LongTermDebtCurrent + OtherLiabilitiesCurrent"
     assert formula_rows[2]["Providers"] == "gpt-4.1-mini; gemini-2.5-flash"
+    assert formula_rows[2]["Provider period coverage"] == (
+        "gpt-4.1-mini: 2022-2024; gemini-2.5-flash: 2022-2023"
+    )
     assert formula_rows[2]["LLM result count"] == 5
     assert formula_rows[2]["Formula"] == "debt_current = LongTermDebtCurrent"
     assert all("Components" not in row for row in formula_rows)
@@ -417,6 +432,9 @@ def test_milestone25_formula_rows_group_same_zero_formula_with_different_evidenc
             "Statement": "cash_flow_statement",
             "Period context": "2024-2025",
             "Providers": "gemini-2.5-flash; gpt-4.1-mini",
+            "Provider period coverage": (
+                "gemini-2.5-flash: 2025; gpt-4.1-mini: 2024"
+            ),
             "LLM result count": 2,
             "Formula": "capital_expenditure = 0",
             "Validation status": "validation_failed",
@@ -1075,6 +1093,40 @@ def test_milestone25_markdown_table_keeps_period_context_as_label() -> None:
     ]
 
 
+def test_milestone25_markdown_table_keeps_year_as_literal_period_label() -> None:
+    experiment = _load_experiment_module()
+
+    lines = experiment._markdown_table(
+        [
+            {
+                "Year": "2021",
+                "# of concepts provided": 134,
+            },
+            {
+                "Year": "2025",
+                "# of concepts provided": 128,
+            },
+        ]
+    )
+    table = "\n".join(lines)
+
+    assert "2021" in table
+    assert "2025" in table
+    assert "2.02K" not in table
+    assert "2.03K" not in table
+
+
+def test_milestone25_formula_fact_dimension_detection() -> None:
+    experiment = _load_experiment_module()
+
+    assert experiment._formula_fact_has_dimensions("[]") is False
+    assert experiment._formula_fact_has_dimensions("") is False
+    assert experiment._formula_fact_has_dimensions(
+        '[["us-gaap:DebtTypeAxis", "us-gaap:CommercialPaperMember"]]'
+    ) is True
+    assert experiment._formula_fact_has_dimensions("not-json") is True
+
+
 def test_milestone25_formula_proposal_targets_collapse_missing_tags_by_metric() -> None:
     experiment = _load_experiment_module()
 
@@ -1716,6 +1768,109 @@ def test_milestone25_formula_proposals_exclude_cached_targets_from_batch(
     }
     assert rows_by_metric["current_assets"]["cache_status"] == "reused_exact_context"
     assert rows_by_metric["current_liabilities"]["cache_status"] == "generated_new"
+
+
+def test_milestone25_formula_progress_distinguishes_cached_provider_from_live_batches(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    experiment = _load_experiment_module()
+    db_path = tmp_path / "experiment.db"
+    target_rows = _formula_batch_target_rows(experiment)[:2]
+    settings = SimpleNamespace(knowledge_storage_dir=tmp_path / "knowledge")
+    progress: list[str] = []
+    cached_provider = SimpleNamespace(
+        provider_name="fake_provider",
+        model_name="cached_model",
+        api_key="test",
+    )
+    live_provider = SimpleNamespace(
+        provider_name="fake_provider",
+        model_name="live_model",
+        api_key="test",
+    )
+
+    with connect_sqlite(db_path) as connection:
+        company_id = _seed_formula_batch_company(connection)
+        fact_pool = experiment._formula_proposal_fact_pool(
+            connection,
+            company_id=company_id,
+            cik="0000000001",
+            target_raw_fact_coverage=target_rows,
+        )
+        targets = experiment._formula_proposal_targets(target_rows, target_limit=None)
+        for target in targets:
+            context = experiment.build_formula_proposal_contexts(
+                target=target,
+                fact_pool=fact_pool,
+            )[0]
+            formula_hash, fingerprint_payload = experiment.formula_context_fingerprint(
+                target=target,
+                context=context,
+                provider_name=cached_provider.provider_name,
+                model_name=cached_provider.model_name,
+            )
+            experiment.save_formula_proposal_cache(
+                cache_dir=experiment._formula_proposal_cache_dir(settings),
+                formula_context_hash=formula_hash,
+                fingerprint_payload=fingerprint_payload,
+                result=_formula_provider_result(
+                    provider=cached_provider,
+                    target=target,
+                    component_concept="CashAndCashEquivalentsAtCarryingValue",
+                ),
+            )
+
+        monkeypatch.setattr(
+            experiment,
+            "_formula_proposal_provider_configs",
+            lambda settings: (cached_provider, live_provider),
+        )
+
+        def fake_generate_formula_proposal_batch(*, targets, provider, **kwargs):
+            return tuple(
+                _formula_provider_result(
+                    provider=provider,
+                    target=target,
+                    component_concept="CashAndCashEquivalentsAtCarryingValue",
+                )
+                for target in targets
+            )
+
+        monkeypatch.setattr(
+            experiment,
+            "generate_formula_proposal_batch",
+            fake_generate_formula_proposal_batch,
+        )
+
+        experiment._formula_proposal_snapshot(
+            connection,
+            ticker="TEST",
+            cik="0000000001",
+            company_id=company_id,
+            target_raw_fact_coverage=target_rows,
+            enabled=True,
+            settings=settings,
+            target_limit=None,
+            progress=progress.append,
+        )
+
+    output = "\n".join(progress)
+    assert (
+        "Formula proposal workload: 4 model outcome(s); "
+        "2 provider-context batch slot(s): 1 resolved without a live call, "
+        "1 live batch request(s)."
+    ) in output
+    assert (
+        "Provider workload fake_provider/cached_model: 2 model outcome(s); "
+        "2 reused before live calls; 0 to generate across 0 live batch request(s)."
+    ) in output
+    assert (
+        "Provider workload fake_provider/live_model: 2 model outcome(s); "
+        "0 reused before live calls; 2 to generate across 1 live batch request(s)."
+    ) in output
+    assert "Live batch request 1/1:" in output
+    assert "Batch context 1/1:" not in output
 
 
 def test_milestone25_formula_proposal_fact_pool_uses_active_filing_periods_only(

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-from decimal import Decimal
 import json
+from datetime import date
+from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -25,6 +26,7 @@ from src.processing.formula_proposals import (
     STATEMENT_RELATIONSHIP_SAME,
     VALIDATION_SKIP_CIRCULAR_COMPONENT,
     VALIDATION_SKIP_CROSS_STATEMENT_EXPLANATION,
+    VALIDATION_SKIP_DUPLICATE_FACTS,
     VALIDATION_SKIP_OUTSIDE_FACT_POOL,
     VALIDATION_SKIP_ZERO_TARGET_NO_EVIDENCE,
     VALIDATION_STATUS_FAILED,
@@ -174,6 +176,66 @@ def test_formula_proposal_validator_allows_found_target_fact_components() -> Non
     assert validation.skip_reason == ""
     assert validation.matched_raw_fact_ids == (1, 2)
     assert validation.common_period_units == ("2025 FY instant USD",)
+
+
+def test_formula_proposal_validator_uses_actual_dates_and_prefers_dimensionless_facts() -> None:
+    target = _target("DebtCurrent", "debt_current")
+    proposal = _proposal(
+        components=(
+            _component("LongTermDebtCurrent", "current debt"),
+            _component("CommercialPaper", "short-term borrowing"),
+        )
+    )
+    prior_period = date(2025, 9, 27)
+    current_period = date(2026, 3, 28)
+    facts = (
+        _fact("LongTermDebtCurrent", 1, end_date=prior_period),
+        _fact("LongTermDebtCurrent", 2, end_date=current_period),
+        _fact("CommercialPaper", 3, end_date=prior_period),
+        _fact("CommercialPaper", 4, end_date=prior_period, has_dimensions=True),
+        _fact("CommercialPaper", 5, end_date=current_period),
+        _fact("CommercialPaper", 6, end_date=current_period, has_dimensions=True),
+    )
+
+    validation = validate_formula_proposal(
+        target=target,
+        proposal=proposal,
+        fact_pool=facts,
+    )
+
+    assert validation.validation_status == VALIDATION_STATUS_VALIDATED
+    assert validation.skip_reason == ""
+    assert validation.matched_raw_fact_ids == (1, 2, 3, 5)
+    assert validation.common_period_units == (
+        "2025-09-27 instant USD",
+        "2026-03-28 instant USD",
+    )
+
+
+def test_formula_proposal_validator_rejects_true_same_date_dimensionless_duplicates() -> None:
+    target = _target("DebtCurrent", "debt_current")
+    proposal = _proposal(
+        components=(
+            _component("LongTermDebtCurrent", "current debt"),
+            _component("CommercialPaper", "short-term borrowing"),
+        )
+    )
+    end_date = date(2026, 3, 28)
+    facts = (
+        _fact("LongTermDebtCurrent", 1, end_date=end_date),
+        _fact("LongTermDebtCurrent", 2, end_date=end_date),
+        _fact("CommercialPaper", 3, end_date=end_date),
+    )
+
+    validation = validate_formula_proposal(
+        target=target,
+        proposal=proposal,
+        fact_pool=facts,
+    )
+
+    assert validation.validation_status == VALIDATION_STATUS_FAILED
+    assert validation.skip_reason == VALIDATION_SKIP_DUPLICATE_FACTS
+    assert validation.common_period_units == ("2026-03-28 instant USD",)
 
 
 def test_formula_proposal_validator_rejects_component_outside_raw_fact_pool() -> None:
@@ -826,6 +888,9 @@ def _fact(
     unit: str = "USD",
     period_type: str = "instant",
     form: str = "10-K",
+    start_date: date | None = None,
+    end_date: date | None = None,
+    has_dimensions: bool = False,
 ) -> FormulaProposalFact:
     return FormulaProposalFact(
         raw_fact_id=raw_fact_id,
@@ -839,6 +904,9 @@ def _fact(
         fiscal_period=fiscal_period,
         accession_number=accession_number,
         form=form,
+        start_date=start_date,
+        end_date=end_date,
+        has_dimensions=has_dimensions,
         mapping_status=mapping_status,
         mapped_statement_type=mapped_statement_type,
     )

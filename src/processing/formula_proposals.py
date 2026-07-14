@@ -90,6 +90,15 @@ _COMMON_CURRENCY_UNITS = {
     "ZAR",
 }
 
+_FormulaPeriodUnitKey = tuple[
+    str,
+    str,
+    date | None,
+    date | None,
+    int | None,
+    str,
+]
+
 
 class FormulaProposalComponentResponse(BaseModel):
     """One raw XBRL concept used in a proposed formula."""
@@ -156,6 +165,7 @@ class FormulaProposalFact:
     start_date: date | None = None
     end_date: date | None = None
     filed_date: date | None = None
+    has_dimensions: bool = False
     mapping_status: str = "unknown_unmapped"
     mapped_metric_name: str = ""
     mapped_statement_type: str = ""
@@ -165,10 +175,12 @@ class FormulaProposalFact:
         return (_normalize_key_part(self.taxonomy), _normalize_key_part(self.concept))
 
     @property
-    def period_unit_key(self) -> tuple[str, str, int | None, str]:
+    def period_unit_key(self) -> _FormulaPeriodUnitKey:
         return (
             self.unit.strip(),
             self.period_type.strip(),
+            self.start_date,
+            self.end_date,
             self.fiscal_year,
             (self.fiscal_period or "").strip().upper(),
         )
@@ -812,7 +824,7 @@ def validate_formula_proposal(
     missing_value_components: list[str] = []
     cross_statement_without_explanation: list[str] = []
     matched_facts: list[FormulaProposalFact] = []
-    component_period_keys: list[Counter[tuple[str, str, int | None, str]]] = []
+    component_period_keys: list[Counter[_FormulaPeriodUnitKey]] = []
 
     for component in proposal.components:
         component_key = (_normalize_key_part(component.taxonomy), _normalize_key_part(component.concept))
@@ -835,14 +847,11 @@ def validate_formula_proposal(
         if not numeric_facts:
             missing_value_components.append(component_label)
             continue
-        matched_facts.extend(numeric_facts)
-        component_period_keys.append(
-            Counter(
-                fact.period_unit_key
-                for fact in numeric_facts
-                if fact.unit and fact.period_type and fact.fiscal_year is not None and fact.fiscal_period
-            )
+        period_key_counts, preferred_facts = _component_period_fact_counts(
+            numeric_facts
         )
+        matched_facts.extend(preferred_facts)
+        component_period_keys.append(period_key_counts)
 
     if invalid_components:
         return FormulaProposalValidationResult(
@@ -895,7 +904,10 @@ def validate_formula_proposal(
             valid_component_count=len(component_period_keys),
             matched_raw_fact_ids=_raw_fact_ids(matched_facts),
             matched_accession_numbers=_accessions(matched_facts),
-            notes="Components do not share a common unit, period type, fiscal year, and fiscal period.",
+            notes=(
+                "Components do not share a common unit, period type, and actual fact date "
+                "or fiscal-period fallback."
+            ),
         )
 
     clean_common_keys = tuple(
@@ -914,12 +926,17 @@ def validate_formula_proposal(
             notes="Common period/unit evidence exists, but duplicate same-period component facts block validation.",
         )
 
+    validated_facts = [
+        fact
+        for fact in matched_facts
+        if fact.period_unit_key in clean_common_keys
+    ]
     return FormulaProposalValidationResult(
         validation_status=VALIDATION_STATUS_VALIDATED,
         skip_reason="",
         valid_component_count=len(component_period_keys),
-        matched_raw_fact_ids=_raw_fact_ids(matched_facts),
-        matched_accession_numbers=_accessions(matched_facts),
+        matched_raw_fact_ids=_raw_fact_ids(validated_facts),
+        matched_accession_numbers=_accessions(validated_facts),
         common_period_units=_format_period_unit_keys(clean_common_keys),
         notes="All components are in the raw fact pool and share at least one unambiguous period/unit.",
     )
@@ -1403,16 +1420,61 @@ def _component_signature(proposal: FormulaProposalProviderResult) -> tuple[tuple
     )
 
 
-def _format_period_unit_keys(keys: set[tuple[str, str, int | None, str]] | tuple[tuple[str, str, int | None, str], ...]) -> tuple[str, ...]:
+def _component_period_fact_counts(
+    facts: tuple[FormulaProposalFact, ...],
+) -> tuple[Counter[_FormulaPeriodUnitKey], tuple[FormulaProposalFact, ...]]:
+    facts_by_period: dict[_FormulaPeriodUnitKey, list[FormulaProposalFact]] = {}
+    for fact in facts:
+        if not fact.unit or not fact.period_type:
+            continue
+        if fact.end_date is None and (fact.fiscal_year is None or not fact.fiscal_period):
+            continue
+        facts_by_period.setdefault(fact.period_unit_key, []).append(fact)
+
+    counts: Counter[_FormulaPeriodUnitKey] = Counter()
+    preferred_facts: list[FormulaProposalFact] = []
+    for period_key, period_facts in facts_by_period.items():
+        dimensionless_facts = [fact for fact in period_facts if not fact.has_dimensions]
+        selected_facts = dimensionless_facts or period_facts
+        counts[period_key] = len(selected_facts)
+        preferred_facts.extend(selected_facts)
+    return counts, tuple(preferred_facts)
+
+
+def _format_period_unit_keys(
+    keys: set[_FormulaPeriodUnitKey] | tuple[_FormulaPeriodUnitKey, ...],
+) -> tuple[str, ...]:
     return tuple(
-        f"{fiscal_year or ''} {fiscal_period} {period_type} {unit}".strip()
-        for unit, period_type, fiscal_year, fiscal_period in sorted(keys, key=_period_unit_sort_key)
+        _format_period_unit_key(key)
+        for key in sorted(keys, key=_period_unit_sort_key)
     )
 
 
-def _period_unit_sort_key(key: tuple[str, str, int | None, str]) -> tuple[int, str, str, str]:
-    unit, period_type, fiscal_year, fiscal_period = key
-    return (fiscal_year or 0, fiscal_period, period_type, unit)
+def _format_period_unit_key(key: _FormulaPeriodUnitKey) -> str:
+    unit, period_type, start_date, end_date, fiscal_year, fiscal_period = key
+    if end_date is not None:
+        period_label = (
+            f"{start_date.isoformat()}->{end_date.isoformat()}"
+            if start_date is not None
+            else end_date.isoformat()
+        )
+    else:
+        period_label = f"{fiscal_year or ''} {fiscal_period}".strip()
+    return f"{period_label} {period_type} {unit}".strip()
+
+
+def _period_unit_sort_key(
+    key: _FormulaPeriodUnitKey,
+) -> tuple[int, int, int, str, str, str]:
+    unit, period_type, start_date, end_date, fiscal_year, fiscal_period = key
+    return (
+        (end_date or start_date or date.min).toordinal(),
+        (start_date or date.min).toordinal(),
+        fiscal_year or 0,
+        fiscal_period,
+        period_type,
+        unit,
+    )
 
 
 def _raw_fact_ids(facts: list[FormulaProposalFact]) -> tuple[int, ...]:
