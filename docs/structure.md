@@ -246,7 +246,7 @@ experiments/
 - `experiments/MS2/milestone2_ingestion_showcase.py`: Runnable Milestone 2 experiment script that prints the SEC/XBRL ingestion and normalization showcase described by the Milestone 2 proposal.
 - `experiments/storage/`: Generated shared experiment storage. Current MS2.5 live runs use `experiments/storage/experiment.db` and `experiments/storage/filings/` so later milestone experiments can inspect the same isolated state without touching `stock_data.db`.
 - `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 ingestion and mapping examination harness. It covers persistent isolated storage, update checks, active-window evidence, persisted industry labels, target and raw-fact coverage, Inline XBRL extensions, approved learned mappings, report-only LLM formula proposal diagnostics, unknown/alternate tags, financial metric lineage, saved reports, and SQLite/CSV evidence.
-- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that saves `experiments/MS2_5/milestone25_mapping_report_<TICKER>.md` without printing the report body, then prints a one-line report generation duration and saved report path. The compact report contains section 0 summary, section 0A selected XBRL concept counts by period, section 1 mapped/missing target status, section 2 detailed formula and provider-outcome evidence split into 10-K and 10-Q subsections, and section 3 one deterministic summary recommendation per selected missing target-period. Section 2 keeps identical displayed formulas grouped while showing exact period coverage for each provider. Section 3 reports `formula` for a two-of-three matching validated component signature, `zero` for two-of-three validated zero-evidence outcomes, and `review_required` otherwise; disabled runs, empty eligible fact pools, and targets without contexts remain visible. Formula calls use the ordered `gpt-5-mini`, `gemini-3.1-flash-lite`, and `gemini-2.5-flash` panel over the existing target-compatible context and batching flow. Terminal progress distinguishes total model outcomes and provider-context slots from reused outcomes and numbered live batch requests, so a fully cached model remains visible without making another API call. The script preserves report-only behavior, exact per-model cache separation, active 10-K/10-Q filtering, primary monetary-unit selection, compact period labels, taxonomy-prefix stripping, concise terminal progress, `--no-formula-proposals`, compatibility flags, `experiments/storage/experiment.db`, filing downloads, supporting CSV exports, and the configurable formula cache directory.
+- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that saves `experiments/MS2_5/milestone25_mapping_report_<TICKER>.md` without printing the report body, then prints a one-line report generation duration and saved report path. The compact report contains section 0 summary, section 0A selected XBRL concept counts by period, section 1 mapped/missing target status, section 2 detailed formula and provider-outcome evidence split into 10-K and 10-Q subsections, and section 3 one deterministic summary recommendation per selected missing target-period. Section 2 keeps identical displayed formulas grouped while showing exact period coverage for each provider. Section 3 reports `formula` for a two-of-three matching validated component signature, `zero` for two-of-three validated zero-evidence outcomes, and `review_required` otherwise; disabled runs, empty eligible fact pools, and targets without contexts remain visible. Formula calls use the ordered `gpt-5-mini`, `claude-sonnet-5`, and `gemini-2.5-flash` panel over the existing target-compatible context and batching flow. Terminal progress distinguishes total model outcomes and provider-context slots from reused outcomes and numbered live batch requests, so a fully cached model remains visible without making another API call. The script preserves report-only behavior, exact per-model cache separation, active 10-K/10-Q filtering, primary monetary-unit selection, compact period labels, taxonomy-prefix stripping, concise terminal progress, `--no-formula-proposals`, compatibility flags, `experiments/storage/experiment.db`, filing downloads, supporting CSV exports, and the configurable formula cache directory.
 - `experiments/MS3/experiment_proposal.md`: Human-inspection proposal for the Milestone 3 indicator engine experiment. It defines active accession-window scope, yearly and quarterly indicator tables for the requested catalog, skipped-period reasons, formulas, and source-metric traceability output.
 - `experiments/MS3/milestone3_indicator_engine.py`: Runnable Milestone 3 experiment script that reads stored `financial_indicators` and writes a `.txt` report under `experiments/MS3` with active accession-window scope, yearly and quarterly indicator tables for the requested ticker or tickers, skipped reasons, formulas, and source traceability.
 - `experiments/MS4/experiment_proposal.md`: Human-inspection proposal for the Milestone 4 deterministic financial analytics experiment. It defines trend, comparison, gap, outlier, and chart-ready output.
@@ -279,7 +279,7 @@ Runtime configuration loading.
 
 Current files:
 
-- `settings.py`: Defines `Settings`, chat-model validation, local retrieval model/chunk settings, storage paths, and `load_settings`.
+- `settings.py`: Defines `Settings`, chat-model validation, formula-provider credentials and configurable model slots, local retrieval model/chunk settings, storage paths, and `load_settings`.
 - `__init__.py`: Exports configuration helpers.
 
 Key responsibilities:
@@ -287,7 +287,10 @@ Key responsibilities:
 - Load `config.env`.
 - Normalize local environment values.
 - Keep the default LLM model pinned to `gemini-2.5-flash`.
-- Expose storage paths and SEC/Gemini configuration.
+- Load the Anthropic formula-provider secret from the first nonblank
+  `claude-api-key`, `ANTHROPIC_API_KEY`, or `CLAUDE_API_KEY` alias.
+- Expose storage paths and SEC/Gemini/OpenAI/Anthropic configuration without
+  printing secret values.
 
 ### `src/api/`
 
@@ -501,7 +504,7 @@ LLM/RAG reasoning layer.
 Current files:
 
 - `industry_classification.py`: Gemini-backed hard-industry classifier for 10-K Item 1 Business, with strict label validation, high-confidence label keeping, and low-confidence label ignoring.
-- `xbrl_formula_proposals.py`: Provider orchestration for report-only missing-target formula proposals through the ordered OpenAI `gpt-5-mini`, Gemini `gemini-3.1-flash-lite`, and Gemini `gemini-2.5-flash` panel; it supports single-target calls and statement-scoped batch calls, and provider failures are reported rather than persisted.
+- `xbrl_formula_proposals.py`: Provider orchestration for report-only missing-target formula proposals through the ordered OpenAI `gpt-5-mini`, Anthropic `claude-sonnet-5`, and Gemini `gemini-2.5-flash` panel; it supports single-target calls and statement-scoped batch calls, and provider failures are reported rather than persisted.
 - `prompts.py`: Prompt templates, including the hard-industry classification prompt and statement-first single-target and statement-scoped batch XBRL formula proposal prompts.
 - `__init__.py`: Package marker.
 

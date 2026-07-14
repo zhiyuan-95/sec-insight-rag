@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,9 +30,12 @@ from src.processing.formula_proposals import (
 )
 
 DEFAULT_GEMINI_FORMULA_PROPOSAL_MODEL = "gemini-2.5-flash"
-DEFAULT_GEMINI_FLASH_LITE_FORMULA_PROPOSAL_MODEL = "gemini-3.1-flash-lite"
+DEFAULT_ANTHROPIC_FORMULA_PROPOSAL_MODEL = "claude-sonnet-5"
 DEFAULT_OPENAI_FORMULA_PROPOSAL_MODEL = "gpt-5-mini"
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
+ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages"
+ANTHROPIC_API_VERSION = "2023-06-01"
+ANTHROPIC_MAX_TOKENS = 8192
 HTTP_TIMEOUT_SECONDS = 120
 
 FormulaJsonGenerator = Callable[[str, type[BaseModel], str], object]
@@ -51,14 +54,18 @@ def default_formula_proposal_provider_configs(
     *,
     gemini_api_key: str | None,
     openai_api_key: str | None,
+    anthropic_api_key: str | None,
     gemini_model: str = DEFAULT_GEMINI_FORMULA_PROPOSAL_MODEL,
-    gemini_flash_lite_model: str = DEFAULT_GEMINI_FLASH_LITE_FORMULA_PROPOSAL_MODEL,
     openai_model: str = DEFAULT_OPENAI_FORMULA_PROPOSAL_MODEL,
 ) -> tuple[FormulaProposalProviderConfig, ...]:
     """Return the configured formula proposal provider panel."""
     configs = (
         FormulaProposalProviderConfig("openai", openai_model, openai_api_key),
-        FormulaProposalProviderConfig("gemini", gemini_flash_lite_model, gemini_api_key),
+        FormulaProposalProviderConfig(
+            "anthropic",
+            DEFAULT_ANTHROPIC_FORMULA_PROPOSAL_MODEL,
+            anthropic_api_key,
+        ),
         FormulaProposalProviderConfig("gemini", gemini_model, gemini_api_key),
     )
     identities = [
@@ -122,6 +129,14 @@ def generate_formula_proposal(
                 system_content="Return only valid JSON for the requested XBRL formula proposal schema.",
                 temperature=_openai_temperature(provider.model_name),
             )
+        elif provider.provider_name == "anthropic":
+            payload = _generate_anthropic_json(
+                prompt=prompt,
+                model=provider.model_name,
+                api_key=provider.api_key,
+                schema=FORMULA_PROPOSAL_RESPONSE_JSON_SCHEMA,
+                system_content="Return only valid JSON for the requested XBRL formula proposal schema.",
+            )
         else:
             return provider_unavailable_result(
                 provider_name=provider.provider_name,
@@ -135,7 +150,7 @@ def generate_formula_proposal(
             provider_name=provider.provider_name,
             model_name=provider.model_name,
             target=target,
-            error=str(exc),
+            error=_provider_error_text(provider, exc),
         )
     return provider_result_from_response(
         provider_name=provider.provider_name,
@@ -198,6 +213,14 @@ def generate_formula_proposal_batch(
                 system_content="Return only valid JSON for the requested XBRL formula proposal batch schema.",
                 temperature=_openai_temperature(provider.model_name),
             )
+        elif provider.provider_name == "anthropic":
+            payload = _generate_anthropic_json(
+                prompt=prompt,
+                model=provider.model_name,
+                api_key=provider.api_key,
+                schema=FORMULA_PROPOSAL_BATCH_RESPONSE_JSON_SCHEMA,
+                system_content="Return only valid JSON for the requested XBRL formula proposal batch schema.",
+            )
         else:
             return tuple(
                 provider_unavailable_result(
@@ -214,7 +237,7 @@ def generate_formula_proposal_batch(
                 provider_name=provider.provider_name,
                 model_name=provider.model_name,
                 target=target,
-                error=str(exc),
+                error=_provider_error_text(provider, exc),
             )
             for target in targets
         )
@@ -303,8 +326,75 @@ def _generate_openai_json(
         OPENAI_RESPONSES_URL,
         payload,
         headers={"Authorization": f"Bearer {api_key}"},
+        redaction_values=(api_key,),
     )
     return _extract_openai_response_text(data)
+
+
+def _generate_anthropic_json(
+    *,
+    prompt: str,
+    model: str,
+    api_key: str,
+    schema: dict[str, object],
+    system_content: str,
+) -> object:
+    payload = {
+        "model": model,
+        "max_tokens": ANTHROPIC_MAX_TOKENS,
+        "system": system_content,
+        "messages": [{"role": "user", "content": prompt}],
+        "thinking": {"type": "adaptive"},
+        "output_config": {
+            "effort": "medium",
+            "format": {
+                "type": "json_schema",
+                "schema": _anthropic_compatible_schema(schema),
+            },
+        },
+    }
+    data = _post_json(
+        ANTHROPIC_MESSAGES_URL,
+        payload,
+        headers={
+            "x-api-key": api_key,
+            "anthropic-version": ANTHROPIC_API_VERSION,
+        },
+        redaction_values=(api_key,),
+    )
+    return _extract_anthropic_response_text(data)
+
+
+def _anthropic_compatible_schema(
+    schema: dict[str, object],
+) -> dict[str, object]:
+    """Copy a schema without numeric bounds unsupported by Anthropic.
+
+    The shared Pydantic response models still enforce these bounds after the
+    provider response is parsed.
+    """
+
+    def clean(value: object) -> object:
+        if isinstance(value, list):
+            return [clean(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+
+        unsupported_keys = (
+            {"minimum", "maximum"}
+            if value.get("type") in {"number", "integer"}
+            else set()
+        )
+        return {
+            key: clean(item)
+            for key, item in value.items()
+            if key not in unsupported_keys
+        }
+
+    compatible = clean(schema)
+    if not isinstance(compatible, dict):
+        raise TypeError("Anthropic structured output schema must be an object")
+    return compatible
 
 
 def _openai_temperature(model: str) -> float | None:
@@ -314,7 +404,13 @@ def _openai_temperature(model: str) -> float | None:
     return 0
 
 
-def _post_json(url: str, payload: dict[str, object], *, headers: dict[str, str]) -> Any:
+def _post_json(
+    url: str,
+    payload: dict[str, object],
+    *,
+    headers: dict[str, str],
+    redaction_values: Iterable[str] = (),
+) -> Any:
     body = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(
         url,
@@ -330,8 +426,29 @@ def _post_json(url: str, payload: dict[str, object], *, headers: dict[str, str])
             raw = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"HTTP {exc.code} from provider: {detail[:500]}") from exc
+        safe_detail = _redact_sensitive_text(detail, redaction_values)
+        raise RuntimeError(f"HTTP {exc.code} from provider: {safe_detail[:500]}") from None
     return json.loads(raw)
+
+
+def _redact_sensitive_text(text: str, sensitive_values: Iterable[str]) -> str:
+    redacted = text
+    values = sorted(
+        {str(value) for value in sensitive_values if str(value)},
+        key=len,
+        reverse=True,
+    )
+    for value in values:
+        redacted = redacted.replace(value, "[REDACTED]")
+    return redacted
+
+
+def _provider_error_text(
+    provider: FormulaProposalProviderConfig,
+    error: Exception,
+) -> str:
+    sensitive_values = (provider.api_key,) if provider.api_key else ()
+    return _redact_sensitive_text(str(error), sensitive_values)
 
 
 def _extract_openai_response_text(data: dict[str, Any]) -> str:
@@ -353,6 +470,33 @@ def _extract_openai_response_text(data: dict[str, Any]) -> str:
                 if isinstance(text, str) and text.strip():
                     return text
     raise RuntimeError("OpenAI response did not include output text")
+
+
+def _extract_anthropic_response_text(data: dict[str, Any]) -> str:
+    if data.get("stop_reason") != "end_turn":
+        raise RuntimeError("Anthropic response did not complete with end_turn")
+
+    content = data.get("content")
+    if not isinstance(content, list):
+        raise RuntimeError("Anthropic response did not include valid content")
+
+    text_blocks: list[str] = []
+    for block in content:
+        if not isinstance(block, dict):
+            raise RuntimeError("Anthropic response included an unsupported content block")
+        block_type = block.get("type")
+        if block_type in {"thinking", "redacted_thinking"}:
+            continue
+        if block_type != "text":
+            raise RuntimeError("Anthropic response included an unsupported content block")
+        text = block.get("text")
+        if not isinstance(text, str) or not text.strip():
+            raise RuntimeError("Anthropic response included an empty text block")
+        text_blocks.append(text)
+
+    if len(text_blocks) != 1:
+        raise RuntimeError("Anthropic response must include exactly one text block")
+    return text_blocks[0]
 
 
 def _target_prompt_payload(target: FormulaProposalTarget) -> dict[str, object]:

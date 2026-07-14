@@ -12,6 +12,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 DEFAULT_CHAT_MODEL = "gemini-2.5-flash"
 SUPPORTED_CHAT_MODELS = {DEFAULT_CHAT_MODEL}
 DEFAULT_RETRIEVAL_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+ANTHROPIC_API_KEY_ALIASES = (
+    "claude-api-key",
+    "ANTHROPIC_API_KEY",
+    "CLAUDE_API_KEY",
+)
 
 
 class Settings(BaseSettings):
@@ -26,6 +31,10 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr | None = Field(
         default=None,
         validation_alias="OPENAI_API_KEY",
+    )
+    anthropic_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(*ANTHROPIC_API_KEY_ALIASES),
     )
     hf_token: SecretStr | None = Field(
         default=None,
@@ -77,10 +86,6 @@ class Settings(BaseSettings):
         default=DEFAULT_CHAT_MODEL,
         validation_alias="GEMINI_FORMULA_PROPOSAL_MODEL",
     )
-    gemini_flash_lite_formula_proposal_model: str = Field(
-        default="gemini-3.1-flash-lite",
-        validation_alias="GEMINI_FLASH_LITE_FORMULA_PROPOSAL_MODEL",
-    )
     openai_formula_proposal_model: str = Field(
         default="gpt-5-mini",
         validation_alias="OPENAI_FORMULA_PROPOSAL_MODEL",
@@ -118,8 +123,6 @@ class Settings(BaseSettings):
             raise ValueError("PRIMARY_CHAT_MODEL must be in ALLOWED_CHAT_MODELS")
         if not self.gemini_formula_proposal_model.strip():
             raise ValueError("GEMINI_FORMULA_PROPOSAL_MODEL must not be empty")
-        if not self.gemini_flash_lite_formula_proposal_model.strip():
-            raise ValueError("GEMINI_FLASH_LITE_FORMULA_PROPOSAL_MODEL must not be empty")
         if not self.openai_formula_proposal_model.strip():
             raise ValueError("OPENAI_FORMULA_PROPOSAL_MODEL must not be empty")
         if self.retrieval_chunk_overlap >= self.retrieval_chunk_size:
@@ -132,7 +135,22 @@ class Settings(BaseSettings):
 def load_settings(env_file: str | Path = "config.env") -> Settings:
     """Load settings from a local env file without printing secret values."""
     values = _read_env_file(Path(env_file))
+    _normalize_first_nonblank_alias(values, ANTHROPIC_API_KEY_ALIASES)
     return Settings.model_validate(values)
+
+
+def _normalize_first_nonblank_alias(
+    values: dict[str, str],
+    aliases: tuple[str, ...],
+) -> None:
+    selected = next(
+        (values[alias].strip() for alias in aliases if values.get(alias, "").strip()),
+        None,
+    )
+    for alias in aliases:
+        values.pop(alias, None)
+    if selected is not None:
+        values[aliases[0]] = selected
 
 
 def _read_env_file(env_file: Path) -> dict[str, str]:

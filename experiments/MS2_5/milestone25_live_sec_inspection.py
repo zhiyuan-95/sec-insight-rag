@@ -1729,11 +1729,8 @@ def _formula_proposal_provider_configs(settings: Settings | None):
     return default_formula_proposal_provider_configs(
         gemini_api_key=_secret_value(getattr(settings, "gemini_api_key", None)),
         openai_api_key=_secret_value(getattr(settings, "openai_api_key", None)),
+        anthropic_api_key=_secret_value(getattr(settings, "anthropic_api_key", None)),
         gemini_model=str(getattr(settings, "gemini_formula_proposal_model", "") or "gemini-2.5-flash"),
-        gemini_flash_lite_model=str(
-            getattr(settings, "gemini_flash_lite_formula_proposal_model", "")
-            or "gemini-3.1-flash-lite"
-        ),
         openai_model=str(getattr(settings, "openai_formula_proposal_model", "") or "gpt-5-mini"),
     )
 

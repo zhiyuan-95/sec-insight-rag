@@ -42,9 +42,47 @@ def test_load_settings_defaults_missing_optional_values(tmp_path: Path) -> None:
     assert settings.knowledge_storage_dir == Path("data_store/knowledge")
     assert settings.primary_chat_model == DEFAULT_CHAT_MODEL
     assert settings.allowed_chat_models == [DEFAULT_CHAT_MODEL]
+    assert settings.anthropic_api_key is None
     assert settings.openai_formula_proposal_model == "gpt-5-mini"
-    assert settings.gemini_flash_lite_formula_proposal_model == "gemini-3.1-flash-lite"
     assert settings.gemini_formula_proposal_model == "gemini-2.5-flash"
+    assert not hasattr(settings, "gemini_flash_lite_formula_proposal_model")
+
+
+@pytest.mark.parametrize(
+    "alias",
+    ["claude-api-key", "ANTHROPIC_API_KEY", "CLAUDE_API_KEY"],
+)
+def test_load_settings_accepts_anthropic_api_key_alias(
+    tmp_path: Path,
+    alias: str,
+) -> None:
+    env_file = tmp_path / "config.env"
+    env_file.write_text(f"{alias}=anthropic-secret\n", encoding="utf-8")
+
+    settings = load_settings(env_file)
+
+    assert settings.anthropic_api_key is not None
+    assert settings.anthropic_api_key.get_secret_value() == "anthropic-secret"
+    assert str(settings.anthropic_api_key) == "**********"
+
+
+def test_load_settings_uses_first_nonblank_anthropic_api_key_alias(tmp_path: Path) -> None:
+    env_file = tmp_path / "config.env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "claude-api-key=",
+                "ANTHROPIC_API_KEY=anthropic-fallback",
+                "CLAUDE_API_KEY=claude-fallback",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(env_file)
+
+    assert settings.anthropic_api_key is not None
+    assert settings.anthropic_api_key.get_secret_value() == "anthropic-fallback"
 
 
 def test_load_settings_accepts_formula_model_overrides(tmp_path: Path) -> None:
@@ -53,7 +91,7 @@ def test_load_settings_accepts_formula_model_overrides(tmp_path: Path) -> None:
         "\n".join(
             [
                 "OPENAI_FORMULA_PROPOSAL_MODEL=openai-override",
-                "GEMINI_FLASH_LITE_FORMULA_PROPOSAL_MODEL=flash-lite-override",
+                "GEMINI_FLASH_LITE_FORMULA_PROPOSAL_MODEL=retired-slot-ignored",
                 "GEMINI_FORMULA_PROPOSAL_MODEL=gemini-override",
             ]
         ),
@@ -63,8 +101,8 @@ def test_load_settings_accepts_formula_model_overrides(tmp_path: Path) -> None:
     settings = load_settings(env_file)
 
     assert settings.openai_formula_proposal_model == "openai-override"
-    assert settings.gemini_flash_lite_formula_proposal_model == "flash-lite-override"
     assert settings.gemini_formula_proposal_model == "gemini-override"
+    assert not hasattr(settings, "gemini_flash_lite_formula_proposal_model")
 
 
 def test_load_settings_accepts_comma_separated_allowed_models(tmp_path: Path) -> None:

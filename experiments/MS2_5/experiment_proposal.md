@@ -333,8 +333,10 @@ should say `needs_review` so the LLM does not sound like the final approver.
   construction, target-compatible unit filtering, statement-scoped batch
   grouping, exact-cache reuse, and deterministic validation in
   `src/processing/formula_proposals.py`. The ordered provider panel is OpenAI
-  `gpt-5-mini`, Gemini `gemini-3.1-flash-lite`, and Gemini
-  `gemini-2.5-flash`; both Gemini slots reuse `GEMINI_API_KEY`.
+  `gpt-5-mini`, Anthropic `claude-sonnet-5`, and Gemini
+  `gemini-2.5-flash`. The Anthropic slot uses the first nonblank
+  `claude-api-key`, `ANTHROPIC_API_KEY`, or `CLAUDE_API_KEY` setting; the
+  Gemini slot continues to use `GEMINI_API_KEY`.
 - Treat LLM formula proposals as report-only evidence. Do not approve mappings,
   persist recovered values, or feed indicators from model confidence or model
   agreement. A model may also return a report-only zero-target decision when

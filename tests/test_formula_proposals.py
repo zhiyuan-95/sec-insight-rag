@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from datetime import date
 from decimal import Decimal
+from io import BytesIO
 from pathlib import Path
 
 import pytest
@@ -56,11 +57,12 @@ def test_formula_proposal_provider_configs_use_ordered_three_model_panel() -> No
     configs = default_formula_proposal_provider_configs(
         gemini_api_key="gemini-key",
         openai_api_key="openai-key",
+        anthropic_api_key="anthropic-key",
     )
 
     assert [(config.provider_name, config.model_name) for config in configs] == [
         ("openai", "gpt-5-mini"),
-        ("gemini", "gemini-3.1-flash-lite"),
+        ("anthropic", "claude-sonnet-5"),
         ("gemini", "gemini-2.5-flash"),
     ]
 
@@ -69,24 +71,25 @@ def test_formula_proposal_provider_configs_preserve_slot_overrides() -> None:
     configs = default_formula_proposal_provider_configs(
         gemini_api_key="gemini-key",
         openai_api_key="openai-key",
+        anthropic_api_key="anthropic-key",
         openai_model="openai-override",
-        gemini_flash_lite_model="flash-lite-override",
         gemini_model="gemini-override",
     )
 
     assert [config.model_name for config in configs] == [
         "openai-override",
-        "flash-lite-override",
+        "claude-sonnet-5",
         "gemini-override",
     ]
 
 
-def test_formula_proposal_provider_configs_reject_duplicate_votes() -> None:
-    with pytest.raises(ValueError, match="provider/model slots must be unique"):
+def test_formula_proposal_provider_configs_reject_anthropic_model_override() -> None:
+    with pytest.raises(TypeError, match="unexpected keyword argument"):
         default_formula_proposal_provider_configs(
             gemini_api_key="gemini-key",
             openai_api_key="openai-key",
-            gemini_flash_lite_model="gemini-2.5-flash",
+            anthropic_api_key="anthropic-key",
+            anthropic_model="claude-other-model",  # type: ignore[call-arg]
         )
 
 
@@ -94,6 +97,7 @@ def test_formula_proposal_panel_sends_identical_canonical_prompt() -> None:
     configs = default_formula_proposal_provider_configs(
         gemini_api_key="gemini-key",
         openai_api_key="openai-key",
+        anthropic_api_key="anthropic-key",
     )
     prompts: list[tuple[str, str]] = []
 
@@ -121,7 +125,7 @@ def test_gpt5_mini_openai_requests_omit_temperature(monkeypatch) -> None:
     payloads: list[dict[str, object]] = []
     target = _target("DebtCurrent", "debt_current")
 
-    def fake_post_json(url, payload, *, headers):
+    def fake_post_json(url, payload, *, headers, redaction_values=()):
         payloads.append(payload)
         schema_name = payload["text"]["format"]["name"]
         response = (
@@ -151,6 +155,292 @@ def test_gpt5_mini_openai_requests_omit_temperature(monkeypatch) -> None:
 
     assert len(payloads) == 2
     assert all("temperature" not in payload for payload in payloads)
+
+
+def test_claude_sonnet5_single_request_uses_adaptive_medium_structured_output(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    target = _target("DebtCurrent", "debt_current")
+
+    def fake_post_json(url, payload, *, headers, redaction_values=()):
+        captured.update(
+            url=url,
+            payload=payload,
+            headers=headers,
+            redaction_values=redaction_values,
+        )
+        return {
+            "stop_reason": "end_turn",
+            "content": [
+                {"type": "thinking", "thinking": "opaque", "signature": "signed"},
+                {"type": "redacted_thinking", "data": "encrypted"},
+                {"type": "text", "text": json.dumps(_single_proposal_payload(target))},
+            ],
+        }
+
+    monkeypatch.setattr(formula_provider, "_post_json", fake_post_json)
+
+    result = generate_formula_proposal(
+        ticker="TEST",
+        cik="0000000001",
+        target=target,
+        fact_pool=[],
+        provider=FormulaProposalProviderConfig(
+            "anthropic",
+            "claude-sonnet-5",
+            "anthropic-key",
+        ),
+    )
+
+    assert result.provider_status == PROVIDER_STATUS_NO_FORMULA
+    assert captured["url"] == "https://api.anthropic.com/v1/messages"
+    assert captured["headers"] == {
+        "x-api-key": "anthropic-key",
+        "anthropic-version": "2023-06-01",
+    }
+    assert captured["redaction_values"] == ("anthropic-key",)
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["model"] == "claude-sonnet-5"
+    assert payload["max_tokens"] == 8192
+    assert payload["thinking"] == {"type": "adaptive"}
+    assert payload["output_config"]["effort"] == "medium"
+    output_format = payload["output_config"]["format"]
+    assert output_format["type"] == "json_schema"
+    wire_schema = output_format["schema"]
+    assert wire_schema["properties"]["confidence"] == {"type": "number"}
+    assert formula_provider.FORMULA_PROPOSAL_RESPONSE_JSON_SCHEMA["properties"][
+        "confidence"
+    ] == {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1,
+    }
+    assert payload["system"] == (
+        "Return only valid JSON for the requested XBRL formula proposal schema."
+    )
+    messages = payload["messages"]
+    assert isinstance(messages, list)
+    assert len(messages) == 1
+    assert messages[0]["role"] == "user"
+    assert isinstance(messages[0]["content"], str)
+    assert messages[0]["content"]
+    assert "temperature" not in payload
+    assert "top_p" not in payload
+    assert "top_k" not in payload
+
+
+def test_claude_sonnet5_batch_request_uses_batch_schema(monkeypatch) -> None:
+    captured_payloads: list[dict[str, object]] = []
+    targets = [
+        _target("AssetsCurrent", "current_assets"),
+        _target("LiabilitiesCurrent", "current_liabilities"),
+    ]
+
+    def fake_post_json(url, payload, *, headers, redaction_values=()):
+        captured_payloads.append(payload)
+        return {
+            "stop_reason": "end_turn",
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {"proposals": [_single_proposal_payload(target) for target in targets]}
+                    ),
+                }
+            ],
+        }
+
+    monkeypatch.setattr(formula_provider, "_post_json", fake_post_json)
+
+    results = generate_formula_proposal_batch(
+        ticker="TEST",
+        cik="0000000001",
+        targets=targets,
+        fact_pool=[],
+        provider=FormulaProposalProviderConfig(
+            "anthropic",
+            "claude-sonnet-5",
+            "anthropic-key",
+        ),
+    )
+
+    assert [result.provider_status for result in results] == [
+        PROVIDER_STATUS_NO_FORMULA,
+        PROVIDER_STATUS_NO_FORMULA,
+    ]
+    assert len(captured_payloads) == 1
+    payload = captured_payloads[0]
+    wire_schema = payload["output_config"]["format"]["schema"]
+    proposal_schema = wire_schema["properties"]["proposals"]["items"]
+    assert proposal_schema["properties"]["confidence"] == {"type": "number"}
+    assert proposal_schema["required"] == (
+        formula_provider.FORMULA_PROPOSAL_BATCH_RESPONSE_JSON_SCHEMA["properties"]
+        ["proposals"]["items"]["required"]
+    )
+    assert payload["system"] == (
+        "Return only valid JSON for the requested XBRL formula proposal batch schema."
+    )
+
+
+@pytest.mark.parametrize(
+    "stop_reason",
+    [
+        "refusal",
+        "max_tokens",
+        "stop_sequence",
+        "pause_turn",
+        "tool_use",
+        "model_context_window_exceeded",
+        None,
+        "future_stop_reason",
+    ],
+)
+def test_claude_sonnet5_rejects_every_non_end_turn_stop_reason(
+    monkeypatch,
+    stop_reason: str | None,
+) -> None:
+    target = _target("DebtCurrent", "debt_current")
+
+    def fake_post_json(url, payload, *, headers, redaction_values=()):
+        return {
+            "stop_reason": stop_reason,
+            "content": [
+                {"type": "text", "text": json.dumps(_single_proposal_payload(target))}
+            ],
+        }
+
+    monkeypatch.setattr(formula_provider, "_post_json", fake_post_json)
+
+    result = generate_formula_proposal(
+        ticker="TEST",
+        cik="0000000001",
+        target=target,
+        fact_pool=[],
+        provider=FormulaProposalProviderConfig(
+            "anthropic",
+            "claude-sonnet-5",
+            "anthropic-key",
+        ),
+    )
+
+    assert result.provider_status == PROVIDER_STATUS_FAILED
+    assert result.error == "Anthropic response did not complete with end_turn"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        [{"type": "thinking", "thinking": "opaque", "signature": "signed"}],
+        [
+            {"type": "text", "text": "{}"},
+            {"type": "text", "text": "{}"},
+        ],
+        [{"type": "text", "text": ""}],
+        [{"type": "tool_use", "name": "unexpected"}],
+        [{"type": "future_block", "value": "unexpected"}],
+    ],
+)
+def test_claude_sonnet5_rejects_invalid_content_shapes(
+    monkeypatch,
+    content: list[dict[str, object]],
+) -> None:
+    target = _target("DebtCurrent", "debt_current")
+
+    def fake_post_json(url, payload, *, headers, redaction_values=()):
+        return {"stop_reason": "end_turn", "content": content}
+
+    monkeypatch.setattr(formula_provider, "_post_json", fake_post_json)
+
+    result = generate_formula_proposal(
+        ticker="TEST",
+        cik="0000000001",
+        target=target,
+        fact_pool=[],
+        provider=FormulaProposalProviderConfig(
+            "anthropic",
+            "claude-sonnet-5",
+            "anthropic-key",
+        ),
+    )
+
+    assert result.provider_status == PROVIDER_STATUS_FAILED
+    assert result.error.startswith("Anthropic response")
+
+
+def test_claude_http_error_redacts_secret_before_detail_truncation(monkeypatch) -> None:
+    target = _target("DebtCurrent", "debt_current")
+    secret = "ANTHROPIC_SECRET_THAT_MUST_NOT_LEAK"
+    padding = "x" * 450
+    between = "y" * (495 - len(padding) - len(secret))
+    detail = f"{padding}{secret}{between}{secret}tail"
+
+    def fail_urlopen(request, timeout):
+        raise formula_provider.urllib.error.HTTPError(
+            request.full_url,
+            401,
+            "Unauthorized",
+            hdrs=None,
+            fp=BytesIO(detail.encode("utf-8")),
+        )
+
+    monkeypatch.setattr(formula_provider.urllib.request, "urlopen", fail_urlopen)
+
+    result = generate_formula_proposal(
+        ticker="TEST",
+        cik="0000000001",
+        target=target,
+        fact_pool=[],
+        provider=FormulaProposalProviderConfig(
+            "anthropic",
+            "claude-sonnet-5",
+            secret,
+        ),
+    )
+
+    assert result.provider_status == PROVIDER_STATUS_FAILED
+    assert secret not in result.error
+    assert secret[:12] not in result.error
+    assert "[REDACTED]" in result.error
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_claude_failure_boundary_redacts_secret_for_single_and_batch(
+    monkeypatch,
+    batch: bool,
+) -> None:
+    target = _target("DebtCurrent", "debt_current")
+    secret = "ANTHROPIC_SECRET_THAT_MUST_NOT_LEAK"
+
+    def fail_post_json(url, payload, *, headers, redaction_values=()):
+        raise RuntimeError(f"transport failed with credential {secret}")
+
+    monkeypatch.setattr(formula_provider, "_post_json", fail_post_json)
+    provider = FormulaProposalProviderConfig("anthropic", "claude-sonnet-5", secret)
+
+    if batch:
+        results = generate_formula_proposal_batch(
+            ticker="TEST",
+            cik="0000000001",
+            targets=[target],
+            fact_pool=[],
+            provider=provider,
+        )
+    else:
+        results = (
+            generate_formula_proposal(
+                ticker="TEST",
+                cik="0000000001",
+                target=target,
+                fact_pool=[],
+                provider=provider,
+            ),
+        )
+
+    assert all(result.provider_status == PROVIDER_STATUS_FAILED for result in results)
+    assert all(secret not in result.error for result in results)
+    assert all("[REDACTED]" in result.error for result in results)
 
 
 def test_formula_proposal_validator_allows_found_target_fact_components() -> None:
@@ -665,7 +955,7 @@ def test_formula_proposal_consensus_returns_matching_formula_bloc() -> None:
             ),
         ),
         _proposal(
-            model_name="gemini-3.1-flash-lite",
+            model_name="claude-sonnet-5",
             components=(
                 _component("LongTermDebtCurrent", "component"),
                 _component("ShortTermBorrowings", "component"),
@@ -700,7 +990,7 @@ def test_formula_proposal_consensus_returns_validated_zero_bloc() -> None:
             formula_expression="debt_current = 0",
         ),
         _proposal(
-            model_name="gemini-3.1-flash-lite",
+            model_name="claude-sonnet-5",
             components=(_component("LongTermDebtCurrent", "zero evidence"),),
             provider_status=PROVIDER_STATUS_TARGET_ZERO,
             target_is_zero=True,
@@ -732,7 +1022,7 @@ def test_formula_proposal_consensus_exposes_unresolved_validated_outcomes() -> N
             components=(_component("ShortTermBorrowings", "component"),),
         ),
         _proposal(
-            model_name="gemini-3.1-flash-lite",
+            model_name="claude-sonnet-5",
             components=(_component("LongTermDebtCurrent", "component"),),
         ),
         _proposal(

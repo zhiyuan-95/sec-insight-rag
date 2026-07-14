@@ -80,6 +80,30 @@ def _assert_report_generation_output(output: str, report_path: Path | None = Non
     assert "# Plan 2.5 Target Mapping Report" not in output
 
 
+def test_milestone25_formula_provider_panel_uses_claude_sonnet5_slot() -> None:
+    experiment = _load_experiment_module()
+    settings = Settings.model_validate(
+        {
+            "Gemini_API_KEY": "gemini-key",
+            "OPENAI_API_KEY": "openai-key",
+            "claude-api-key": "anthropic-key",
+        }
+    )
+
+    providers = experiment._formula_proposal_provider_configs(settings)
+
+    assert [(provider.provider_name, provider.model_name) for provider in providers] == [
+        ("openai", "gpt-5-mini"),
+        ("anthropic", "claude-sonnet-5"),
+        ("gemini", "gemini-2.5-flash"),
+    ]
+    assert [provider.api_key for provider in providers] == [
+        "openai-key",
+        "anthropic-key",
+        "gemini-key",
+    ]
+
+
 def test_milestone25_formula_rows_collapse_same_recommended_components() -> None:
     experiment = _load_experiment_module()
     snapshot = {
@@ -548,7 +572,7 @@ def test_milestone25_summary_recommendation_returns_two_of_three_formula() -> No
     context = _summary_context()
     proposals = (
         _summary_proposal("gpt-5-mini", "ShortTermBorrowings"),
-        _summary_proposal("gemini-3.1-flash-lite", "ShortTermBorrowings"),
+        _summary_proposal("claude-sonnet-5", "ShortTermBorrowings"),
         _summary_proposal("gemini-2.5-flash", "LongTermDebtCurrent"),
     )
     validations = tuple(_summary_validation(VALIDATION_STATUS_VALIDATED) for _ in proposals)
@@ -572,7 +596,7 @@ def test_milestone25_summary_recommendation_returns_two_of_three_formula() -> No
             "recommendation": "formula",
             "formula_or_value": "debt_current = ShortTermBorrowings",
             "validated_votes": "2/3",
-            "agreeing_models": "gpt-5-mini; gemini-3.1-flash-lite",
+            "agreeing_models": "gpt-5-mini; claude-sonnet-5",
             "review_reason": "",
         }
     ]
@@ -584,7 +608,7 @@ def test_milestone25_summary_recommendation_returns_two_of_three_zero() -> None:
     context = _summary_context()
     proposals = (
         _summary_proposal("gpt-5-mini", "ShortTermBorrowings", target_zero=True),
-        _summary_proposal("gemini-3.1-flash-lite", "LongTermDebtCurrent", target_zero=True),
+        _summary_proposal("claude-sonnet-5", "LongTermDebtCurrent", target_zero=True),
         _summary_proposal("gemini-2.5-flash", "FinanceLeaseLiabilityCurrent"),
     )
     validations = (
@@ -604,7 +628,7 @@ def test_milestone25_summary_recommendation_returns_two_of_three_zero() -> None:
     assert rows[0]["recommendation"] == "zero"
     assert rows[0]["formula_or_value"] == "0"
     assert rows[0]["validated_votes"] == "2/3"
-    assert rows[0]["agreeing_models"] == "gpt-5-mini; gemini-3.1-flash-lite"
+    assert rows[0]["agreeing_models"] == "gpt-5-mini; claude-sonnet-5"
     assert rows[0]["review_reason"] == ""
 
 
@@ -614,7 +638,7 @@ def test_milestone25_summary_recommendation_explains_unresolved_outcomes() -> No
     context = _summary_context()
     proposals = (
         _summary_proposal("gpt-5-mini", "ShortTermBorrowings"),
-        _summary_proposal("gemini-3.1-flash-lite", "LongTermDebtCurrent", target_zero=True),
+        _summary_proposal("claude-sonnet-5", "LongTermDebtCurrent", target_zero=True),
         _summary_proposal("gemini-2.5-flash", "", failed=True),
     )
     validations = (
@@ -646,7 +670,7 @@ def test_milestone25_summary_recommendation_reports_unavailable_and_invalid_vote
     context = _summary_context()
     proposals = (
         _summary_proposal("gpt-5-mini", "ShortTermBorrowings"),
-        _summary_proposal("gemini-3.1-flash-lite", "LongTermDebtCurrent"),
+        _summary_proposal("claude-sonnet-5", "LongTermDebtCurrent"),
         _summary_proposal("gemini-2.5-flash", "", unavailable=True),
     )
     validations = (
