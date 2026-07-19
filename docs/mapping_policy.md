@@ -290,7 +290,7 @@ company-level metrics.
 
 ## Experiment Reporting
 
-The MS2.5 report should show:
+The MS200 report should show:
 
 - a compact summary of the run and review-only boundary
 - every target metric marked as mapped or missing, with common-base versus

@@ -241,22 +241,26 @@ Example distinction:
    * Normalize broad raw SEC/XBRL facts for supported filing forms instead of limiting ingestion to the mapped concept catalog.
    * Normalize periods, units, fiscal years, and form types.
    * Store facts in SQLite.
-2.5. Company registry, filing inventory, and base metric mapping
+200. Company registry, filing inventory, and base metric mapping
 
    * Add local company metadata, filing metadata, and update-check state.
    * Track latest ingested 10-K and 10-Q filing dates and next-check dates.
    * Keep `raw_xbrl_facts` as the source-of-truth table for normalized SEC/XBRL facts.
    * Supplement entity-wide companyfacts with issuer-extension and dimensional facts from active Inline XBRL filings.
+   * Preserve links from each base metric back to the source filing and raw XBRL fact.
+   * Do not calculate derived indicators in this milestone.
+201. Industry-aware concept mapping
+
    * Persist reusable company hard industry labels and assignment evidence; use Gemini classification from latest 10-K Item 1 Business when configured.
    * Reuse approved labels during the same annual filing cycle and reclassify when a newer 10-K changes the label evidence.
    * Select the target XBRL concept set from common base candidates plus industry-specific candidates for every approved hard label.
    * Map selected raw XBRL facts into business-friendly base metrics by statement type through deterministic catalog entries and approved learned mappings.
    * Derive and reuse an approved company concept profile from approved global, industry, and company-scoped mappings.
+202. Metric-first missing coverage resolution
+
    * Keep unresolved target XBRL concepts explicit after deterministic and approved learned mapping.
    * Generate report-only formula, zero-target, or no-evidence diagnostics from period-scoped active-window raw fact pools for unresolved metrics.
    * Present missing coverage as one internal-metric review surface rather than separate decisions for each target tag; report-only LLM diagnostics must not create base metrics or approve mappings.
-   * Preserve links from each base metric back to the source filing and raw XBRL fact.
-   * Do not calculate derived indicators in this milestone.
 3. Indicator engine
 
    * Calculate core financial indicators from base financial metrics.
@@ -335,7 +339,7 @@ Example distinction:
 
 **Manual acceptance tests**:
 
-* Run the MS2.5 experiment and inspect label source, target XBRL concept coverage, approved company concept profile reuse, unknown concepts, annual/quarterly mapped metric tables, and report-only formula/zero diagnostics.
+* Run the MS200 experiment and inspect label source, target XBRL concept coverage, approved company concept profile reuse, unknown concepts, annual/quarterly mapped metric tables, and report-only formula/zero diagnostics.
 * Run the MS3 experiment and inspect yearly and quarterly derived indicator tables with skipped reasons and source metric lineage.
 * Run the MS5 retrieval experiment and inspect active filing coverage, chunk lineage, generation state, and retrieved evidence.
 * Start the FastAPI backend.

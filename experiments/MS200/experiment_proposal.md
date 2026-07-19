@@ -1,8 +1,8 @@
-# Milestone 2.5 Experiment Proposal: Plan 2.5 Ingestion Manual Examination
+# Milestone 200 Experiment Proposal: Plan 200 Ingestion Manual Examination
 
 ## Purpose
 
-This experiment is the official manual examination harness for the new Plan 2.5
+This experiment is the official manual examination harness for the new Plan 200
 company ingestion workflow. It lets a human inspect what the actual
 `ingest_company()` workflow creates, reuses, refreshes, and preserves for one
 manually chosen company.
@@ -14,7 +14,7 @@ The experiment presents evidence. It does not decide success, failure, or
 partial success. The project owner reviews the generated report, SQLite
 database, and CSV exports, then judges whether the behavior looks correct.
 
-Plan 2.5 ingestion owns the company-level workflow between raw SEC/XBRL facts
+Plan 200 ingestion owns the company-level workflow between raw SEC/XBRL facts
 and future derived indicators:
 
 ```text
@@ -34,7 +34,7 @@ check behavior, newly ingested filings, and next check dates.
 
 ## Human Question
 
-For a company I choose, what does Plan 2.5 ingestion do during setup and during
+For a company I choose, what does Plan 200 ingestion do during setup and during
 later already-ingested sessions: local existence, refresh due status, SEC update
 check, newly ingested filings, next check dates, and stored evidence?
 
@@ -44,7 +44,7 @@ This experiment covers:
 
 - one manually chosen ticker per run
 - the actual `src.ingestion.ingest_company()` workflow
-- live SEC company initialization through Plan 2.5 ingestion
+- live SEC company initialization through Plan 200 ingestion
 - persistent isolated experiment storage
 - first-time setup ingestion when the ticker is absent from experiment storage
 - already-ingested inspection when the ticker is present from a prior run
@@ -89,7 +89,7 @@ This experiment covers:
 - report-only debt recovery diagnostics for missing `debt_current` and
   `debt_noncurrent`, including component statuses, assumed-zero components,
   skip reasons, formula versions, and source metric/raw fact IDs
-- saved Plan 2.5 target mapping report with a compact summary, mapped/missing
+- saved Plan 200 target mapping report with a compact summary, mapped/missing
   target metric status with common-base versus industry-special classification,
   and proposed formula rows split into 10-K and 10-Q active-window subsections
   with taxonomy prefixes removed from displayed concept values and explicit
@@ -103,17 +103,17 @@ inference, or pass/fail grading.
 ## Recommended Location
 
 ```text
-experiments/MS2_5/
+experiments/MS200/
   experiment_proposal.md
-  milestone25_live_sec_inspection.py
-  milestone25_mapping_report_<TICKER>.md
+  milestone200_live_sec_inspection.py
+  milestone200_mapping_report_<TICKER>.md
 
 experiments/storage/
   experiment.db
   filings/
 
 data/exports/
-  ms2_5/
+  ms200/
     companies.csv
     filings.csv
     raw_xbrl_facts.csv
@@ -124,7 +124,7 @@ data/exports/
 ```
 
 The experiment should write a compact report to
-`milestone25_mapping_report_<TICKER>.md` by default and should not print the
+`milestone200_mapping_report_<TICKER>.md` by default and should not print the
 report body to the terminal.
 `experiments/storage/experiment.db` should persist across runs and across
 milestone experiments. The CSV exports should overwrite stable paths on each
@@ -165,25 +165,25 @@ changing real local company state.
 Default run:
 
 ```text
-uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER
+uv run python experiments/MS200/milestone200_live_sec_inspection.py --ticker YOUR_TICKER
 ```
 
 Compatibility saved report run:
 
 ```text
-uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER --write-report
+uv run python experiments/MS200/milestone200_live_sec_inspection.py --ticker YOUR_TICKER --write-report
 ```
 
 Detailed saved report run:
 
 ```text
-uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER --full-report
+uv run python experiments/MS200/milestone200_live_sec_inspection.py --ticker YOUR_TICKER --full-report
 ```
 
 Default report run with report-only LLM formula proposals:
 
 ```text
-uv run python experiments/MS2_5/milestone25_live_sec_inspection.py --ticker YOUR_TICKER
+uv run python experiments/MS200/milestone200_live_sec_inspection.py --ticker YOUR_TICKER
 ```
 
 Use `--no-formula-proposals` to skip provider calls for a cheaper report-only
@@ -207,7 +207,7 @@ secondary currency facts, remains available in SQLite and CSV export evidence.
 Rules:
 
 - exactly one ticker is accepted per run
-- the compact summary is saved to `milestone25_mapping_report_<TICKER>.md` by default
+- the compact summary is saved to `milestone200_mapping_report_<TICKER>.md` by default
 - the report body is not printed to the terminal
 - while formula proposals run, the terminal prints process progress: how many
   missing targets were selected, which missing metric/statement is being
@@ -228,7 +228,7 @@ Rules:
 Main report output:
 
 ```text
-experiments/MS2_5/milestone25_mapping_report_<TICKER>.md
+experiments/MS200/milestone200_mapping_report_<TICKER>.md
 ```
 
 Kept SQLite artifact:
@@ -240,7 +240,7 @@ experiments/storage/experiment.db
 Supporting CSV artifacts:
 
 ```text
-data/exports/ms2_5/
+data/exports/ms200/
 ```
 
 ## Saved Report Shape
@@ -357,8 +357,8 @@ should say `needs_review` so the LLM does not sound like the final approver.
 - Do not print secrets or the actual `SEC_USER_AGENT` value.
 - Keep the default saved report compact, metric-first, and limited to the
   requested mapping evidence tables.
-- Save the compact Plan 2.5 target mapping report to
-  `milestone25_mapping_report_<TICKER>.md` by default without printing the
+- Save the compact Plan 200 target mapping report to
+  `milestone200_mapping_report_<TICKER>.md` by default without printing the
   report body to the terminal.
 - Keep target-level, raw-fact, unknown-concept, validation, cache, and component
   diagnostic tables out of the saved Markdown report. Keep full provider-level
@@ -373,7 +373,7 @@ should say `needs_review` so the LLM does not sound like the final approver.
 
 ## Storage To Inspect
 
-The kept experiment database should contain the Milestone 2.5 tables:
+The kept experiment database should contain the Milestone 200 tables:
 
 ```text
 companies
@@ -385,7 +385,7 @@ financial_metrics
 Generated CSV exports remain under:
 
 ```text
-data/exports/ms2_5/
+data/exports/ms200/
 ```
 
 The saved report should use Markdown tables for the compact summary, target
@@ -448,3 +448,81 @@ inspect:
 
 The experiment should stop at presentation. The human reviewer decides whether
 the observed behavior is acceptable.
+
+## Plan 203 Increment 1 Companion Proof
+
+`plan203_arelle_proof.py` is a separate schema-free extraction and
+reconciliation proof. It does not replace the Milestone 200 inspection command,
+write SQLite data, activate inferred mappings, or call formula providers.
+
+After setting `SEC_USER_AGENT` and explicitly installing the reviewed taxonomy
+archives, run:
+
+```powershell
+uv run python experiments/MS200/plan203_arelle_proof.py --ticker MSFT
+```
+
+Use `--sync-taxonomies` only when the exact source-controlled registry artifacts
+need to be installed. The proof selects the latest 10-K and 10-Q, builds or
+verifies accession packages, proves offline Arelle loading, launches one bounded
+worker per accession, and saves:
+
+```text
+experiments/MS200/experiment_report_plan203_arelle.md
+```
+
+The report exposes package identity, extraction counts, payload bytes, timings,
+diagnostics, canonical eligibility, and same-accession consolidated Company
+Facts reconciliation. A `degraded` or `failed` filing remains evidence only and
+cannot populate metrics.
+
+## Milestone 203 Workflow Inspection Report
+
+`milestone203_experiment.py` is the presentation layer for the implemented
+Plan 203 proof. It calls `run_plan203_proof(...)` once, then projects the
+detached Arelle evidence through the existing fact-precedence and hard-mapping
+APIs. It does not replace production ingestion, change a schema, persist facts
+or metrics, activate an inferred mapping, generate a formula, or call an LLM.
+
+Run the latest 10-K and 10-Q inspection with an existing mapping database:
+
+```powershell
+uv run python experiments/MS200/milestone203_experiment.py --ticker MSFT --database stock_data.db
+```
+
+The default artifact is:
+
+```text
+experiments/MS200/milestone203_mapping_report_MSFT.md
+```
+
+The report must show:
+
+- a workflow table from SEC acquisition through atomic report publication
+- per-accession Arelle completeness, reason when incomplete, fact/concept
+  counts, selected and quarantined observations, duplicate groups, eligibility,
+  and timings
+- count integrity using grouped observations' raw occurrence counts
+- the source-controlled common plus company-industry target bundle
+- every applicable target exactly once, split into mapped and explicitly
+  missing sections
+- the existing hard-mapping source, including applicable approved SQLite rows
+  read through query-only mode
+- a visible source-controlled-only fallback when a legacy read-only database
+  does not contain the approved-mapping table; the experiment must not create it
+- equal-specificity approved-mapping disagreements as excluded conflicts
+- report-only deterministic Arelle-evidence inference for missing targets,
+  including five 0-2 ranking categories, target-to-concept and
+  concept-to-target margins, hard gates, bounded rejection examples, and
+  evidence citations
+- worked mapped and missing traces plus the no-write/no-LLM boundary
+
+Namespace is not a normal mapping selector. It remains visible for lineage and
+is used to abstain when the same local selector crosses unrelated taxonomy or
+issuer families. Inference scores are uncalibrated within-session ranking
+evidence, not probability, confidence, or human approval.
+
+Exit code `0` means every requested form produced a complete Arelle result,
+`3` means at least one requested form was incomplete while another remained
+inspectable, `1` means the report had no eligible form or hit a global/report
+failure, and argparse retains exit code `2` for invalid arguments.

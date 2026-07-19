@@ -57,7 +57,7 @@ _ASSIGNMENTS: tuple[CompanyIndustryLabelAssignment, ...] = (
         ),
         reviewed_at="2026-06-18",
         label_status=LABEL_STATUS_ASSIGNED,
-        notes="Initial Plan 2.5.1 experiment assignment.",
+        notes="Initial Plan 201 experiment assignment.",
     ),
     CompanyIndustryLabelAssignment(
         ticker="MSFT",
@@ -74,7 +74,7 @@ _ASSIGNMENTS: tuple[CompanyIndustryLabelAssignment, ...] = (
         ),
         reviewed_at="2026-06-18",
         label_status=LABEL_STATUS_ASSIGNED,
-        notes="Initial Plan 2.5.1 experiment assignment.",
+        notes="Initial Plan 201 experiment assignment.",
     ),
     CompanyIndustryLabelAssignment(
         ticker="AAPL",
@@ -88,7 +88,7 @@ _ASSIGNMENTS: tuple[CompanyIndustryLabelAssignment, ...] = (
         ),
         reviewed_at="2026-06-18",
         label_status=LABEL_STATUS_ASSIGNED,
-        notes="Initial Plan 2.5.1 registry seed.",
+        notes="Initial Plan 201 registry seed.",
     ),
     CompanyIndustryLabelAssignment(
         ticker="AMZN",
@@ -102,7 +102,7 @@ _ASSIGNMENTS: tuple[CompanyIndustryLabelAssignment, ...] = (
         ),
         reviewed_at="2026-06-18",
         label_status=LABEL_STATUS_ASSIGNED,
-        notes="Initial Plan 2.5.1 registry seed.",
+        notes="Initial Plan 201 registry seed.",
     ),
     CompanyIndustryLabelAssignment(
         ticker="GOOGL",
@@ -116,7 +116,7 @@ _ASSIGNMENTS: tuple[CompanyIndustryLabelAssignment, ...] = (
         ),
         reviewed_at="2026-06-18",
         label_status=LABEL_STATUS_ASSIGNED,
-        notes="Initial Plan 2.5.1 registry seed.",
+        notes="Initial Plan 201 registry seed.",
     ),
     CompanyIndustryLabelAssignment(
         ticker="META",
@@ -130,7 +130,7 @@ _ASSIGNMENTS: tuple[CompanyIndustryLabelAssignment, ...] = (
         ),
         reviewed_at="2026-06-18",
         label_status=LABEL_STATUS_ASSIGNED,
-        notes="Initial Plan 2.5.1 registry seed.",
+        notes="Initial Plan 201 registry seed.",
     ),
     CompanyIndustryLabelAssignment(
         ticker="NVDA",
@@ -144,7 +144,7 @@ _ASSIGNMENTS: tuple[CompanyIndustryLabelAssignment, ...] = (
         ),
         reviewed_at="2026-06-18",
         label_status=LABEL_STATUS_ASSIGNED,
-        notes="Initial Plan 2.5.1 registry seed.",
+        notes="Initial Plan 201 registry seed.",
     ),
     CompanyIndustryLabelAssignment(
         ticker="JPM",
@@ -158,7 +158,7 @@ _ASSIGNMENTS: tuple[CompanyIndustryLabelAssignment, ...] = (
         ),
         reviewed_at="2026-06-18",
         label_status=LABEL_STATUS_ASSIGNED,
-        notes="Initial Plan 2.5.1 registry seed.",
+        notes="Initial Plan 201 registry seed.",
     ),
     CompanyIndustryLabelAssignment(
         ticker="XOM",
@@ -172,7 +172,7 @@ _ASSIGNMENTS: tuple[CompanyIndustryLabelAssignment, ...] = (
         ),
         reviewed_at="2026-06-18",
         label_status=LABEL_STATUS_ASSIGNED,
-        notes="Initial Plan 2.5.1 registry seed.",
+        notes="Initial Plan 201 registry seed.",
     ),
     CompanyIndustryLabelAssignment(
         ticker="NEE",
@@ -186,7 +186,7 @@ _ASSIGNMENTS: tuple[CompanyIndustryLabelAssignment, ...] = (
         ),
         reviewed_at="2026-06-18",
         label_status=LABEL_STATUS_ASSIGNED,
-        notes="Initial Plan 2.5.1 registry seed.",
+        notes="Initial Plan 201 registry seed.",
     ),
     CompanyIndustryLabelAssignment(
         ticker="PLD",
@@ -200,7 +200,7 @@ _ASSIGNMENTS: tuple[CompanyIndustryLabelAssignment, ...] = (
         ),
         reviewed_at="2026-06-18",
         label_status=LABEL_STATUS_ASSIGNED,
-        notes="Initial Plan 2.5.1 registry seed.",
+        notes="Initial Plan 201 registry seed.",
     ),
     CompanyIndustryLabelAssignment(
         ticker="JNJ",
@@ -214,7 +214,7 @@ _ASSIGNMENTS: tuple[CompanyIndustryLabelAssignment, ...] = (
         ),
         reviewed_at="2026-06-18",
         label_status=LABEL_STATUS_ASSIGNED,
-        notes="Initial Plan 2.5.1 registry seed.",
+        notes="Initial Plan 201 registry seed.",
     ),
     CompanyIndustryLabelAssignment(
         ticker="WMT",
@@ -228,7 +228,7 @@ _ASSIGNMENTS: tuple[CompanyIndustryLabelAssignment, ...] = (
         ),
         reviewed_at="2026-06-18",
         label_status=LABEL_STATUS_ASSIGNED,
-        notes="Initial Plan 2.5.1 registry seed.",
+        notes="Initial Plan 201 registry seed.",
     ),
 )
 

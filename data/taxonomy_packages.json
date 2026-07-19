@@ -1,0 +1,154 @@
+{
+  "registry_schema_version": 1,
+  "registry_policy_version": "taxonomy-registry-v1",
+  "packages": [
+    {
+      "package_id": "fasb-us-gaap",
+      "version": "2024",
+      "source_url": "https://xbrl.fasb.org/us-gaap/2024/us-gaap-2024.zip",
+      "approved_redirect_hosts": [
+        "xbrl.fasb.org"
+      ],
+      "archive_filename": "us-gaap-2024.zip",
+      "install_mode": "arelle_package",
+      "byte_size": 7115653,
+      "sha256": "decdd417d86ff7bfb5ca166c0ca1001017aea873673544a8d7f91c34bf5d82df",
+      "namespaces": [
+        "http://fasb.org/us-gaap/2024",
+        "http://fasb.org/us-types/2024"
+      ],
+      "catalog_remappings": {
+        "https://xbrl.fasb.org/us-gaap/2024/": "us-gaap-2024/"
+      },
+      "compatible_arelle": ">=2.41,<3.0",
+      "approval_date": "2026-07-17"
+    },
+    {
+      "package_id": "fasb-srt",
+      "version": "2024",
+      "source_url": "https://xbrl.fasb.org/srt/2024/srt-2024.zip",
+      "approved_redirect_hosts": [
+        "xbrl.fasb.org"
+      ],
+      "archive_filename": "srt-2024.zip",
+      "install_mode": "arelle_package",
+      "byte_size": 188150,
+      "sha256": "136d16f1bf62ca1966300231b2b399f90631ba703381aeec467e9bec4f3867eb",
+      "namespaces": [
+        "http://fasb.org/srt/2024",
+        "http://fasb.org/srt-types/2024"
+      ],
+      "catalog_remappings": {
+        "https://xbrl.fasb.org/srt/2024/": "srt-2024/"
+      },
+      "compatible_arelle": ">=2.41,<3.0",
+      "approval_date": "2026-07-17"
+    },
+    {
+      "package_id": "sec-standard-taxonomies",
+      "version": "2024",
+      "source_url": "https://xbrl.sec.gov/2024.zip",
+      "approved_redirect_hosts": [
+        "xbrl.sec.gov"
+      ],
+      "archive_filename": "sec-2024.zip",
+      "install_mode": "web_cache_archive",
+      "byte_size": 1084829,
+      "sha256": "418477e806d5a2d6b21376a26c01fc373d549dae8d18f223a6ebddf80680bdf0",
+      "namespaces": [
+        "http://xbrl.sec.gov/country/2024",
+        "http://xbrl.sec.gov/dei/2024",
+        "http://xbrl.sec.gov/exch/2024",
+        "http://xbrl.sec.gov/naics/2024",
+        "http://xbrl.sec.gov/sic/2024",
+        "http://xbrl.sec.gov/stpr/2024"
+      ],
+      "catalog_remappings": {},
+      "compatible_arelle": ">=2.41,<3.0",
+      "approval_date": "2026-07-17"
+    },
+    {
+      "package_id": "sec-cyd",
+      "version": "2024",
+      "source_url": "https://xbrl.sec.gov/cyd/2024/cyd-2024.zip",
+      "approved_redirect_hosts": [
+        "xbrl.sec.gov"
+      ],
+      "archive_filename": "cyd-2024.zip",
+      "install_mode": "web_cache_overlay",
+      "byte_size": 16356,
+      "sha256": "a52a1ab486257a5497a8ca4573a5d81a558c1fabcc1e858fabb769de658c3719",
+      "namespaces": [
+        "http://xbrl.sec.gov/cyd/2024"
+      ],
+      "catalog_remappings": {},
+      "compatible_arelle": ">=2.41,<3.0",
+      "approval_date": "2026-07-17"
+    },
+    {
+      "package_id": "fasb-us-gaap",
+      "version": "2025",
+      "source_url": "https://xbrl.fasb.org/us-gaap/2025/us-gaap-2025.zip",
+      "approved_redirect_hosts": [
+        "xbrl.fasb.org"
+      ],
+      "archive_filename": "us-gaap-2025.zip",
+      "install_mode": "arelle_package",
+      "byte_size": 7101405,
+      "sha256": "a3b835925ad74030eb5be865a26d7dfe44013081c4ab7204b6122316a685fff4",
+      "namespaces": [
+        "http://fasb.org/us-gaap/2025",
+        "http://fasb.org/us-types/2025"
+      ],
+      "catalog_remappings": {
+        "https://xbrl.fasb.org/us-gaap/2025/": "us-gaap-2025/"
+      },
+      "compatible_arelle": ">=2.41,<3.0",
+      "approval_date": "2026-07-17"
+    },
+    {
+      "package_id": "fasb-srt",
+      "version": "2025",
+      "source_url": "https://xbrl.fasb.org/srt/2025/srt-2025.zip",
+      "approved_redirect_hosts": [
+        "xbrl.fasb.org"
+      ],
+      "archive_filename": "srt-2025.zip",
+      "install_mode": "arelle_package",
+      "byte_size": 191908,
+      "sha256": "aad1daeb4bdfe3057f4ed81482c06130f873a59fa7fce5193c5731f93b1fef88",
+      "namespaces": [
+        "http://fasb.org/srt/2025",
+        "http://fasb.org/srt-types/2025"
+      ],
+      "catalog_remappings": {
+        "https://xbrl.fasb.org/srt/2025/": "srt-2025/"
+      },
+      "compatible_arelle": ">=2.41,<3.0",
+      "approval_date": "2026-07-17"
+    },
+    {
+      "package_id": "sec-standard-taxonomies",
+      "version": "2025",
+      "source_url": "https://xbrl.sec.gov/2025.zip",
+      "approved_redirect_hosts": [
+        "xbrl.sec.gov"
+      ],
+      "archive_filename": "sec-2025.zip",
+      "install_mode": "web_cache_archive",
+      "byte_size": 1201089,
+      "sha256": "6a963051af02ff458e02669549bd55f9d547281724f3b4e053cb0157be8121e4",
+      "namespaces": [
+        "http://xbrl.sec.gov/country/2025",
+        "http://xbrl.sec.gov/dei/2025",
+        "http://xbrl.sec.gov/exch/2025",
+        "http://xbrl.sec.gov/naics/2025",
+        "http://xbrl.sec.gov/sic/2025",
+        "http://xbrl.sec.gov/stpr/2025"
+      ],
+      "catalog_remappings": {},
+      "compatible_arelle": ">=2.41,<3.0",
+      "approval_date": "2026-07-17"
+    }
+  ]
+}

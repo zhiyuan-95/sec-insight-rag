@@ -64,6 +64,34 @@ src/ingestion/company.py
   +-- src/storage/indicators_repository.py
         -> persist derived financial indicators and skipped calculations
 
+experiments/MS200/plan203_arelle_proof.py
+  |
+  +-- src/ingestion/taxonomy_packages.py
+  |     -> verify explicitly pinned standard taxonomy archives
+  +-- src/ingestion/filing_packages.py
+  |     -> build accession-scoped, hash-verified filing packages
+  +-- src/ingestion/arelle_worker.py
+  |     -> enforce one bounded isolated process per accession
+  +-- src/ingestion/arelle_adapter.py
+  |     -> load verified packages offline and detach Arelle model evidence
+  +-- src/ingestion/arelle_plugins/sec_transform/
+  |     -> pinned official SEC Inline XBRL transformations for Arelle
+  +-- src/processing/arelle_records.py + arelle_codec.py
+  |     -> own and serialize the bounded cross-process result contract
+  +-- src/processing/arelle_reconciliation.py
+        -> compare same-accession consolidated facts with Company Facts in memory
+
+experiments/MS200/milestone203_experiment.py
+  |
+  +-- experiments/MS200/plan203_arelle_proof.py
+  |     -> return one immutable proof session without changing the proof CLI contract
+  +-- src/processing/arelle_precedence.py + base_metrics.py
+  |     -> reuse current fact selection and deterministic hard mapping
+  +-- src/storage/database.py + concept_mappings_repository.py
+  |     -> inspect approved mappings through a query-only SQLite connection
+  +-- src/processing/arelle_mapping_inference.py
+        -> rank missing-target candidates from Arelle evidence in shadow mode only
+
 experiments/MS5/milestone5_retrieval_pipeline.py
   |
   v
@@ -79,6 +107,8 @@ src/retrieval/service.py
 Generated local data:
 
 data_store/filings/          downloaded SEC filing HTML
+data_store/taxonomy_packages/ verified pinned taxonomy archives for Plan 203
+data_store/arelle_cache/      generated Arelle web cache populated from verified archives
 data_store/knowledge/        local formula proposal cache and versioned retrieval indexes
 stock_data.db                SQLite database
   raw_xbrl_facts             companyfacts plus Inline XBRL facts with context and dimensions
@@ -206,11 +236,13 @@ data_store/
 ```text
 docs/
   experiments.md
+  indicator_catalog.md
   mapping_policy.md
   structure.md
 ```
 
 - `docs/experiments.md`: Central experiment runbook and index. It defines shared experiment rules, data modes, folder naming, and links to per-milestone proposal files.
+- `docs/indicator_catalog.md`: Design catalog that separates the common cross-industry indicator core from hard-industry-specific and input-qualified indicator bundles, defines distinct annual, discrete-quarter, and TTM period catalogs including per-industry annual/quarterly splits, and distinguishes implemented formulas from proposed formulas and mapping gaps.
 - `docs/mapping_policy.md`: Mapping governance policy for broad raw XBRL ingestion, explicit hard industry label assignment, selective base metric mapping, target raw fact coverage, and unknown concept review.
 - `docs/structure.md`: Current repository and module structure. This file should stay synchronized with the actual code layout.
 
@@ -224,9 +256,11 @@ experiments/
   MS2/
     experiment_proposal.md
     milestone2_ingestion_showcase.py
-  MS2_5/
+  MS200/
     experiment_proposal.md
-    milestone25_live_sec_inspection.py
+    milestone200_live_sec_inspection.py
+    milestone203_experiment.py
+    plan203_arelle_proof.py
   MS3/
     experiment_proposal.md
     milestone3_indicator_engine.py
@@ -244,10 +278,12 @@ experiments/
 - `experiments/MS1/experiment_proposal.md`: Human-inspection proposal for the Milestone 1 scaffold experiment. It defines the local project structure, settings, and API health output to inspect.
 - `experiments/MS2/experiment_proposal.md`: Human-inspection proposal for the Milestone 2 SEC/XBRL ingestion and normalization experiment. It defines input cases, intended terminal output, artifacts to inspect, edge cases, and expected outcomes.
 - `experiments/MS2/milestone2_ingestion_showcase.py`: Runnable Milestone 2 experiment script that prints the SEC/XBRL ingestion and normalization showcase described by the Milestone 2 proposal.
-- `experiments/storage/`: Generated shared experiment storage. Current MS2.5 live runs use `experiments/storage/experiment.db` and `experiments/storage/filings/` so later milestone experiments can inspect the same isolated state without touching `stock_data.db`.
-- `experiments/MS2_5/experiment_proposal.md`: Human-inspection proposal for the Milestone 2.5 ingestion and mapping examination harness. It covers persistent isolated storage, update checks, active-window evidence, persisted industry labels, target and raw-fact coverage, Inline XBRL extensions, approved learned mappings, report-only LLM formula proposal diagnostics, unknown/alternate tags, financial metric lineage, saved reports, and SQLite/CSV evidence.
-- `experiments/MS2_5/milestone25_live_sec_inspection.py`: Runnable Milestone 2.5 experiment script that saves `experiments/MS2_5/milestone25_mapping_report_<TICKER>.md` without printing the report body, then prints a one-line report generation duration and saved report path. The compact report contains section 0 summary, section 0A selected XBRL concept counts by period, section 1 mapped/missing target status, section 2 detailed formula and provider-outcome evidence split into 10-K and 10-Q subsections, and section 3 one deterministic summary recommendation per selected missing target-period. Section 2 keeps identical displayed formulas grouped while showing exact period coverage for each provider. Section 3 reports `formula` for a two-of-three matching validated component signature, `zero` for two-of-three validated zero-evidence outcomes, and `review_required` otherwise; disabled runs, empty eligible fact pools, and targets without contexts remain visible. Formula calls use the ordered `gpt-5-mini`, `claude-sonnet-5`, and `gemini-2.5-flash` panel over the existing target-compatible context and batching flow. Terminal progress distinguishes total model outcomes and provider-context slots from reused outcomes and numbered live batch requests, so a fully cached model remains visible without making another API call. The script preserves report-only behavior, exact per-model cache separation, active 10-K/10-Q filtering, primary monetary-unit selection, compact period labels, taxonomy-prefix stripping, concise terminal progress, `--no-formula-proposals`, compatibility flags, `experiments/storage/experiment.db`, filing downloads, supporting CSV exports, and the configurable formula cache directory.
-- `experiments/MS3/experiment_proposal.md`: Human-inspection proposal for the Milestone 3 indicator engine experiment. It defines active accession-window scope, yearly and quarterly indicator tables for the requested catalog, skipped-period reasons, formulas, and source-metric traceability output.
+- `experiments/storage/`: Generated shared experiment storage. Current MS200 live runs use `experiments/storage/experiment.db` and `experiments/storage/filings/` so later milestone experiments can inspect the same isolated state without touching `stock_data.db`.
+- `experiments/MS200/experiment_proposal.md`: Human-inspection proposal for the Milestone 200 ingestion and mapping examination harness. It covers persistent isolated storage, update checks, active-window evidence, persisted industry labels, target and raw-fact coverage, Inline XBRL extensions, approved learned mappings, report-only LLM formula proposal diagnostics, unknown/alternate tags, financial metric lineage, saved reports, and SQLite/CSV evidence.
+- `experiments/MS200/milestone200_live_sec_inspection.py`: Runnable Milestone 200 experiment script that saves `experiments/MS200/milestone200_mapping_report_<TICKER>.md` without printing the report body, then prints a one-line report generation duration and saved report path. The compact report contains section 0 summary, section 0A selected XBRL concept counts by period, section 1 mapped/missing target status, section 2 detailed formula and provider-outcome evidence split into 10-K and 10-Q subsections, and section 3 one deterministic summary recommendation per selected missing target-period. Section 2 keeps identical displayed formulas grouped while showing exact period coverage for each provider. Section 3 reports `formula` for a two-of-three matching validated component signature, `zero` for two-of-three validated zero-evidence outcomes, and `review_required` otherwise; disabled runs, empty eligible fact pools, and targets without contexts remain visible. Formula calls use the ordered `gpt-5-mini`, `claude-sonnet-5`, and `gemini-2.5-flash` panel over the existing target-compatible context and batching flow. Terminal progress distinguishes total model outcomes and provider-context slots from reused outcomes and numbered live batch requests, so a fully cached model remains visible without making another API call. The script preserves report-only behavior, exact per-model cache separation, active 10-K/10-Q filtering, primary monetary-unit selection, compact period labels, taxonomy-prefix stripping, concise terminal progress, `--no-formula-proposals`, compatibility flags, `experiments/storage/experiment.db`, filing downloads, supporting CSV exports, and the configurable formula cache directory.
+- `experiments/MS200/plan203_arelle_proof.py`: Runnable schema-free proof plus reusable `run_plan203_proof(...)` session API. The CLI retains the original proof report and treats only failed form evidence as an error; the session API isolates package or worker failures per requested form.
+- `experiments/MS200/milestone203_experiment.py`: Read-only presentation command for the current Plan 203 workflow. It saves `milestone203_mapping_report_<TICKER>.md` with stage-by-stage acquisition, Arelle, selection, target-bundle, hard-mapping, missing-target, and shadow-inference evidence. A legacy database without the approved-mapping table is reported and falls back to source-controlled mappings without initialization. The command does not change the schema, persist facts or metrics, activate mappings, generate formulas, or call an LLM.
+- `experiments/MS3/experiment_proposal.md`: Human-inspection proposal for the Milestone 3 indicator engine experiment. It defines active accession-window scope, separate period-appropriate yearly and quarterly indicator sets, duration-basis checks, skipped and not-applicable reasons, formulas, and source-metric traceability output.
 - `experiments/MS3/milestone3_indicator_engine.py`: Runnable Milestone 3 experiment script that reads stored `financial_indicators` and writes a `.txt` report under `experiments/MS3` with active accession-window scope, yearly and quarterly indicator tables for the requested ticker or tickers, skipped reasons, formulas, and source traceability.
 - `experiments/MS4/experiment_proposal.md`: Human-inspection proposal for the Milestone 4 deterministic financial analytics experiment. It defines trend, comparison, gap, outlier, and chart-ready output.
 - `experiments/MS5/experiment_proposal.md`: Human-inspection proposal for the Milestone 5 retrieval pipeline experiment. It defines active filing coverage, section-aware chunking, generation state, hybrid retrieval metadata, source lineage, and saved text-report output.
@@ -318,6 +354,11 @@ Current files:
 - `submissions.py`: SEC submissions URL building and retrieval.
 - `companyfacts.py`: SEC companyfacts URL building and retrieval.
 - `inline_xbrl.py`: Arelle-backed loading of active SEC Inline XBRL documents and extension taxonomy dependencies.
+- `taxonomy_packages.py`: Strict source-controlled taxonomy registry validation, explicit package synchronization, archive classification, and local hash verification.
+- `filing_packages.py`: Accession-scoped filing artifact acquisition, package manifests, content verification, and offline-verification state.
+- `arelle_adapter.py`: Canonical offline Arelle Session boundary for verified filing packages; extracts project-owned facts, concepts, relationships, namespaces, timings, and diagnostics.
+- `arelle_plugins/sec_transform/`: Exact runtime files from the official `Arelle/EDGAR` SEC Inline Transforms plugin, pinned to tag `26.1.3` and revision `72033f579e89ab47e882437b5d4ceed9c7656ed5`; the adapter loads this plugin for offline verification and canonical accession processing.
+- `arelle_worker.py`: Spawned one-accession worker boundary with a hard deadline and a bounded serialized response.
 - `filings.py`: Filing metadata listing, latest-form selection helpers, and filing document download.
 - `refresh_policy.py`: Next-check date heuristics for 10-K and 10-Q refresh checks, plus business-day helpers.
 - `company.py`: Refresh-aware `ingest_company` orchestration and `CompanyIngestionResult`.
@@ -358,6 +399,11 @@ metric-first formula/zero evidence resolution for mapping review.
 Current files:
 
 - `xbrl_normalizer.py`: Defines `NormalizedFact`, `normalize_companyfacts`, `normalize_fact_entry`, and duplicate fact marking.
+- `arelle_records.py`: Immutable request, result, fact, concept, relationship, diagnostic, and resource-limit records for the Plan 203 boundary.
+- `arelle_codec.py`: Deterministic bounded JSON transport codec for isolated Arelle worker results.
+- `arelle_reconciliation.py`: Taxonomy-family and local-name, same-accession consolidated fact comparison against normalized Company Facts; full Arelle namespaces remain lineage and duplicate keys remain explicit ambiguities.
+- `arelle_precedence.py`: In-memory semantic fact identity, deterministic duplicate quarantine, and complete-accession precedence across 10-K/10-K/A and 10-Q/10-Q/A form families.
+- `arelle_mapping_inference.py`: Report-only deterministic missing-target ranking from Arelle concept, role, presentation, calculation/definition, recurrence, and governed lexical evidence. It applies observation gates, namespace-family collision detection, and two-way uniqueness margins; its uncalibrated scores are not confidence or approval decisions.
 - `inline_xbrl.py`: Converts Arelle filing models into normalized issuer-extension and dimensional raw facts without fetching SEC data or writing storage.
 - `mapping_targets.py`: Builds canonical target definitions and missing-target checks for hard-mapping coverage.
 - `formula_proposals.py`: Builds target-unit-compatible, statement-bucketed raw fact contexts for report-only LLM formula proposals, keeps only the primary monetary unit per filing period for monetary targets while preserving all raw units in storage/export evidence, collapses identical period raw-concept pools into one provider context with period coverage, computes exact reusable formula context fingerprints and statement-scoped batch keys, normalizes single-target and batch provider responses, caches successful structured formula, zero-target, or no-formula decisions per target/context/provider, and deterministically validates formula components or cited zero-evidence facts against representative raw XBRL facts. Formula validation distinguishes actual fact dates inside comparative filings, prefers an undimensioned fact when dimensional variants coexist for the same concept/date, and still rejects truly ambiguous same-date duplicates.
@@ -390,7 +436,7 @@ Key responsibilities:
   no-evidence review evidence.
 - Validate report-only LLM formula proposals for all unresolved targets against
   period-scoped raw XBRL fact pools, including found target facts, mapped
-  metrics, approved alternates, and unknown/unmapped facts. The MS2.5 report
+  metrics, approved alternates, and unknown/unmapped facts. The MS200 report
   sends active target-unit-compatible contexts to the provider panel, suppresses
   secondary monetary currencies from provider contexts when a filing period has
   a primary monetary unit, reuses exact provider results when the target/model/raw-concept pool is identical
@@ -418,7 +464,7 @@ SQLite persistence.
 
 Current files:
 
-- `database.py`: SQLite connection and schema initialization helpers.
+- `database.py`: SQLite connection and schema initialization helpers, including a strict existing-file, query-only connection for inspection workflows.
 - `facts_repository.py`: `RawFactRepository` for normalized raw XBRL facts.
 - `industry_labels_repository.py`: `CompanyIndustryLabelRepository` for persisted company hard-industry labels and evidence.
 - `concept_mappings_repository.py`: `ConceptMappingRepository` for scoped approved learned raw-concept mappings used by hard mapping.
@@ -511,7 +557,7 @@ Current files:
 Current status:
 
 - Gemini hard-industry classification is implemented for ingestion label assignment.
-- Report-only XBRL formula proposal calls are implemented for the MS2.5 report.
+- Report-only XBRL formula proposal calls are implemented for the MS200 report.
   Formula proposal prompts use
   representative target-unit-compatible period contexts, statement-first
   component selection, optional evidence-backed zero-target decisions, and
@@ -554,12 +600,16 @@ When added, it should own thin application workflow orchestration. For example, 
 The project uses focused pytest coverage alongside milestone experiments:
 
 - Run the complete automated suite with `uv run python -m pytest -q`.
+- Run the focused Plan 203 boundary suite with `uv run pytest tests/test_taxonomy_packages.py tests/test_filing_packages.py tests/test_arelle_adapter.py tests/test_arelle_worker.py tests/test_arelle_codec.py tests/test_arelle_reconciliation.py tests/test_arelle_precedence.py -q`.
+- Run the focused Milestone 203 report truth guards with `uv run pytest tests/test_milestone203_experiment.py -q`.
+- After configuring `SEC_USER_AGENT` and explicitly installing the pinned taxonomy archives, run the schema-free live proof with `uv run python experiments/MS200/plan203_arelle_proof.py --ticker MSFT`. Add `--sync-taxonomies` only when the reviewed packages need to be installed.
+- With the same SEC and taxonomy prerequisites plus an existing SQLite database, run the read-only inspection report with `uv run python experiments/MS200/milestone203_experiment.py --ticker MSFT --database stock_data.db`.
 - The restored suite currently covers settings, SEC client behavior, ticker and
   submissions parsing, companyfacts normalization, XBRL periods and quality,
   hard industry labels and mapping targets, active-window base metric mapping,
   repositories, ingestion refresh paths, company deletion, indicator formulas
   and lineage, filing parsing, retrieval generation integrity and rollback,
-  fused evidence lineage, API health, concise CLI reporting, and MS2/MS2.5
+  fused evidence lineage, API health, concise CLI reporting, and MS2/MS200
   experiment behavior.
 - Extend automated coverage when changing deterministic logic, repositories,
   public interfaces, regressions, or important failure paths.
@@ -580,10 +630,15 @@ The following paths may exist locally but should not be treated as source archit
 - `src/**/__pycache__/`
 - `stock_data.db`
 - downloaded files under `data_store/filings/`
+- generated accession packages under `data_store/filings/<CIK>/<ACCESSION>/xbrl-package-<REGISTRY_HASH>/`
+- verified downloaded taxonomy archives under `data_store/taxonomy_packages/`
+- generated Arelle cache files under `data_store/arelle_cache/`
 - generated knowledge cache files under `data_store/knowledge/`, including formula proposal cache entries
 - generated exports under `data/exports/`
 - generated shared experiment storage under `experiments/storage/`, including `experiment.db` and `filings/`
-- generated Milestone 2.5 report artifacts: `experiments/MS2_5/milestone25_mapping_report_*.md`
+- generated Milestone 200 report artifacts: `experiments/MS200/milestone200_mapping_report_*.md`
+- generated Plan 203 proof report: `experiments/MS200/experiment_report_plan203_arelle.md`
+- generated Milestone 203 inspection reports: `experiments/MS200/milestone203_mapping_report_*.md`
 - generated Milestone 3 report artifacts: `experiments/MS3/milestone3_indicator_report_*.txt`
 - generated Milestone 5 report artifacts: `experiments/MS5/experiment_report_*.txt`
 - local task notes in `to_do.md`

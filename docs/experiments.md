@@ -39,8 +39,10 @@ experiments/
     experiment_proposal.md
   MS2/
     experiment_proposal.md
-  MS2_5/
+  MS200/
     experiment_proposal.md
+    milestone203_experiment.py
+    plan203_arelle_proof.py
   MS3/
     experiment_proposal.md
     milestone3_indicator_engine.py
@@ -58,7 +60,7 @@ experiments/
 Folder naming rule:
 
 - Use `MS1`, `MS2`, `MS3`, and so on for whole-number milestones.
-- Use `MS2_5` for Milestone 2.5.
+- Use `MS200` for Milestone 200.
 - Keep runnable experiment scripts inside the same milestone folder as their
   proposal.
 
@@ -114,12 +116,34 @@ runnable experiment without guessing what the report output should show.
 | --- | --- | --- |
 | 1 | `experiments/MS1/experiment_proposal.md` | Project scaffold, settings, API health |
 | 2 | `experiments/MS2/experiment_proposal.md` | SEC/XBRL ingestion, filing paths, raw facts |
-| 2.5 | `experiments/MS2_5/experiment_proposal.md` | Update checks, persisted industry labels, Inline XBRL extensions, governed concept mapping, base metric lineage |
-| 3 | `experiments/MS3/experiment_proposal.md` | Derived indicators, active-window yearly and quarterly tables, formulas, source metric traceability |
+| 200 / 203 | `experiments/MS200/experiment_proposal.md` | Update checks, persisted industry labels, Inline XBRL extensions, governed concept mapping, base metric lineage, the schema-free Plan 203 proof, and a read-only stage-by-stage mapping inspection report |
+| 3 | `experiments/MS3/experiment_proposal.md` | Derived indicators, period-appropriate active-window yearly and quarterly tables, duration-basis checks, formulas, source metric traceability |
 | 4 | `experiments/MS4/experiment_proposal.md` | Deterministic trends, comparisons, chart-ready output |
 | 5 | `experiments/MS5/experiment_proposal.md` | Filing chunking and retrieval evidence |
 | 6 | `experiments/MS6/experiment_proposal.md` | Gemini configuration, prompt source, call metadata |
 | 7 | `experiments/MS7/experiment_proposal.md` | RAG answer separation, evidence references, unsupported claims |
+
+## Milestone 203 Inspection Command
+
+After configuring `SEC_USER_AGENT`, installing the exact reviewed taxonomy
+packages, and choosing an existing SQLite database, run:
+
+```powershell
+uv run python experiments/MS200/milestone203_experiment.py --ticker MSFT --database stock_data.db
+```
+
+The command contacts SEC for the latest requested 10-K and 10-Q, uses the
+schema-free Plan 203 Arelle proof, reads approved mappings through SQLite
+query-only mode, and saves
+`experiments/MS200/milestone203_mapping_report_MSFT.md`. The report presents
+fact validation and selection, duplicate/quarantine accounting, the complete
+applicable target bundle split into mapped and explicitly missing sections, and
+deterministic Arelle-evidence inference for missing targets. Inference is shadow
+evidence only: it does not write or approve a mapping, generate a formula, or
+call an LLM.
+If a legacy database does not yet contain `xbrl_concept_mappings`, the report
+shows that absence and continues with source-controlled mappings; it never
+initializes the table during inspection.
 
 ## Update Policy
 

@@ -57,7 +57,7 @@ Implemented so far:
 - `ingest_company(...)` exported from `src.ingestion` to orchestrate ticker resolution, SEC retrieval, filing downloads, XBRL normalization, and SQLite persistence
 - Active-window base financial metric mapping
 - Deterministic derived indicator calculation and SQLite persistence
-- Milestone 2.5 and Milestone 3 experiment reports
+- Milestone 200 and Milestone 3 experiment reports
 
 Not implemented yet:
 

@@ -32,3 +32,11 @@ class TickerNotFoundError(SecIngestionError):
 
 class FilingNotFoundError(SecIngestionError):
     """Raised when a requested SEC filing cannot be found."""
+
+
+class TaxonomyPackageError(SecIngestionError):
+    """Raised when an approved taxonomy package cannot be verified or installed."""
+
+
+class FilingPackageError(SecIngestionError):
+    """Raised when a canonical local filing package is unsafe or incomplete."""

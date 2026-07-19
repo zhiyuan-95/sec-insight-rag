@@ -244,7 +244,7 @@ COMMON_MAPPING_COMPATIBILITY_TARGETS = (
         "InventoryNet",
         "inventory",
         "balance_sheet",
-        notes="Approved mapping candidate kept to preserve current Plan 2.5 behavior; target coverage treats inventory as industry-specific.",
+        notes="Approved mapping candidate kept to preserve current Plan 200 behavior; target coverage treats inventory as industry-specific.",
     ),
 )
 

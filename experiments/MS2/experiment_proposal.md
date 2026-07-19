@@ -36,7 +36,7 @@ This experiment covers only Milestone 2 behavior:
 - raw normalized fact storage in SQLite
 - top-row inspection of the raw fact table
 
-This experiment does not cover Milestone 2.5 company registry behavior, active
+This experiment does not cover Milestone 200 company registry behavior, active
 window management, base metric mapping, derived indicators, analytics,
 retrieval, Gemini integration, or RAG answers.
 

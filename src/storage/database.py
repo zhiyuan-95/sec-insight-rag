@@ -15,6 +15,16 @@ def connect_sqlite(db_path: Path) -> sqlite3.Connection:
     return connection
 
 
+def connect_sqlite_readonly(db_path: Path) -> sqlite3.Connection:
+    """Open an existing SQLite database with write operations disabled."""
+    resolved_path = db_path.resolve(strict=True)
+    connection = sqlite3.connect(f"{resolved_path.as_uri()}?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA query_only = ON")
+    return connection
+
+
 def initialize_database(connection: sqlite3.Connection) -> None:
     """Initialize local SQLite tables used by the MVP."""
     connection.execute(

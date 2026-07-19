@@ -38,8 +38,8 @@ from src.storage import (
 
 
 def _load_experiment_module() -> ModuleType:
-    module_path = Path("experiments/MS2_5/milestone25_live_sec_inspection.py")
-    spec = importlib.util.spec_from_file_location("milestone25_live_sec_inspection", module_path)
+    module_path = Path("experiments/MS200/milestone200_live_sec_inspection.py")
+    spec = importlib.util.spec_from_file_location("milestone200_live_sec_inspection", module_path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -77,10 +77,10 @@ def _assert_report_generation_output(output: str, report_path: Path | None = Non
     assert " second(s); saved report: " in output
     if report_path is not None:
         assert str(report_path) in output
-    assert "# Plan 2.5 Target Mapping Report" not in output
+    assert "# Plan 200 Target Mapping Report" not in output
 
 
-def test_milestone25_formula_provider_panel_uses_claude_sonnet5_slot() -> None:
+def test_milestone200_formula_provider_panel_uses_claude_sonnet5_slot() -> None:
     experiment = _load_experiment_module()
     settings = Settings.model_validate(
         {
@@ -104,7 +104,7 @@ def test_milestone25_formula_provider_panel_uses_claude_sonnet5_slot() -> None:
     ]
 
 
-def test_milestone25_formula_rows_collapse_same_recommended_components() -> None:
+def test_milestone200_formula_rows_collapse_same_recommended_components() -> None:
     experiment = _load_experiment_module()
     snapshot = {
         "metric_coverage_resolution": [
@@ -246,7 +246,7 @@ def test_milestone25_formula_rows_collapse_same_recommended_components() -> None
     assert "q4" not in quarterly_formula_rows[0]["Period context"]
 
 
-def test_milestone25_formula_rows_do_not_overlap_when_provider_periods_disagree() -> None:
+def test_milestone200_formula_rows_do_not_overlap_when_provider_periods_disagree() -> None:
     experiment = _load_experiment_module()
     snapshot = {
         "metric_coverage_resolution": [
@@ -399,7 +399,7 @@ def test_milestone25_formula_rows_do_not_overlap_when_provider_periods_disagree(
     assert all("Components" not in row for row in formula_rows)
 
 
-def test_milestone25_formula_rows_group_same_zero_formula_with_different_evidence() -> None:
+def test_milestone200_formula_rows_group_same_zero_formula_with_different_evidence() -> None:
     experiment = _load_experiment_module()
     snapshot = {
         "metric_coverage_resolution": [
@@ -468,7 +468,7 @@ def test_milestone25_formula_rows_group_same_zero_formula_with_different_evidenc
     ]
 
 
-def test_milestone25_provider_outcome_gap_rows_show_non_recommendations() -> None:
+def test_milestone200_provider_outcome_gap_rows_show_non_recommendations() -> None:
     experiment = _load_experiment_module()
     snapshot = {
         "metric_coverage_resolution": [
@@ -566,7 +566,7 @@ def test_milestone25_provider_outcome_gap_rows_show_non_recommendations() -> Non
     ]
 
 
-def test_milestone25_summary_recommendation_returns_two_of_three_formula() -> None:
+def test_milestone200_summary_recommendation_returns_two_of_three_formula() -> None:
     experiment = _load_experiment_module()
     target = _summary_target()
     context = _summary_context()
@@ -602,7 +602,7 @@ def test_milestone25_summary_recommendation_returns_two_of_three_formula() -> No
     ]
 
 
-def test_milestone25_summary_recommendation_returns_two_of_three_zero() -> None:
+def test_milestone200_summary_recommendation_returns_two_of_three_zero() -> None:
     experiment = _load_experiment_module()
     target = _summary_target()
     context = _summary_context()
@@ -632,7 +632,7 @@ def test_milestone25_summary_recommendation_returns_two_of_three_zero() -> None:
     assert rows[0]["review_reason"] == ""
 
 
-def test_milestone25_summary_recommendation_explains_unresolved_outcomes() -> None:
+def test_milestone200_summary_recommendation_explains_unresolved_outcomes() -> None:
     experiment = _load_experiment_module()
     target = _summary_target()
     context = _summary_context()
@@ -664,7 +664,7 @@ def test_milestone25_summary_recommendation_explains_unresolved_outcomes() -> No
     )
 
 
-def test_milestone25_summary_recommendation_reports_unavailable_and_invalid_votes() -> None:
+def test_milestone200_summary_recommendation_reports_unavailable_and_invalid_votes() -> None:
     experiment = _load_experiment_module()
     target = _summary_target()
     context = _summary_context()
@@ -694,7 +694,7 @@ def test_milestone25_summary_recommendation_reports_unavailable_and_invalid_vote
     )
 
 
-def test_milestone25_summary_recommendation_keeps_no_context_target_visible() -> None:
+def test_milestone200_summary_recommendation_keeps_no_context_target_visible() -> None:
     experiment = _load_experiment_module()
 
     rows = experiment._formula_review_required_recommendation_rows(
@@ -710,7 +710,7 @@ def test_milestone25_summary_recommendation_keeps_no_context_target_visible() ->
     assert rows[0]["review_reason"] == "no_eligible_period_context"
 
 
-def test_milestone25_summary_recommendation_keeps_empty_fact_pool_targets_visible(
+def test_milestone200_summary_recommendation_keeps_empty_fact_pool_targets_visible(
     tmp_path: Path,
 ) -> None:
     experiment = _load_experiment_module()
@@ -745,7 +745,7 @@ def test_milestone25_summary_recommendation_keeps_empty_fact_pool_targets_visibl
     ]
 
 
-def test_milestone25_xbrl_concepts_provided_counts_by_period() -> None:
+def test_milestone200_xbrl_concepts_provided_counts_by_period() -> None:
     experiment = _load_experiment_module()
     snapshot = {
         "metric_coverage_resolution": [
@@ -803,7 +803,7 @@ def test_milestone25_xbrl_concepts_provided_counts_by_period() -> None:
     ]
 
 
-def test_milestone25_experiment_presents_first_time_ingestion(
+def test_milestone200_experiment_presents_first_time_ingestion(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -836,7 +836,7 @@ def test_milestone25_experiment_presents_first_time_ingestion(
     assert exit_code == 0
     assert calls == ["TEST", "TEST"]
     _assert_report_generation_output(output, tmp_path / "experiment_report.md")
-    assert "# Plan 2.5 Target Mapping Report" in report
+    assert "# Plan 200 Target Mapping Report" in report
     assert "## 0. Compact Summary" in report
     assert "## 0A. XBRL Concepts Provided By Period" in report
     assert "### # of concepts provided from XBRL - 10-K" in report
@@ -866,7 +866,7 @@ def test_milestone25_experiment_presents_first_time_ingestion(
     assert (tmp_path / "exports" / "financial_metrics.csv").exists()
 
 
-def test_milestone25_experiment_reports_missing_sec_user_agent(
+def test_milestone200_experiment_reports_missing_sec_user_agent(
     tmp_path: Path,
     capsys,
 ) -> None:
@@ -900,7 +900,7 @@ def test_milestone25_experiment_reports_missing_sec_user_agent(
     assert "SEC_USER_AGENT is required for live SEC experiment runs" in report
 
 
-def test_milestone25_uses_ticker_specific_default_report_path(
+def test_milestone200_uses_ticker_specific_default_report_path(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -925,7 +925,7 @@ def test_milestone25_uses_ticker_specific_default_report_path(
         ]
     )
     output = capsys.readouterr().out
-    report_path = tmp_path / "milestone25_mapping_report_MSFT.md"
+    report_path = tmp_path / "milestone200_mapping_report_MSFT.md"
     report = report_path.read_text(encoding="utf-8")
 
     assert exit_code == 1
@@ -934,7 +934,7 @@ def test_milestone25_uses_ticker_specific_default_report_path(
     assert "SEC_USER_AGENT is required for live SEC experiment runs" in report
 
 
-def test_milestone25_write_report_flag_preserves_markdown_artifact(
+def test_milestone200_write_report_flag_preserves_markdown_artifact(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -967,7 +967,7 @@ def test_milestone25_write_report_flag_preserves_markdown_artifact(
 
     assert exit_code == 0
     _assert_report_generation_output(output, tmp_path / "experiment_report.md")
-    assert "saved Plan 2.5 target mapping report" in report
+    assert "saved Plan 200 target mapping report" in report
     assert "## 0. Compact Summary" in report
     assert "## 1. Target Metrics Mapping Status" in report
     assert "## 2. Proposed Formulas For Formula Recommendations" in report
@@ -979,7 +979,7 @@ def test_milestone25_write_report_flag_preserves_markdown_artifact(
     assert "Phase 2" not in report
 
 
-def test_milestone25_saves_warning_when_csv_export_is_locked(
+def test_milestone200_saves_warning_when_csv_export_is_locked(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -1019,14 +1019,14 @@ def test_milestone25_saves_warning_when_csv_export_is_locked(
 
     assert exit_code == 0
     _assert_report_generation_output(output, tmp_path / "experiment_report.md")
-    assert "# Plan 2.5 Target Mapping Report" in report
+    assert "# Plan 200 Target Mapping Report" in report
     assert "CSV export skipped for financial_metrics" in report
     assert "## 0. Compact Summary" in report
     assert "## 2. Missing Target Replacement Recommendations" not in report
     assert "Evidence Boundary" not in report
 
 
-def test_milestone25_full_report_flag_prints_detailed_markdown(
+def test_milestone200_full_report_flag_prints_detailed_markdown(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -1059,7 +1059,7 @@ def test_milestone25_full_report_flag_prints_detailed_markdown(
 
     assert exit_code == 0
     _assert_report_generation_output(output, tmp_path / "experiment_report.md")
-    assert "# Plan 2.5 Target Mapping Report" in report
+    assert "# Plan 200 Target Mapping Report" in report
     assert "## 0. Compact Summary" in report
     assert "## 2. Proposed Formulas For Formula Recommendations" in report
     assert "## 3. Summary Recommendation" in report
@@ -1070,7 +1070,7 @@ def test_milestone25_full_report_flag_prints_detailed_markdown(
     assert "Financial Metric Data Lineage View" not in report
 
 
-def test_milestone25_markdown_table_keeps_identifier_lists_as_text() -> None:
+def test_milestone200_markdown_table_keeps_identifier_lists_as_text() -> None:
     experiment = _load_experiment_module()
     raw_fact_ids = ",".join(str(100000000000000000000000000000 + index) for index in range(3))
     context_hash = "1234567890123456789012345678901234567890"
@@ -1092,7 +1092,7 @@ def test_milestone25_markdown_table_keeps_identifier_lists_as_text() -> None:
     assert experiment._format_presentation_number("9" * 80) == "9" * 80
 
 
-def test_milestone25_markdown_table_keeps_period_context_as_label() -> None:
+def test_milestone200_markdown_table_keeps_period_context_as_label() -> None:
     experiment = _load_experiment_module()
 
     lines = experiment._markdown_table(
@@ -1117,7 +1117,7 @@ def test_milestone25_markdown_table_keeps_period_context_as_label() -> None:
     ]
 
 
-def test_milestone25_markdown_table_keeps_year_as_literal_period_label() -> None:
+def test_milestone200_markdown_table_keeps_year_as_literal_period_label() -> None:
     experiment = _load_experiment_module()
 
     lines = experiment._markdown_table(
@@ -1140,7 +1140,7 @@ def test_milestone25_markdown_table_keeps_year_as_literal_period_label() -> None
     assert "2.03K" not in table
 
 
-def test_milestone25_formula_fact_dimension_detection() -> None:
+def test_milestone200_formula_fact_dimension_detection() -> None:
     experiment = _load_experiment_module()
 
     assert experiment._formula_fact_has_dimensions("[]") is False
@@ -1151,7 +1151,7 @@ def test_milestone25_formula_fact_dimension_detection() -> None:
     assert experiment._formula_fact_has_dimensions("not-json") is True
 
 
-def test_milestone25_formula_proposal_targets_collapse_missing_tags_by_metric() -> None:
+def test_milestone200_formula_proposal_targets_collapse_missing_tags_by_metric() -> None:
     experiment = _load_experiment_module()
 
     targets = experiment._formula_proposal_targets(
@@ -1195,7 +1195,7 @@ def test_milestone25_formula_proposal_targets_collapse_missing_tags_by_metric() 
     assert "DepreciationDepletionAndAmortization" in targets[0].notes
 
 
-def test_milestone25_report_shows_report_only_debt_recovery_diagnostics(
+def test_milestone200_report_shows_report_only_debt_recovery_diagnostics(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -1256,7 +1256,7 @@ def test_milestone25_report_shows_report_only_debt_recovery_diagnostics(
     assert stored_recovered_metrics == 0
 
 
-def test_milestone25_report_shows_report_only_formula_proposals_from_found_targets(
+def test_milestone200_report_shows_report_only_formula_proposals_from_found_targets(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -1380,7 +1380,7 @@ def test_milestone25_report_shows_report_only_formula_proposals_from_found_targe
     assert snapshot["formula_proposal_summary"][0]["value"] == "not_run"
 
 
-def test_milestone25_report_shows_report_only_zero_target_proposals(
+def test_milestone200_report_shows_report_only_zero_target_proposals(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -1481,7 +1481,7 @@ def test_milestone25_report_shows_report_only_zero_target_proposals(
     assert stored_recovered_metrics == 0
 
 
-def test_milestone25_formula_proposals_reuse_failed_provider_result_within_run(
+def test_milestone200_formula_proposals_reuse_failed_provider_result_within_run(
     tmp_path: Path,
     monkeypatch,
     capsys,
@@ -1566,7 +1566,7 @@ def test_milestone25_formula_proposals_reuse_failed_provider_result_within_run(
     )
 
 
-def test_milestone25_formula_proposals_batch_targets_by_statement_group(
+def test_milestone200_formula_proposals_batch_targets_by_statement_group(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1650,7 +1650,7 @@ def test_milestone25_formula_proposals_batch_targets_by_statement_group(
     } == {"current_assets", "current_liabilities", "gross_profit"}
 
 
-def test_milestone25_formula_proposals_fallback_to_single_when_batch_unusable(
+def test_milestone200_formula_proposals_fallback_to_single_when_batch_unusable(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1706,7 +1706,7 @@ def test_milestone25_formula_proposals_fallback_to_single_when_batch_unusable(
     assert len([row for row in snapshot["diagnostics"] if row.get("provider_name")]) == 2
 
 
-def test_milestone25_formula_proposals_exclude_cached_targets_from_batch(
+def test_milestone200_formula_proposals_exclude_cached_targets_from_batch(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1794,7 +1794,7 @@ def test_milestone25_formula_proposals_exclude_cached_targets_from_batch(
     assert rows_by_metric["current_liabilities"]["cache_status"] == "generated_new"
 
 
-def test_milestone25_formula_progress_distinguishes_cached_provider_from_live_batches(
+def test_milestone200_formula_progress_distinguishes_cached_provider_from_live_batches(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -1897,7 +1897,7 @@ def test_milestone25_formula_progress_distinguishes_cached_provider_from_live_ba
     assert "Batch context 1/1:" not in output
 
 
-def test_milestone25_formula_proposal_fact_pool_uses_active_filing_periods_only(
+def test_milestone200_formula_proposal_fact_pool_uses_active_filing_periods_only(
     tmp_path: Path,
 ) -> None:
     experiment = _load_experiment_module()
@@ -1974,7 +1974,7 @@ def test_milestone25_formula_proposal_fact_pool_uses_active_filing_periods_only(
     assert [fact.concept for fact in fact_pool] == ["ActiveCurrentPeriodConcept"]
 
 
-def test_milestone25_report_presents_new_filings_when_sec_update_ingests_them(
+def test_milestone200_report_presents_new_filings_when_sec_update_ingests_them(
     tmp_path: Path,
     monkeypatch,
     capsys,
