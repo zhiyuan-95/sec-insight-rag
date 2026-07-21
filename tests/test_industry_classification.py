@@ -9,6 +9,7 @@ from src.analyze.industry_classification import (
     classify_company_industry_labels,
     stored_label_source_accessions,
 )
+from src.config.settings import DEFAULT_GEMINI_INDUSTRY_CLASSIFICATION_MODEL
 from src.processing.company_industry_labels import (
     LABEL_STATUS_ASSIGNED,
     LABEL_STATUS_IGNORED,
@@ -41,14 +42,13 @@ def test_gemini_industry_classification_assigns_supported_labels() -> None:
         sic_description="Services-Prepackaged Software",
         business_section=_business_source(),
         api_key="fake-key",
-        model="gemini-2.5-flash",
         generate_json=fake_generate_json,
     )
 
     assert captured["schema"] is IndustryClassificationResponse
     assert "Do not classify XBRL concepts" in str(captured["prompt"])
     assert "Information Technology" in str(captured["prompt"])
-    assert captured["model"] == "gemini-2.5-flash"
+    assert captured["model"] == DEFAULT_GEMINI_INDUSTRY_CLASSIFICATION_MODEL
     assert assignment.label_status == LABEL_STATUS_ASSIGNED
     assert assignment.assignment_source == GEMINI_INDUSTRY_ASSIGNMENT_SOURCE
     assert assignment.assigned_industry_labels == (

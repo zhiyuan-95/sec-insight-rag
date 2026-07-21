@@ -7,6 +7,7 @@ import pytest
 
 from experiments.MS200 import milestone203_experiment as experiment
 from experiments.MS200 import plan203_arelle_proof as proof_module
+from src.analyze.industry_classification import GEMINI_INDUSTRY_ASSIGNMENT_SOURCE
 from src.ingestion.filings import FilingMetadata
 from src.processing.arelle_mapping_inference import infer_arelle_evidence_mappings
 from src.processing.arelle_records import (
@@ -20,6 +21,7 @@ from src.processing.arelle_records import (
     UnitKey,
 )
 from src.processing.mapping_targets import CanonicalMetricTarget
+from src.storage.company_repository import CompanyRecord, CompanyRepository
 from src.storage.concept_mappings_repository import (
     MAPPING_SCOPE_COMPANY,
     MAPPING_STATUS_APPROVED,
@@ -30,6 +32,10 @@ from src.storage.database import (
     connect_sqlite,
     connect_sqlite_readonly,
     initialize_database,
+)
+from src.storage.industry_labels_repository import (
+    CompanyIndustryLabelRepository,
+    StoredCompanyIndustryLabel,
 )
 
 
@@ -326,7 +332,35 @@ def test_full_offline_report_shows_workflow_mapped_missing_and_inference(
     database = tmp_path / "experiment.db"
     with connect_sqlite(database) as connection:
         initialize_database(connection)
-        connection.commit()
+        company = CompanyRepository(connection).upsert_company(
+            CompanyRecord(
+                cik="0000789019",
+                name="Microsoft Corporation",
+                ticker="MSFT",
+            )
+        )
+        assert company.company_id is not None
+        CompanyIndustryLabelRepository(connection).replace_labels(
+            company.company_id,
+            (
+                StoredCompanyIndustryLabel(
+                    company_id=company.company_id,
+                    industry_label="Information Technology",
+                    assignment_source=GEMINI_INDUSTRY_ASSIGNMENT_SOURCE,
+                    assignment_reason="Microsoft reports software and cloud services.",
+                    confidence=0.94,
+                    classifier_version="gemini_item1_business_v1",
+                ),
+                StoredCompanyIndustryLabel(
+                    company_id=company.company_id,
+                    industry_label="Consumer Discretionary",
+                    assignment_source=GEMINI_INDUSTRY_ASSIGNMENT_SOURCE,
+                    assignment_reason="Microsoft reports consumer devices and gaming.",
+                    confidence=0.94,
+                    classifier_version="gemini_item1_business_v1",
+                ),
+            ),
+        )
 
     report = experiment.build_milestone203_report(
         _session(annual, quarterly),
@@ -338,6 +372,9 @@ def test_full_offline_report_shows_workflow_mapped_missing_and_inference(
     assert "### B1. Mapped targets" in report
     assert "`total_assets`" in report
     assert "### B2. Missing targets" in report
+    assert "Industry bundle: `Consumer Discretionary, Information Technology`" in report
+    assert "Industry-label source: `gemini_item1_business_classification`" in report
+    assert "`advertising_expense`" in report
     assert "## C. Arelle-evidence inference" in report
     assert "Formula suggestions and all LLM calls are intentionally not run" in report
     assert "Count integrity: `Y`" in report
@@ -443,11 +480,99 @@ def test_readonly_repository_can_load_approved_mapping(tmp_path: Path) -> None:
     assert status == "available; 1 applicable approved rows"
 
 
+def test_only_persisted_gemini_labels_are_used_for_ms203(tmp_path: Path) -> None:
+    database = tmp_path / "labels.db"
+    with connect_sqlite(database) as connection:
+        initialize_database(connection)
+        company = CompanyRepository(connection).upsert_company(
+            CompanyRecord(
+                cik="0000789019",
+                name="Microsoft Corporation",
+                ticker="MSFT",
+            )
+        )
+        assert company.company_id is not None
+        CompanyIndustryLabelRepository(connection).replace_labels(
+            company.company_id,
+            (
+                StoredCompanyIndustryLabel(
+                    company_id=company.company_id,
+                    industry_label="Information Technology",
+                    assignment_source=GEMINI_INDUSTRY_ASSIGNMENT_SOURCE,
+                    assignment_reason="Gemini classification",
+                    confidence=0.91,
+                ),
+                StoredCompanyIndustryLabel(
+                    company_id=company.company_id,
+                    industry_label="Communication Services",
+                    assignment_source="manual_source_controlled_registry",
+                    assignment_reason="Legacy fallback",
+                ),
+            ),
+        )
+
+    assignment, status = experiment._load_persisted_gemini_industry_assignment(
+        database,
+        ticker="MSFT",
+        cik="0000789019",
+    )
+
+    assert assignment.assigned_industry_labels == ("Information Technology",)
+    assert assignment.assignment_source == GEMINI_INDUSTRY_ASSIGNMENT_SOURCE
+    assert status == "available; 1 approved Gemini labels"
+
+
+def test_missing_persisted_gemini_labels_use_common_only_without_registry_fallback(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "labels.db"
+    with connect_sqlite(database) as connection:
+        initialize_database(connection)
+        company = CompanyRepository(connection).upsert_company(
+            CompanyRecord(
+                cik="0000789019",
+                name="Microsoft Corporation",
+                ticker="MSFT",
+            )
+        )
+        assert company.company_id is not None
+        CompanyIndustryLabelRepository(connection).replace_labels(
+            company.company_id,
+            (
+                StoredCompanyIndustryLabel(
+                    company_id=company.company_id,
+                    industry_label="Information Technology",
+                    assignment_source="manual_source_controlled_registry",
+                    assignment_reason="Legacy fallback",
+                ),
+            ),
+        )
+
+    assignment, status = experiment._load_persisted_gemini_industry_assignment(
+        database,
+        ticker="MSFT",
+        cik="0000789019",
+    )
+
+    assert assignment.assigned_industry_labels == ()
+    assert assignment.label_status == "needs_label_review"
+    assert assignment.assignment_source == "persisted_gemini_labels_unavailable"
+    assert status == (
+        "no_approved_gemini_labels; 1 non-Gemini approved rows ignored; common-only"
+    )
+
+
 def test_missing_mapping_table_is_reported_without_initializing_it(
     tmp_path: Path,
 ) -> None:
     database = tmp_path / "legacy.db"
     sqlite3.connect(database).close()
+
+    assignment, label_status = experiment._load_persisted_gemini_industry_assignment(
+        database,
+        ticker="MSFT",
+        cik="0000789019",
+    )
 
     rows, conflicts, status = experiment._load_approved_mapping_rows(
         database,
@@ -458,6 +583,8 @@ def test_missing_mapping_table_is_reported_without_initializing_it(
     assert rows == ()
     assert conflicts == ()
     assert status == "table_missing_read_only; source-controlled mappings only"
+    assert assignment.assigned_industry_labels == ()
+    assert label_status == "table_missing_read_only; common-only"
     with sqlite3.connect(database) as connection:
         assert connection.execute(
             "SELECT name FROM sqlite_master WHERE type = 'table'"

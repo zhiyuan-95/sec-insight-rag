@@ -26,6 +26,9 @@ from experiments.MS200.plan203_arelle_proof import (  # noqa: E402
     Plan203ProofSession,
     run_plan203_proof,
 )
+from src.analyze.industry_classification import (  # noqa: E402
+    GEMINI_INDUSTRY_ASSIGNMENT_SOURCE,
+)
 from src.config import load_settings  # noqa: E402
 from src.processing.active_window import active_period_keys  # noqa: E402
 from src.processing.arelle_mapping_inference import (  # noqa: E402
@@ -41,7 +44,9 @@ from src.processing.arelle_records import ConceptEvidence, QNameKey, UnitKey  # 
 from src.processing.base_metrics import map_raw_facts_to_base_metrics  # noqa: E402
 from src.processing.company_industry_labels import (  # noqa: E402
     LABEL_STATUS_ASSIGNED,
-    industry_label_assignments_for_company,
+    LABEL_STATUS_NEEDS_REVIEW,
+    CompanyIndustryLabelAssignment,
+    validate_industry_labels,
 )
 from src.processing.mapping_catalog import (  # noqa: E402
     IndustryFactTarget,
@@ -52,6 +57,7 @@ from src.processing.mapping_targets import (  # noqa: E402
     canonical_metric_targets,
 )
 from src.processing.xbrl_normalizer import NormalizedFact  # noqa: E402
+from src.storage.company_repository import CompanyRepository  # noqa: E402
 from src.storage.concept_mappings_repository import (  # noqa: E402
     MAPPING_SCOPE_COMPANY,
     MAPPING_SCOPE_GLOBAL,
@@ -61,6 +67,9 @@ from src.storage.concept_mappings_repository import (  # noqa: E402
     ConceptMappingRepository,
 )
 from src.storage.database import connect_sqlite_readonly  # noqa: E402
+from src.storage.industry_labels_repository import (  # noqa: E402
+    CompanyIndustryLabelRepository,
+)
 
 
 DEFAULT_CACHE_DIRECTORY = Path("data_store/arelle_cache/plan203")
@@ -158,10 +167,12 @@ def build_milestone203_report(
         _normalize_observation(observation, session.cik, evidence_by_qname)
         for observation in precedence.selected
     )
-    industry_assignment = industry_label_assignments_for_company(
-        session.ticker,
-        session.cik,
-        observed_concepts=(fact.concept for fact in normalized_rows),
+    industry_assignment, industry_store_status = (
+        _load_persisted_gemini_industry_assignment(
+            database_path,
+            ticker=session.ticker,
+            cik=session.cik,
+        )
     )
     industry_labels = (
         industry_assignment.assigned_industry_labels
@@ -228,8 +239,125 @@ def build_milestone203_report(
         mapped_metrics=mapped_metrics,
         metric_sources=metric_sources,
         mapping_conflicts=mapping_conflicts,
+        industry_store_status=industry_store_status,
         mapping_store_status=mapping_store_status,
         report_elapsed=time.perf_counter() - report_started,
+    )
+
+
+def _load_persisted_gemini_industry_assignment(
+    database_path: Path,
+    *,
+    ticker: str,
+    cik: str,
+) -> tuple[CompanyIndustryLabelAssignment, str]:
+    """Load approved Gemini labels without mutating or reclassifying the company."""
+    with connect_sqlite_readonly(database_path) as connection:
+        existing_tables = {
+            str(row[0])
+            for row in connection.execute(
+                """
+                SELECT name
+                FROM sqlite_master
+                WHERE type = 'table' AND name IN ('companies', 'company_industry_labels')
+                """
+            ).fetchall()
+        }
+        missing_tables = {
+            "companies",
+            "company_industry_labels",
+        } - existing_tables
+        if missing_tables:
+            reason = (
+                "Stored Gemini industry labels are unavailable because the read-only "
+                f"database lacks: {', '.join(sorted(missing_tables))}."
+            )
+            return _unavailable_industry_assignment(ticker, cik, reason), (
+                "table_missing_read_only; common-only"
+            )
+
+        company = CompanyRepository(connection).get_by_cik(cik)
+        if company is None or company.company_id is None:
+            reason = "No persisted company row exists for this CIK."
+            return _unavailable_industry_assignment(ticker, cik, reason), (
+                "company_missing_read_only; common-only"
+            )
+
+        stored_rows = CompanyIndustryLabelRepository(connection).list_labels(
+            company.company_id,
+            status="approved",
+        )
+
+    gemini_rows = tuple(
+        row
+        for row in stored_rows
+        if row.assignment_source == GEMINI_INDUSTRY_ASSIGNMENT_SOURCE
+    )
+    if not gemini_rows:
+        ignored_count = len(stored_rows)
+        reason = "No approved Gemini-generated industry labels are stored for this company."
+        return _unavailable_industry_assignment(ticker, cik, reason), (
+            "no_approved_gemini_labels; "
+            f"{ignored_count} non-Gemini approved rows ignored; common-only"
+        )
+
+    try:
+        labels = validate_industry_labels(row.industry_label for row in gemini_rows)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Stored Gemini industry labels are invalid: {exc}"
+        ) from exc
+
+    evidence = tuple(
+        dict.fromkeys(item for row in gemini_rows for item in row.evidence)
+    )
+    reasons = tuple(dict.fromkeys(row.assignment_reason for row in gemini_rows))
+    confidences = tuple(
+        row.confidence for row in gemini_rows if row.confidence is not None
+    )
+    classifier_versions = tuple(
+        dict.fromkeys(
+            row.classifier_version
+            for row in gemini_rows
+            if row.classifier_version
+        )
+    )
+    return (
+        CompanyIndustryLabelAssignment(
+            ticker=ticker.strip().upper(),
+            cik=cik,
+            assigned_industry_labels=labels,
+            assignment_source=GEMINI_INDUSTRY_ASSIGNMENT_SOURCE,
+            assignment_reason=" ; ".join(reasons),
+            supporting_evidence=evidence,
+            reviewed_at=max(
+                (row.reviewed_at or "" for row in gemini_rows),
+                default="",
+            ),
+            label_status=LABEL_STATUS_ASSIGNED,
+            notes="Persisted approved Gemini labels from company ingestion.",
+            confidence=min(confidences) if confidences else None,
+            classifier_version=", ".join(classifier_versions) or None,
+        ),
+        f"available; {len(labels)} approved Gemini labels",
+    )
+
+
+def _unavailable_industry_assignment(
+    ticker: str,
+    cik: str,
+    reason: str,
+) -> CompanyIndustryLabelAssignment:
+    return CompanyIndustryLabelAssignment(
+        ticker=ticker.strip().upper(),
+        cik=cik,
+        assigned_industry_labels=(),
+        assignment_source="persisted_gemini_labels_unavailable",
+        assignment_reason=reason,
+        supporting_evidence=(),
+        reviewed_at="",
+        label_status=LABEL_STATUS_NEEDS_REVIEW,
+        notes="Common Base targets only; run company ingestion to create Gemini labels.",
     )
 
 
@@ -460,6 +588,7 @@ def _render_report(
     mapped_metrics: list[object],
     metric_sources: Mapping[tuple[str, str], tuple[str, ...]],
     mapping_conflicts: tuple[tuple[str, str], ...],
+    industry_store_status: str,
     mapping_store_status: str,
     report_elapsed: float,
 ) -> str:
@@ -507,7 +636,7 @@ def _render_report(
         f"| SEC acquisition | `{session.ticker}` + requested forms | Fetch identity, submissions, filings, Company Facts | {len(session.proofs)} form records | Network acquisition only | {_stage_time(session, 'sec_acquisition'):.3f}s | [Summary](#a-summary) |",
         f"| Arelle processing | Verified accession packages | Offline load, validation, extraction | {raw_fact_count:,} facts / {qname_count:,} QNames | Detached project records | {session.elapsed_seconds:.3f}s proof session | [Per-accession evidence](#a1-per-accession-evidence) |",
         f"| Fact selection | Arelle facts | Duplicate, nil, degraded, and precedence handling | {len(selected):,} selected / {len(quarantined):,} quarantined semantic observations | In memory only | {selected_occurrences + quarantined_occurrences:,} raw occurrences | [Selection accounting](#a2-selection-accounting) |",
-        f"| Target selection | Source-controlled company labels | Common bundle + applicable industry bundle | {len(targets):,} target metrics | No new target identity | `{_cell(industry_assignment.label_status)}` | [Mapping status](#b-target-metrics-mapping-status) |",
+        f"| Target selection | Persisted Gemini company labels | Common bundle + applicable industry bundle | {len(targets):,} target metrics | No new target identity | `{_cell(industry_assignment.label_status)}` | [Mapping status](#b-target-metrics-mapping-status) |",
         f"| Hard mapping | Selected facts + catalog + approved SQLite rows | Existing deterministic mapper | {len(mapped_targets):,} mapped / {len(missing_targets):,} missing targets | No metric persistence | {len(mapped_metrics):,} mapped fact observations | [Mapped targets](#b1-mapped-targets) |",
         f"| Evidence inference | Missing targets + Arelle taxonomy evidence | Deterministic shadow ranking | {sum(row.outcome == 'unique_top_candidate' for row in inference):,} unique / {sum(row.outcome == 'needs_review' for row in inference):,} review / {sum(row.outcome == 'no_candidate' for row in inference):,} none | Never activated | 0 LLM calls | [Inference](#c-arelle-evidence-inference) |",
         f"| Report publication | Structured session evidence | Render and atomic replace | This Markdown artifact | Presentation only | {report_elapsed:.3f}s before publication | [Boundary](#d-interpretation-boundary) |",
@@ -527,6 +656,8 @@ def _render_report(
         f"- Count integrity: `{'Y' if count_integrity else 'N'}` ({raw_fact_count:,} raw = {selected_occurrences:,} selected occurrences + {quarantined_occurrences:,} quarantined occurrences)",
         f"- Industry bundle: `{', '.join(industry_assignment.assigned_industry_labels) or 'common-only'}`",
         f"- Industry-label status: `{industry_assignment.label_status}`",
+        f"- Industry-label source: `{industry_assignment.assignment_source}`",
+        f"- Industry-label store status: `{industry_store_status}`",
         f"- Read-only mapping database: `{database_path}`",
         f"- Approved mapping store status: `{mapping_store_status}`",
         f"- Approved-mapping selector conflicts excluded: {len(mapping_conflicts):,}",

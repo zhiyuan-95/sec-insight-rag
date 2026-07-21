@@ -520,7 +520,7 @@ def _resolve_company_industry_labels(
                     sic=company.sic,
                     sic_description=company.sic_description,
                     api_key=gemini_api_key,
-                    model=settings.primary_chat_model,
+                    model=settings.gemini_industry_classification_model,
                 )
             except Exception as exc:
                 warnings.append(

@@ -3,7 +3,11 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from src.config.settings import DEFAULT_CHAT_MODEL, load_settings
+from src.config.settings import (
+    DEFAULT_CHAT_MODEL,
+    DEFAULT_GEMINI_INDUSTRY_CLASSIFICATION_MODEL,
+    load_settings,
+)
 
 
 def test_load_settings_trims_env_keys_and_values(tmp_path: Path) -> None:
@@ -41,6 +45,10 @@ def test_load_settings_defaults_missing_optional_values(tmp_path: Path) -> None:
 
     assert settings.knowledge_storage_dir == Path("data_store/knowledge")
     assert settings.primary_chat_model == DEFAULT_CHAT_MODEL
+    assert (
+        settings.gemini_industry_classification_model
+        == DEFAULT_GEMINI_INDUSTRY_CLASSIFICATION_MODEL
+    )
     assert settings.allowed_chat_models == [DEFAULT_CHAT_MODEL]
     assert settings.anthropic_api_key is None
     assert settings.openai_formula_proposal_model == "gpt-5-mini"
@@ -91,6 +99,7 @@ def test_load_settings_accepts_formula_model_overrides(tmp_path: Path) -> None:
         "\n".join(
             [
                 "OPENAI_FORMULA_PROPOSAL_MODEL=openai-override",
+                "GEMINI_INDUSTRY_CLASSIFICATION_MODEL=industry-override",
                 "GEMINI_FLASH_LITE_FORMULA_PROPOSAL_MODEL=retired-slot-ignored",
                 "GEMINI_FORMULA_PROPOSAL_MODEL=gemini-override",
             ]
@@ -101,6 +110,7 @@ def test_load_settings_accepts_formula_model_overrides(tmp_path: Path) -> None:
     settings = load_settings(env_file)
 
     assert settings.openai_formula_proposal_model == "openai-override"
+    assert settings.gemini_industry_classification_model == "industry-override"
     assert settings.gemini_formula_proposal_model == "gemini-override"
     assert not hasattr(settings, "gemini_flash_lite_formula_proposal_model")
 

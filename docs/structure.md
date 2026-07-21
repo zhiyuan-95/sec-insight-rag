@@ -45,7 +45,7 @@ src/ingestion/company.py
   +-- src/processing/base_metrics.py
   |     -> map clean raw facts into business-friendly base metrics
   +-- src/analyze/industry_classification.py
-  |     -> assign company hard-industry labels from 10-K Item 1 Business with Gemini
+  |     -> assign company hard-industry labels from 10-K Item 1 Business with Gemini 3.1 Flash-Lite
   +-- src/indicators/engine.py
   |     -> calculate deterministic derived indicators from active base metrics
   |
@@ -282,7 +282,7 @@ experiments/
 - `experiments/MS200/experiment_proposal.md`: Human-inspection proposal for the Milestone 200 ingestion and mapping examination harness. It covers persistent isolated storage, update checks, active-window evidence, persisted industry labels, target and raw-fact coverage, Inline XBRL extensions, approved learned mappings, report-only LLM formula proposal diagnostics, unknown/alternate tags, financial metric lineage, saved reports, and SQLite/CSV evidence.
 - `experiments/MS200/milestone200_live_sec_inspection.py`: Runnable Milestone 200 experiment script that saves `experiments/MS200/milestone200_mapping_report_<TICKER>.md` without printing the report body, then prints a one-line report generation duration and saved report path. The compact report contains section 0 summary, section 0A selected XBRL concept counts by period, section 1 mapped/missing target status, section 2 detailed formula and provider-outcome evidence split into 10-K and 10-Q subsections, and section 3 one deterministic summary recommendation per selected missing target-period. Section 2 keeps identical displayed formulas grouped while showing exact period coverage for each provider. Section 3 reports `formula` for a two-of-three matching validated component signature, `zero` for two-of-three validated zero-evidence outcomes, and `review_required` otherwise; disabled runs, empty eligible fact pools, and targets without contexts remain visible. Formula calls use the ordered `gpt-5-mini`, `claude-sonnet-5`, and `gemini-2.5-flash` panel over the existing target-compatible context and batching flow. Terminal progress distinguishes total model outcomes and provider-context slots from reused outcomes and numbered live batch requests, so a fully cached model remains visible without making another API call. The script preserves report-only behavior, exact per-model cache separation, active 10-K/10-Q filtering, primary monetary-unit selection, compact period labels, taxonomy-prefix stripping, concise terminal progress, `--no-formula-proposals`, compatibility flags, `experiments/storage/experiment.db`, filing downloads, supporting CSV exports, and the configurable formula cache directory.
 - `experiments/MS200/plan203_arelle_proof.py`: Runnable schema-free proof plus reusable `run_plan203_proof(...)` session API. The CLI retains the original proof report and treats only failed form evidence as an error; the session API isolates package or worker failures per requested form.
-- `experiments/MS200/milestone203_experiment.py`: Read-only presentation command for the current Plan 203 workflow. It saves `milestone203_mapping_report_<TICKER>.md` with stage-by-stage acquisition, Arelle, selection, target-bundle, hard-mapping, missing-target, and shadow-inference evidence. A legacy database without the approved-mapping table is reported and falls back to source-controlled mappings without initialization. The command does not change the schema, persist facts or metrics, activate mappings, generate formulas, or call an LLM.
+- `experiments/MS200/milestone203_experiment.py`: Read-only presentation command for the current Plan 203 workflow. It reads approved Gemini-generated company labels from SQLite, uses Common Base targets only when those labels are unavailable, and saves `milestone203_mapping_report_<TICKER>.md` with stage-by-stage acquisition, Arelle, selection, target-bundle, hard-mapping, missing-target, and shadow-inference evidence. A legacy database without the approved-mapping table is reported and falls back to source-controlled concept mappings without initialization. The command does not change the schema, persist facts or metrics, activate mappings, generate formulas, or call an LLM.
 - `experiments/MS3/experiment_proposal.md`: Human-inspection proposal for the Milestone 3 indicator engine experiment. It defines active accession-window scope, separate period-appropriate yearly and quarterly indicator sets, duration-basis checks, skipped and not-applicable reasons, formulas, and source-metric traceability output.
 - `experiments/MS3/milestone3_indicator_engine.py`: Runnable Milestone 3 experiment script that reads stored `financial_indicators` and writes a `.txt` report under `experiments/MS3` with active accession-window scope, yearly and quarterly indicator tables for the requested ticker or tickers, skipped reasons, formulas, and source traceability.
 - `experiments/MS4/experiment_proposal.md`: Human-inspection proposal for the Milestone 4 deterministic financial analytics experiment. It defines trend, comparison, gap, outlier, and chart-ready output.
@@ -323,6 +323,8 @@ Key responsibilities:
 - Load `config.env`.
 - Normalize local environment values.
 - Keep the default LLM model pinned to `gemini-2.5-flash`.
+- Keep the dedicated hard-industry classifier pinned to
+  `gemini-3.1-flash-lite` unless explicitly overridden.
 - Load the Anthropic formula-provider secret from the first nonblank
   `claude-api-key`, `ANTHROPIC_API_KEY`, or `CLAUDE_API_KEY` alias.
 - Expose storage paths and SEC/Gemini/OpenAI/Anthropic configuration without
@@ -549,7 +551,7 @@ LLM/RAG reasoning layer.
 
 Current files:
 
-- `industry_classification.py`: Gemini-backed hard-industry classifier for 10-K Item 1 Business, with strict label validation, high-confidence label keeping, and low-confidence label ignoring.
+- `industry_classification.py`: Gemini 3.1 Flash-Lite-backed hard-industry classifier for 10-K Item 1 Business, with strict label validation, high-confidence label keeping, and low-confidence label ignoring.
 - `xbrl_formula_proposals.py`: Provider orchestration for report-only missing-target formula proposals through the ordered OpenAI `gpt-5-mini`, Anthropic `claude-sonnet-5`, and Gemini `gemini-2.5-flash` panel; it supports single-target calls and statement-scoped batch calls, and provider failures are reported rather than persisted.
 - `prompts.py`: Prompt templates, including the hard-industry classification prompt and statement-first single-target and statement-scoped batch XBRL formula proposal prompts.
 - `__init__.py`: Package marker.
@@ -603,7 +605,7 @@ The project uses focused pytest coverage alongside milestone experiments:
 - Run the focused Plan 203 boundary suite with `uv run pytest tests/test_taxonomy_packages.py tests/test_filing_packages.py tests/test_arelle_adapter.py tests/test_arelle_worker.py tests/test_arelle_codec.py tests/test_arelle_reconciliation.py tests/test_arelle_precedence.py -q`.
 - Run the focused Milestone 203 report truth guards with `uv run pytest tests/test_milestone203_experiment.py -q`.
 - After configuring `SEC_USER_AGENT` and explicitly installing the pinned taxonomy archives, run the schema-free live proof with `uv run python experiments/MS200/plan203_arelle_proof.py --ticker MSFT`. Add `--sync-taxonomies` only when the reviewed packages need to be installed.
-- With the same SEC and taxonomy prerequisites plus an existing SQLite database, run the read-only inspection report with `uv run python experiments/MS200/milestone203_experiment.py --ticker MSFT --database stock_data.db`.
+- With the same SEC and taxonomy prerequisites plus an existing SQLite database populated by company ingestion, run the read-only inspection report with `uv run python experiments/MS200/milestone203_experiment.py --ticker MSFT --database experiments/storage/experiment.db` for the current Milestone 200 evidence store.
 - The restored suite currently covers settings, SEC client behavior, ticker and
   submissions parsing, companyfacts normalization, XBRL periods and quality,
   hard industry labels and mapping targets, active-window base metric mapping,

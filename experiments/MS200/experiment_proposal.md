@@ -487,7 +487,7 @@ or metrics, activate an inferred mapping, generate a formula, or call an LLM.
 Run the latest 10-K and 10-Q inspection with an existing mapping database:
 
 ```powershell
-uv run python experiments/MS200/milestone203_experiment.py --ticker MSFT --database stock_data.db
+uv run python experiments/MS200/milestone203_experiment.py --ticker MSFT --database experiments/storage/experiment.db
 ```
 
 The default artifact is:
@@ -503,13 +503,17 @@ The report must show:
   counts, selected and quarantined observations, duplicate groups, eligibility,
   and timings
 - count integrity using grouped observations' raw occurrence counts
-- the source-controlled common plus company-industry target bundle
+- the source-controlled Common Base bundle plus the industry bundles selected
+  by approved Gemini-generated company labels stored during ingestion
 - every applicable target exactly once, split into mapped and explicitly
   missing sections
 - the existing hard-mapping source, including applicable approved SQLite rows
   read through query-only mode
-- a visible source-controlled-only fallback when a legacy read-only database
-  does not contain the approved-mapping table; the experiment must not create it
+- a visible Common Base-only fallback when approved Gemini company labels are
+  unavailable; the experiment must not use the manual ticker/CIK registry
+- a visible source-controlled concept-mapping fallback when a legacy read-only
+  database does not contain the approved-mapping table; the experiment must not
+  create it
 - equal-specificity approved-mapping disagreements as excluded conflicts
 - report-only deterministic Arelle-evidence inference for missing targets,
   including five 0-2 ranking categories, target-to-concept and

@@ -10,6 +10,7 @@ from pydantic import AliasChoices, Field, SecretStr, field_validator, model_vali
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_CHAT_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_INDUSTRY_CLASSIFICATION_MODEL = "gemini-3.1-flash-lite"
 SUPPORTED_CHAT_MODELS = {DEFAULT_CHAT_MODEL}
 DEFAULT_RETRIEVAL_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 ANTHROPIC_API_KEY_ALIASES = (
@@ -78,6 +79,10 @@ class Settings(BaseSettings):
         default=DEFAULT_CHAT_MODEL,
         validation_alias="PRIMARY_CHAT_MODEL",
     )
+    gemini_industry_classification_model: str = Field(
+        default=DEFAULT_GEMINI_INDUSTRY_CLASSIFICATION_MODEL,
+        validation_alias="GEMINI_INDUSTRY_CLASSIFICATION_MODEL",
+    )
     allowed_chat_models: list[str] = Field(
         default_factory=lambda: [DEFAULT_CHAT_MODEL],
         validation_alias="ALLOWED_CHAT_MODELS",
@@ -121,6 +126,8 @@ class Settings(BaseSettings):
             raise ValueError(f"Unsupported chat model configured: {names}")
         if self.primary_chat_model not in self.allowed_chat_models:
             raise ValueError("PRIMARY_CHAT_MODEL must be in ALLOWED_CHAT_MODELS")
+        if not self.gemini_industry_classification_model.strip():
+            raise ValueError("GEMINI_INDUSTRY_CLASSIFICATION_MODEL must not be empty")
         if not self.gemini_formula_proposal_model.strip():
             raise ValueError("GEMINI_FORMULA_PROPOSAL_MODEL must not be empty")
         if not self.openai_formula_proposal_model.strip():

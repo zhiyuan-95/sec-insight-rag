@@ -135,6 +135,7 @@ For the MVP, the model-related configuration should be:
 ```env
 PRIMARY_CHAT_MODEL=gemini-2.5-flash
 ALLOWED_CHAT_MODELS=gemini-2.5-flash
+GEMINI_INDUSTRY_CLASSIFICATION_MODEL=gemini-3.1-flash-lite
 ```
 
 Current configured services include:
@@ -279,9 +280,12 @@ Example distinction:
    * Reuse unchanged retrieval generations and preserve the last complete generation when a rebuild fails.
 6. Gemini model integration
 
-   * Load `gemini-2.5-flash` from configuration.
-   * Use `gemini-2.5-flash` first for hard industry label classification from 10-K Item 1 Business during ingestion.
-   * Use the same configured model for later LLM reasoning, summarization, Q&A, and thesis generation tasks.
+   * Load `gemini-2.5-flash` as the primary reasoning model and
+     `gemini-3.1-flash-lite` as the dedicated hard-industry classifier.
+   * Use `gemini-3.1-flash-lite` for hard industry label classification from
+     10-K Item 1 Business during ingestion.
+   * Use the configured primary model for later LLM reasoning, summarization,
+     Q&A, and thesis generation tasks.
    * Track model, provider, task type, latency, and token usage for each call.
 7. RAG analysis
 
@@ -380,7 +384,8 @@ The MVP is successful if it can:
 8. Run deterministic financial data analysis over raw facts and derived indicators.
 9. Export raw facts and derived indicators as CSV.
 10. Retrieve relevant filing evidence for user questions.
-11. Use `gemini-2.5-flash` as the default LLM for hard industry classification, explanation, and analysis.
+11. Use `gemini-3.1-flash-lite` for hard industry classification and
+    `gemini-2.5-flash` as the default model for explanation and analysis.
 12. Use built-in LlamaIndex tools for non-reasoning retrieval pipeline tasks when available.
 13. Produce answers that clearly distinguish fact, calculation, financial data analysis, semantic filing analysis, and interpretation.
 14. Avoid unsupported causal claims.

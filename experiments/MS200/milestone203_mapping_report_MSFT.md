@@ -7,13 +7,13 @@ activate inferred mappings, generate formulas, or call an LLM.
 
 | Stage | Input | Action | Output | Stop boundary | Count / time | Inspect |
 |---|---|---|---|---|---|---|
-| SEC acquisition | `MSFT` + requested forms | Fetch identity, submissions, filings, Company Facts | 2 form records | Network acquisition only | 1.501s | [Summary](#a-summary) |
-| Arelle processing | Verified accession packages | Offline load, validation, extraction | 3,451 facts / 887 QNames | Detached project records | 71.874s proof session | [Per-accession evidence](#a1-per-accession-evidence) |
+| SEC acquisition | `MSFT` + requested forms | Fetch identity, submissions, filings, Company Facts | 2 form records | Network acquisition only | 2.174s | [Summary](#a-summary) |
+| Arelle processing | Verified accession packages | Offline load, validation, extraction | 3,451 facts / 887 QNames | Detached project records | 51.495s proof session | [Per-accession evidence](#a1-per-accession-evidence) |
 | Fact selection | Arelle facts | Duplicate, nil, degraded, and precedence handling | 3,023 selected / 196 quarantined semantic observations | In memory only | 3,451 raw occurrences | [Selection accounting](#a2-selection-accounting) |
-| Target selection | Source-controlled company labels | Common bundle + applicable industry bundle | 38 target metrics | No new target identity | `assigned` | [Mapping status](#b-target-metrics-mapping-status) |
-| Hard mapping | Selected facts + catalog + approved SQLite rows | Existing deterministic mapper | 18 mapped / 20 missing targets | No metric persistence | 95 mapped fact observations | [Mapped targets](#b1-mapped-targets) |
-| Evidence inference | Missing targets + Arelle taxonomy evidence | Deterministic shadow ranking | 0 unique / 0 review / 20 none | Never activated | 0 LLM calls | [Inference](#c-arelle-evidence-inference) |
-| Report publication | Structured session evidence | Render and atomic replace | This Markdown artifact | Presentation only | 1.928s before publication | [Boundary](#d-interpretation-boundary) |
+| Target selection | Persisted Gemini company labels | Common bundle + applicable industry bundle | 33 target metrics | No new target identity | `needs_label_review` | [Mapping status](#b-target-metrics-mapping-status) |
+| Hard mapping | Selected facts + catalog + approved SQLite rows | Existing deterministic mapper | 14 mapped / 19 missing targets | No metric persistence | 79 mapped fact observations | [Mapped targets](#b1-mapped-targets) |
+| Evidence inference | Missing targets + Arelle taxonomy evidence | Deterministic shadow ranking | 0 unique / 0 review / 19 none | Never activated | 0 LLM calls | [Inference](#c-arelle-evidence-inference) |
+| Report publication | Structured session evidence | Render and atomic replace | This Markdown artifact | Presentation only | 2.546s before publication | [Boundary](#d-interpretation-boundary) |
 
 ## A. Summary
 
@@ -28,13 +28,15 @@ activate inferred mappings, generate formulas, or call an LLM.
 - Duplicate groups / raw occurrences: 192 / 424
 - Fact eligible for mapping: `Y`
 - Count integrity: `Y` (3,451 raw = 3,023 selected occurrences + 428 quarantined occurrences)
-- Industry bundle: `Information Technology, Communication Services`
-- Industry-label status: `assigned`
+- Industry bundle: `common-only`
+- Industry-label status: `needs_label_review`
+- Industry-label source: `persisted_gemini_labels_unavailable`
+- Industry-label store status: `table_missing_read_only; common-only`
 - Read-only mapping database: `C:\Users\johnk\OneDrive\Desktop\project\sec_insight_rag\stock_data.db`
 - Approved mapping store status: `table_missing_read_only; source-controlled mappings only`
 - Approved-mapping selector conflicts excluded: 0
-- Proof workflow elapsed: 71.874s
-- Report projection elapsed before atomic publication: 1.928s
+- Proof workflow elapsed: 51.495s
+- Report projection elapsed before atomic publication: 2.546s
 - Shadow inference policy: `arelle-evidence-inference-v1`; threshold `uncalibrated_shadow`; evidence independence `not_assumed`.
 - External model/provider calls during mapping and inference: `0`.
 
@@ -42,8 +44,8 @@ activate inferred mappings, generate formulas, or call an LLM.
 
 | Form | Accession | Arelle complete? | Reason when no | Raw facts | QName concepts | Selected | Quarantined | Duplicate groups | Fact eligible? | Arelle seconds |
 |---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|
-| 10-K | `0000950170-25-100235` | Y |  | 1,829 | 515 | 1,603 | 105 | 103 | Y | 23.098 |
-| 10-Q | `0001193125-26-191507` | Y |  | 1,622 | 372 | 1,420 | 91 | 89 | Y | 27.793 |
+| 10-K | `0000950170-25-100235` | Y |  | 1,829 | 515 | 1,603 | 105 | 103 | Y | 19.317 |
+| 10-Q | `0001193125-26-191507` | Y |  | 1,622 | 372 | 1,420 | 91 | 89 | Y | 13.265 |
 
 ### A2. Selection accounting
 
@@ -55,7 +57,7 @@ Raw-occurrence integrity uses each semantic observation's occurrence count, not 
 
 ## B. Target Metrics Mapping Status
 
-All 38 applicable canonical targets are shown exactly once below.
+All 33 applicable canonical targets are shown exactly once below.
 The target objects come from the existing catalog; statement type is metadata, not a new metric identity.
 
 ### B1. Mapped targets
@@ -68,15 +70,11 @@ The target objects come from the existing catalog; statement type is metadata, n
 | `capital_expenditure` | `cash_flow_statement` | us-gaap:PaymentsToAcquirePropertyPlantAndEquipment via source-controlled hard mapping | 7 |
 | `current_assets` | `balance_sheet` | us-gaap:AssetsCurrent via source-controlled hard mapping | 4 |
 | `current_liabilities` | `balance_sheet` | us-gaap:LiabilitiesCurrent via source-controlled hard mapping | 4 |
-| `deferred_revenue_current` | `balance_sheet` | us-gaap:ContractWithCustomerLiabilityCurrent via source-controlled hard mapping | 4 |
-| `deferred_revenue_noncurrent` | `balance_sheet` | us-gaap:ContractWithCustomerLiabilityNoncurrent via source-controlled hard mapping | 4 |
 | `depreciation` | `cash_flow_statement` | us-gaap:Depreciation via source-controlled hard mapping | 7 |
-| `goodwill` | `balance_sheet` | us-gaap:Goodwill via source-controlled hard mapping | 1 |
 | `gross_profit` | `income_statement` | us-gaap:GrossProfit via source-controlled hard mapping | 7 |
 | `interest_expense` | `income_statement` | us-gaap:InterestExpenseNonoperating via source-controlled hard mapping | 7 |
 | `operating_cash_flow` | `cash_flow_statement` | us-gaap:NetCashProvidedByUsedInOperatingActivities via source-controlled hard mapping | 7 |
 | `research_and_development_expense` | `income_statement` | us-gaap:ResearchAndDevelopmentExpense via source-controlled hard mapping | 7 |
-| `selling_and_marketing_expense` | `income_statement` | us-gaap:SellingAndMarketingExpense via source-controlled hard mapping | 7 |
 | `shareholders_equity` | `balance_sheet` | us-gaap:StockholdersEquity via source-controlled hard mapping | 2 |
 | `total_assets` | `balance_sheet` | us-gaap:Assets via source-controlled hard mapping | 4 |
 | `total_liabilities` | `balance_sheet` | us-gaap:Liabilities via source-controlled hard mapping | 4 |
@@ -93,7 +91,6 @@ The target objects come from the existing catalog; statement type is metadata, n
 | `diluted_eps` | `income_statement` | EarningsPerShareBasicAndDiluted, EarningsPerShareDiluted | `explicitly_missing` |
 | `finance_lease_liability_current` | `balance_sheet` | FinanceLeaseLiabilityCurrent | `explicitly_missing` |
 | `finance_lease_liability_noncurrent` | `balance_sheet` | FinanceLeaseLiabilityNoncurrent | `explicitly_missing` |
-| `intangible_assets` | `balance_sheet` | IntangibleAssetsNetExcludingGoodwill | `explicitly_missing` |
 | `long_term_debt_and_finance_lease_obligations_current` | `balance_sheet` | LongTermDebtAndFinanceLeaseObligationsCurrent | `explicitly_missing` |
 | `long_term_debt_and_finance_lease_obligations_noncurrent` | `balance_sheet` | LongTermDebtAndFinanceLeaseObligationsNoncurrent | `explicitly_missing` |
 | `long_term_debt_current` | `balance_sheet` | LongTermDebtCurrent | `explicitly_missing` |
@@ -119,7 +116,6 @@ Observation-gate rejection totals count observations; `insufficient_compatibilit
 | `debt_noncurrent` | `balance_sheet` | `no_candidate` | `none` | 0 | 0 | 0 | 0 / 3023 obs.; 0 / 2 accessions |
 | `finance_lease_liability_current` | `balance_sheet` | `no_candidate` | `none` | 0 | 0 | 0 | 0 / 3023 obs.; 0 / 2 accessions |
 | `finance_lease_liability_noncurrent` | `balance_sheet` | `no_candidate` | `none` | 0 | 0 | 0 | 0 / 3023 obs.; 0 / 2 accessions |
-| `intangible_assets` | `balance_sheet` | `no_candidate` | `none` | 0 | 0 | 0 | 0 / 3023 obs.; 0 / 2 accessions |
 | `long_term_debt_and_finance_lease_obligations_current` | `balance_sheet` | `no_candidate` | `none` | 0 | 0 | 0 | 0 / 3023 obs.; 0 / 2 accessions |
 | `long_term_debt_and_finance_lease_obligations_noncurrent` | `balance_sheet` | `no_candidate` | `none` | 0 | 0 | 0 | 0 / 3023 obs.; 0 / 2 accessions |
 | `long_term_debt_current` | `balance_sheet` | `no_candidate` | `none` | 0 | 0 | 0 | 0 / 3023 obs.; 0 / 2 accessions |
@@ -200,22 +196,6 @@ Observation-gate rejection totals count observations; `insufficient_compatibilit
 - `period_type_incompatible` examples: 0000950170-25-100235 us-gaap:AcquiredFiniteLivedIntangibleAssetsWeightedAverageUsefulLife; 0000950170-25-100235 msft:AcquisitionsNetOfCashAcquiredAndPurchasesOfIntangibleAndOtherAssets; 0001193125-26-191507 msft:AcquisitionsNetOfCashAcquiredAndPurchasesOfIntangibleAndOtherAssets
 
 ### C trace: `finance_lease_liability_noncurrent` (balance_sheet)
-
-- Outcome: `no_candidate` -- No candidate survived the deterministic compatibility gates.
-- Top candidate: `none`
-- Score categories: statement role 0/2; presentation neighborhood 0/2; calculation/definition network 0/2; cross-form recurrence 0/2; governed lexical evidence 0/2.
-- Target-to-concept margin: 0; concept-to-target margin: 0.
-- Runner-up: `none` (n/a).
-- Strongest competing target: `none` (n/a).
-- Accessions: `none`.
-- Hard gates: candidate_available=fail.
-- Rejections: dimensional_observation=1768; insufficient_compatibility_evidence=144; numeric_kind_incompatible=24; period_type_incompatible=833.
-- `dimensional_observation` examples: 0001193125-26-191507 us-gaap:AccruedIncomeTaxesNoncurrent; 0000950170-25-100235 us-gaap:AccumulatedDepreciationDepletionAndAmortizationPropertyPlantAndEquipment; 0001193125-26-191507 us-gaap:AccumulatedDepreciationDepletionAndAmortizationPropertyPlantAndEquipment
-- `insufficient_compatibility_evidence` examples: us-gaap:AccountsPayableCurrent; us-gaap:AccountsReceivableNetCurrent; us-gaap:AccountsReceivableNetNoncurrent
-- `numeric_kind_incompatible` examples: 0000950170-25-100235 msft:DerivativeAssetStatementOfFinancialPositionExtensibleEnumerationNotDisclosedFlag; 0001193125-26-191507 msft:DerivativeAssetStatementOfFinancialPositionExtensibleEnumerationNotDisclosedFlag; 0000950170-25-100235 us-gaap:DerivativeLiabilityCurrentStatementOfFinancialPositionExtensibleEnumeration
-- `period_type_incompatible` examples: 0000950170-25-100235 us-gaap:AcquiredFiniteLivedIntangibleAssetsWeightedAverageUsefulLife; 0000950170-25-100235 msft:AcquisitionsNetOfCashAcquiredAndPurchasesOfIntangibleAndOtherAssets; 0001193125-26-191507 msft:AcquisitionsNetOfCashAcquiredAndPurchasesOfIntangibleAndOtherAssets
-
-### C trace: `intangible_assets` (balance_sheet)
 
 - Outcome: `no_candidate` -- No candidate survived the deterministic compatibility gates.
 - Top candidate: `none`

@@ -129,18 +129,21 @@ After configuring `SEC_USER_AGENT`, installing the exact reviewed taxonomy
 packages, and choosing an existing SQLite database, run:
 
 ```powershell
-uv run python experiments/MS200/milestone203_experiment.py --ticker MSFT --database stock_data.db
+uv run python experiments/MS200/milestone203_experiment.py --ticker MSFT --database experiments/storage/experiment.db
 ```
 
 The command contacts SEC for the latest requested 10-K and 10-Q, uses the
-schema-free Plan 203 Arelle proof, reads approved mappings through SQLite
-query-only mode, and saves
+schema-free Plan 203 Arelle proof, reads approved Gemini-generated industry
+labels and approved mappings through SQLite query-only mode, and saves
 `experiments/MS200/milestone203_mapping_report_MSFT.md`. The report presents
 fact validation and selection, duplicate/quarantine accounting, the complete
 applicable target bundle split into mapped and explicitly missing sections, and
 deterministic Arelle-evidence inference for missing targets. Inference is shadow
 evidence only: it does not write or approve a mapping, generate a formula, or
 call an LLM.
+If approved Gemini labels are unavailable, the report uses Common Base targets
+only and records the label-store reason; it does not use the manual ticker/CIK
+registry.
 If a legacy database does not yet contain `xbrl_concept_mappings`, the report
 shows that absence and continues with source-controlled mappings; it never
 initializes the table during inspection.

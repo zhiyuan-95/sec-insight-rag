@@ -4,7 +4,12 @@ from pathlib import Path
 
 import pytest
 
+from src.analyze.industry_classification import (
+    GEMINI_INDUSTRY_ASSIGNMENT_SOURCE,
+    GEMINI_INDUSTRY_CLASSIFIER_VERSION,
+)
 from src.config import Settings
+from src.config.settings import DEFAULT_GEMINI_INDUSTRY_CLASSIFICATION_MODEL
 from src.ingestion import (
     CompanyIngestionResult,
     FilingMetadata,
@@ -14,10 +19,6 @@ from src.ingestion import (
     ingest_company,
 )
 from src.ingestion import company as company_module
-from src.analyze.industry_classification import (
-    GEMINI_INDUSTRY_ASSIGNMENT_SOURCE,
-    GEMINI_INDUSTRY_CLASSIFIER_VERSION,
-)
 from src.processing.company_industry_labels import (
     CompanyIndustryLabelAssignment,
     LABEL_STATUS_ASSIGNED,
@@ -173,6 +174,7 @@ def test_ingest_company_persists_gemini_industry_classification(
         business_section = kwargs["business_section"]
         classified.append(business_section.accession_number)
         assert business_section.text.startswith("Apple designs consumer devices")
+        assert kwargs["model"] == DEFAULT_GEMINI_INDUSTRY_CLASSIFICATION_MODEL
         return CompanyIndustryLabelAssignment(
             ticker="AAPL",
             cik="0000320193",
