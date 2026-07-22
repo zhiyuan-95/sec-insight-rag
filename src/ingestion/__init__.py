@@ -21,7 +21,11 @@ from src.ingestion.filings import (
 )
 from src.ingestion.inline_xbrl import get_inline_xbrl_facts
 from src.ingestion.sec_client import SecClient
-from src.ingestion.submissions import build_submissions_url, get_company_submissions
+from src.ingestion.submissions import (
+    build_submissions_url,
+    discover_annual_inline_xbrl_filings,
+    get_company_submissions,
+)
 from src.ingestion.tickers import TickerMapping, load_ticker_mapping, resolve_ticker_to_cik
 
 __all__ = [
@@ -42,6 +46,7 @@ __all__ = [
     "build_submissions_url",
     "download_filing_document",
     "delete_ingested_company",
+    "discover_annual_inline_xbrl_filings",
     "get_company_submissions",
     "get_companyfacts",
     "get_inline_xbrl_facts",

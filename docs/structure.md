@@ -312,7 +312,8 @@ Current files:
 
 - `sec_client.py`: SEC HTTP client behavior.
 - `tickers.py`: SEC ticker mapping and ticker-to-CIK resolution.
-- `submissions.py`: SEC submissions URL building and retrieval.
+- `submissions.py`: SEC submissions retrieval plus complete recent-and-archived
+  annual Inline XBRL inventory discovery for Plan 203.
 - `companyfacts.py`: SEC companyfacts URL building and retrieval.
 - `inline_xbrl.py`: Arelle-backed loading of active SEC Inline XBRL documents and extension taxonomy dependencies.
 - `filings.py`: Filing metadata listing, latest-form selection helpers, and filing document download.
@@ -326,6 +327,9 @@ Key responsibilities:
 
 - Resolve ticker symbols to CIKs.
 - Retrieve SEC submissions and companyfacts JSON.
+- Discover all Inline XBRL `10-K` and `10-K/A` accessions by traversing recent
+  submissions and every referenced history file, without changing the legacy
+  active-window company workflow yet.
 - Load active Inline XBRL filings when deterministic target coverage remains incomplete.
 - Backfill Inline XBRL enrichment once for previously ingested companies whose active local filing artifacts predate the adaptive mapping layer.
 - Check local company registry state before live SEC ingestion.
