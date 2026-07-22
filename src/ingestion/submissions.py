@@ -5,7 +5,12 @@ from __future__ import annotations
 from typing import Any
 
 from src.ingestion.errors import SecPayloadError
-from src.ingestion.filings import FilingMetadata, build_filing_document_url
+from src.ingestion.filings import (
+    FilingMetadata,
+    build_filing_document_url,
+    read_required_filing_text,
+    validate_parallel_filing_arrays,
+)
 from src.ingestion.sec_client import SecClient
 from src.ingestion.tickers import normalize_cik
 
@@ -51,12 +56,13 @@ def discover_annual_inline_xbrl_filings(client: SecClient, cik: str) -> list[Fil
     seen_accessions: set[str] = set()
     for source in sources:
         for row in _read_filing_rows(source):
+            is_inline_xbrl = _read_inline_xbrl_flag(row["isInlineXBRL"])
             accession_number = _read_required_history_text(row, "accessionNumber")
             if accession_number in seen_accessions:
                 continue
             seen_accessions.add(accession_number)
             form = _read_required_history_text(row, "form").upper()
-            if form not in ANNUAL_FORMS or not _read_inline_xbrl_flag(row["isInlineXBRL"]):
+            if form not in ANNUAL_FORMS or not is_inline_xbrl:
                 continue
             filing_date = _read_required_history_text(row, "filingDate")
             primary_document = _read_required_history_text(row, "primaryDocument")
@@ -111,26 +117,24 @@ def _build_submissions_file_url(reference: Any) -> str:
 def _read_filing_rows(source: Any) -> list[dict[str, Any]]:
     if not isinstance(source, dict):
         raise SecPayloadError("SEC submissions filing history was not an object")
-    lengths: dict[str, int] = {}
-    for field in DISCOVERY_FIELDS:
-        values = source.get(field)
-        if not isinstance(values, list):
-            raise SecPayloadError(f"SEC submissions filing history field was not a list: {field}")
-        lengths[field] = len(values)
-    if len(set(lengths.values())) != 1:
-        raise SecPayloadError("SEC submissions filing history arrays have inconsistent lengths")
+    row_count = validate_parallel_filing_arrays(
+        source,
+        DISCOVERY_FIELDS,
+        context="SEC submissions filing history",
+    )
 
     return [
         {field: source[field][index] for field in DISCOVERY_FIELDS}
-        for index in range(next(iter(lengths.values()), 0))
+        for index in range(row_count)
     ]
 
 
 def _read_required_history_text(row: dict[str, Any], field: str) -> str:
-    value = row[field]
-    if value is None or not str(value).strip():
-        raise SecPayloadError(f"SEC submissions filing history field had a blank value: {field}")
-    return str(value).strip()
+    return read_required_filing_text(
+        row[field],
+        field=field,
+        context="SEC submissions filing history",
+    )
 
 
 def _read_inline_xbrl_flag(value: Any) -> bool:

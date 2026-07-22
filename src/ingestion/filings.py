@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -30,19 +31,37 @@ def list_recent_filings(submissions: dict[str, Any], forms: set[str] | frozenset
     """Extract recent filing metadata for requested forms."""
     recent = _get_recent_filings(submissions)
     normalized_forms = {form.upper() for form in forms}
-    lengths = _field_lengths(recent, ["accessionNumber", "filingDate", "form", "primaryDocument"])
-    if len(set(lengths.values())) != 1:
-        raise SecPayloadError("SEC recent filings arrays have inconsistent lengths")
+    row_count = validate_parallel_filing_arrays(
+        recent,
+        ("accessionNumber", "filingDate", "form", "primaryDocument"),
+        context="SEC recent filings",
+    )
 
     cik = normalize_cik(submissions.get("cik"))
     filings: list[FilingMetadata] = []
-    for index in range(next(iter(lengths.values()), 0)):
-        form = _read_recent_value(recent, "form", index).upper()
+    for index in range(row_count):
+        form = read_required_filing_text(
+            recent["form"][index],
+            field="form",
+            context="SEC recent filings",
+        ).upper()
         if form not in normalized_forms:
             continue
-        accession_number = _read_recent_value(recent, "accessionNumber", index)
-        filing_date = _read_recent_value(recent, "filingDate", index)
-        primary_document = _read_recent_value(recent, "primaryDocument", index)
+        accession_number = read_required_filing_text(
+            recent["accessionNumber"][index],
+            field="accessionNumber",
+            context="SEC recent filings",
+        )
+        filing_date = read_required_filing_text(
+            recent["filingDate"][index],
+            field="filingDate",
+            context="SEC recent filings",
+        )
+        primary_document = read_required_filing_text(
+            recent["primaryDocument"][index],
+            field="primaryDocument",
+            context="SEC recent filings",
+        )
         document_url = build_filing_document_url(cik, accession_number, primary_document)
         filings.append(
             FilingMetadata(
@@ -128,20 +147,28 @@ def _get_recent_filings(submissions: dict[str, Any]) -> dict[str, Any]:
     return recent
 
 
-def _field_lengths(recent: dict[str, Any], fields: list[str]) -> dict[str, int]:
-    lengths: dict[str, int] = {}
+def validate_parallel_filing_arrays(
+    source: dict[str, Any],
+    fields: Sequence[str],
+    *,
+    context: str,
+) -> int:
+    """Validate parallel SEC filing arrays and return their shared row count."""
+    lengths: list[int] = []
     for field in fields:
-        value = recent.get(field)
+        value = source.get(field)
         if not isinstance(value, list):
-            raise SecPayloadError(f"SEC recent filings field was not a list: {field}")
-        lengths[field] = len(value)
-    return lengths
+            raise SecPayloadError(f"{context} field was not a list: {field}")
+        lengths.append(len(value))
+    if len(set(lengths)) != 1:
+        raise SecPayloadError(f"{context} arrays have inconsistent lengths")
+    return lengths[0] if lengths else 0
 
 
-def _read_recent_value(recent: dict[str, Any], field: str, index: int) -> str:
-    value = recent[field][index]
+def read_required_filing_text(value: Any, *, field: str, context: str) -> str:
+    """Return one required SEC filing value as stripped text."""
     if value is None or not str(value).strip():
-        raise SecPayloadError(f"SEC recent filings field had a blank value: {field}")
+        raise SecPayloadError(f"{context} field had a blank value: {field}")
     return str(value).strip()
 
 

@@ -155,6 +155,50 @@ def test_discovery_rejects_invalid_inline_xbrl_metadata_without_guessing() -> No
         discover_annual_inline_xbrl_filings(client, "320193")
 
 
+def test_discovery_rejects_invalid_inline_xbrl_metadata_on_nonannual_filings() -> None:
+    main_url = build_submissions_url("320193")
+    client = FakeSubmissionsClient(
+        {
+            main_url: {
+                "cik": "0000320193",
+                "filings": {
+                    "recent": _filing_arrays(
+                        ("quarterly", "2025-08-01", "10-Q", "quarter.htm", "unknown"),
+                    ),
+                    "files": [],
+                },
+            }
+        }
+    )
+
+    with pytest.raises(SecPayloadError, match="isInlineXBRL"):
+        discover_annual_inline_xbrl_filings(client, "320193")
+
+
+def test_discovery_rejects_invalid_inline_xbrl_metadata_on_duplicate_rows() -> None:
+    main_url = build_submissions_url("320193")
+    archive_url = "https://data.sec.gov/submissions/CIK0000320193-submissions-001.json"
+    client = FakeSubmissionsClient(
+        {
+            main_url: {
+                "cik": "0000320193",
+                "filings": {
+                    "recent": _filing_arrays(
+                        ("duplicate", "2025-10-31", "10-K", "annual.htm", 1),
+                    ),
+                    "files": [{"name": "CIK0000320193-submissions-001.json"}],
+                },
+            },
+            archive_url: _filing_arrays(
+                ("duplicate", "2025-10-31", "10-K", "annual.htm", "unknown"),
+            ),
+        }
+    )
+
+    with pytest.raises(SecPayloadError, match="isInlineXBRL"):
+        discover_annual_inline_xbrl_filings(client, "320193")
+
+
 def test_discovery_ignores_blank_documents_for_unselected_filings() -> None:
     main_url = build_submissions_url("320193")
     client = FakeSubmissionsClient(
