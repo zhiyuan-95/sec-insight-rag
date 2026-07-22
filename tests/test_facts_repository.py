@@ -278,7 +278,7 @@ def test_raw_fact_repository_migrates_legacy_keys_in_place(tmp_path: Path) -> No
     )
     connection.commit()
     legacy_id = cursor.lastrowid
-    connection.execute(
+    duplicate_cursor = connection.execute(
         """
         INSERT INTO raw_xbrl_facts (
             unique_key,
@@ -338,6 +338,91 @@ def test_raw_fact_repository_migrates_legacy_keys_in_place(tmp_path: Path) -> No
         """,
         [legacy_id],
     )
+    duplicate_id = duplicate_cursor.lastrowid
+    company_cursor = connection.execute(
+        """
+        INSERT INTO companies (cik, name, created_at, updated_at)
+        VALUES ('0000320193', 'Apple Inc.', '2025-01-31', '2025-01-31')
+        """
+    )
+    company_id = company_cursor.lastrowid
+    connection.executemany(
+        """
+        INSERT INTO financial_metrics (
+            company_id,
+            accession_number,
+            raw_fact_id,
+            statement_type,
+            metric_name,
+            value_numeric,
+            value_raw,
+            unit,
+            period_type,
+            fiscal_year,
+            fiscal_period,
+            start_date,
+            end_date,
+            filing_date,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                company_id,
+                "0000320193-25-000001",
+                raw_fact_id,
+                "income_statement",
+                "revenue",
+                "100",
+                "100",
+                "USD",
+                "annual",
+                2024,
+                "FY",
+                "2024-01-01",
+                "2024-12-31",
+                "2025-01-31",
+                "2025-01-31",
+            )
+            for raw_fact_id in (legacy_id, duplicate_id)
+        ],
+    )
+    metric_id_by_raw_fact_id = {
+        row["raw_fact_id"]: row["metric_id"]
+        for row in connection.execute(
+            "SELECT metric_id, raw_fact_id FROM financial_metrics"
+        ).fetchall()
+    }
+    connection.execute(
+        """
+        INSERT INTO financial_indicators (
+            company_id,
+            indicator_name,
+            formula_name,
+            formula_version,
+            unit,
+            period_type,
+            source_metric_ids,
+            source_raw_fact_ids,
+            source_accession_numbers,
+            calculation_status,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            company_id,
+            "revenue_growth",
+            "growth",
+            "1",
+            "percent",
+            "annual",
+            json.dumps([metric_id_by_raw_fact_id[duplicate_id]]),
+            json.dumps([duplicate_id]),
+            json.dumps(["0000320193-25-000001"]),
+            "calculated",
+            "2025-01-31",
+        ],
+    )
     connection.commit()
 
     repository.initialize()
@@ -345,6 +430,20 @@ def test_raw_fact_repository_migrates_legacy_keys_in_place(tmp_path: Path) -> No
 
     assert len(migrated_records) == 1
     assert migrated_records[0].occurrence_count == 2
+    metric_rows = connection.execute(
+        "SELECT metric_id, raw_fact_id FROM financial_metrics"
+    ).fetchall()
+    assert [row["raw_fact_id"] for row in metric_rows] == [legacy_id]
+    indicator_row = connection.execute(
+        """
+        SELECT source_metric_ids, source_raw_fact_ids
+        FROM financial_indicators
+        """
+    ).fetchone()
+    assert json.loads(indicator_row["source_metric_ids"]) == [
+        metric_rows[0]["metric_id"]
+    ]
+    assert json.loads(indicator_row["source_raw_fact_ids"]) == [legacy_id]
 
     updated_provenance = replace(
         _normalized_facts()[0],

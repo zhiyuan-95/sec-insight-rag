@@ -88,7 +88,7 @@ class RawFactRepository:
                         [f"raw-observation-migration:{row['id']}", row["id"]],
                     )
             for unique_key, grouped_rows in affected_groups.items():
-                prepared = _prepare_facts(
+                prepared = _collapse_observation_groups(
                     [_row_to_fact(row) for row in grouped_rows]
                 )[0]
                 canonical_raw_fact_id = min(int(row["id"]) for row in grouped_rows)
@@ -98,13 +98,14 @@ class RawFactRepository:
                     if int(row["id"]) != canonical_raw_fact_id
                 ]
                 for duplicate_raw_fact_id in duplicate_raw_fact_ids:
-                    self.connection.execute(
-                        """
-                        UPDATE financial_metrics
-                        SET raw_fact_id = ?
-                        WHERE raw_fact_id = ?
-                        """,
-                        [canonical_raw_fact_id, duplicate_raw_fact_id],
+                    self._repoint_metric_references(
+                        duplicate_raw_fact_id=duplicate_raw_fact_id,
+                        canonical_raw_fact_id=canonical_raw_fact_id,
+                    )
+                    self._replace_indicator_reference(
+                        column_name="source_raw_fact_ids",
+                        old_id=duplicate_raw_fact_id,
+                        new_id=canonical_raw_fact_id,
                     )
                     self.connection.execute(
                         "DELETE FROM raw_xbrl_facts WHERE id = ?",
@@ -132,6 +133,88 @@ class RawFactRepository:
                     ],
                 )
 
+    def _repoint_metric_references(
+        self,
+        *,
+        duplicate_raw_fact_id: int,
+        canonical_raw_fact_id: int,
+    ) -> None:
+        duplicate_metrics = self.connection.execute(
+            "SELECT * FROM financial_metrics WHERE raw_fact_id = ?",
+            [duplicate_raw_fact_id],
+        ).fetchall()
+        for duplicate_metric in duplicate_metrics:
+            canonical_metric = self.connection.execute(
+                """
+                SELECT metric_id
+                FROM financial_metrics
+                WHERE company_id IS ?
+                  AND metric_name IS ?
+                  AND period_type IS ?
+                  AND fiscal_year IS ?
+                  AND fiscal_period IS ?
+                  AND accession_number IS ?
+                  AND raw_fact_id = ?
+                """,
+                [
+                    duplicate_metric["company_id"],
+                    duplicate_metric["metric_name"],
+                    duplicate_metric["period_type"],
+                    duplicate_metric["fiscal_year"],
+                    duplicate_metric["fiscal_period"],
+                    duplicate_metric["accession_number"],
+                    canonical_raw_fact_id,
+                ],
+            ).fetchone()
+            if canonical_metric is None:
+                self.connection.execute(
+                    """
+                    UPDATE financial_metrics
+                    SET raw_fact_id = ?
+                    WHERE metric_id = ?
+                    """,
+                    [canonical_raw_fact_id, duplicate_metric["metric_id"]],
+                )
+                continue
+            self._replace_indicator_reference(
+                column_name="source_metric_ids",
+                old_id=int(duplicate_metric["metric_id"]),
+                new_id=int(canonical_metric["metric_id"]),
+            )
+            self.connection.execute(
+                "DELETE FROM financial_metrics WHERE metric_id = ?",
+                [duplicate_metric["metric_id"]],
+            )
+
+    def _replace_indicator_reference(
+        self,
+        *,
+        column_name: str,
+        old_id: int,
+        new_id: int,
+    ) -> None:
+        rows = self.connection.execute(
+            f"SELECT indicator_id, {column_name} FROM financial_indicators"
+        ).fetchall()
+        for row in rows:
+            existing_ids = [int(value) for value in json.loads(row[column_name])]
+            if old_id not in existing_ids:
+                continue
+            replaced_ids = tuple(
+                dict.fromkeys(
+                    new_id if value == old_id else value
+                    for value in existing_ids
+                )
+            )
+            self.connection.execute(
+                f"""
+                UPDATE financial_indicators
+                SET {column_name} = ?
+                WHERE indicator_id = ?
+                """,
+                [json.dumps(replaced_ids), row["indicator_id"]],
+            )
+
     def upsert_facts(self, facts: list[NormalizedFact]) -> int:
         """Insert or update normalized facts."""
         if not facts:
@@ -139,7 +222,7 @@ class RawFactRepository:
         now = datetime.now(timezone.utc).isoformat()
         prepared_facts = tuple(
             self._merge_with_stored(prepared)
-            for prepared in _prepare_facts(facts)
+            for prepared in _collapse_observation_groups(facts)
         )
         rows = [_fact_to_row(prepared, now) for prepared in prepared_facts]
         self.connection.executemany(
@@ -416,7 +499,9 @@ def _unique_key(fact: NormalizedFact) -> str:
     return json.dumps(parts, separators=(",", ":"), default=str)
 
 
-def _prepare_facts(facts: list[NormalizedFact]) -> tuple[_PreparedRawFact, ...]:
+def _collapse_observation_groups(
+    facts: list[NormalizedFact],
+) -> tuple[_PreparedRawFact, ...]:
     grouped: dict[str, list[NormalizedFact]] = {}
     for fact in facts:
         grouped.setdefault(_unique_key(fact), []).append(fact)
@@ -426,7 +511,8 @@ def _prepare_facts(facts: list[NormalizedFact]) -> tuple[_PreparedRawFact, ...]:
         occurrences = grouped[key]
         occurrences_by_value: dict[tuple[str, object], list[NormalizedFact]] = {}
         for fact in occurrences:
-            occurrences_by_value.setdefault(_value_identity(fact), []).append(fact)
+            value_identity = _normalized_value_identity(fact.value, fact.value_raw)
+            occurrences_by_value.setdefault(value_identity, []).append(fact)
         conflicting = len(occurrences_by_value) > 1
         representative = min(occurrences, key=_representative_sort_key)
         quality_flags = tuple(
@@ -471,8 +557,8 @@ def _merge_prepared_fact(
     incoming: _PreparedRawFact,
 ) -> _PreparedRawFact:
     value_evidence: dict[tuple[str, object], RawFactConflictEvidence] = {}
-    for item in (*_stored_value_evidence(stored), *_prepared_value_evidence(incoming)):
-        key = _evidence_value_identity(item)
+    for item in (*_value_evidence(stored), *_value_evidence(incoming)):
+        key = _normalized_value_identity(item.value_numeric, item.value_raw)
         existing = value_evidence.get(key)
         if existing is None:
             value_evidence[key] = item
@@ -535,30 +621,16 @@ def _merge_prepared_fact(
     )
 
 
-def _stored_value_evidence(
-    stored: StoredRawFact,
+def _value_evidence(
+    observation: StoredRawFact | _PreparedRawFact,
 ) -> tuple[RawFactConflictEvidence, ...]:
-    if stored.conflict_evidence:
-        return stored.conflict_evidence
+    if observation.conflict_evidence:
+        return observation.conflict_evidence
     return (
         RawFactConflictEvidence(
-            value_raw=stored.fact.value_raw,
-            value_numeric=stored.fact.value,
-            occurrence_references=stored.occurrence_references,
-        ),
-    )
-
-
-def _prepared_value_evidence(
-    prepared: _PreparedRawFact,
-) -> tuple[RawFactConflictEvidence, ...]:
-    if prepared.conflict_evidence:
-        return prepared.conflict_evidence
-    return (
-        RawFactConflictEvidence(
-            value_raw=prepared.fact.value_raw,
-            value_numeric=prepared.fact.value,
-            occurrence_references=prepared.occurrence_references,
+            value_raw=observation.fact.value_raw,
+            value_numeric=observation.fact.value,
+            occurrence_references=observation.occurrence_references,
         ),
     )
 
@@ -580,27 +652,15 @@ def _occurrence_reference(fact: NormalizedFact) -> str | None:
     return reference or None
 
 
-def _value_identity(fact: NormalizedFact) -> tuple[str, object]:
-    if fact.value is not None:
-        return ("numeric", fact.value)
-    return (
-        "raw",
-        json.dumps(fact.value_raw, sort_keys=True, separators=(",", ":")),
-    )
-
-
-def _evidence_value_identity(
-    evidence: RawFactConflictEvidence,
+def _normalized_value_identity(
+    value_numeric: Decimal | None,
+    value_raw: object,
 ) -> tuple[str, object]:
-    if evidence.value_numeric is not None:
-        return ("numeric", evidence.value_numeric)
+    if value_numeric is not None:
+        return ("numeric", value_numeric)
     return (
         "raw",
-        json.dumps(
-            evidence.value_raw,
-            sort_keys=True,
-            separators=(",", ":"),
-        ),
+        json.dumps(value_raw, sort_keys=True, separators=(",", ":")),
     )
 
 
