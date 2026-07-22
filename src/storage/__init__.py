@@ -10,7 +10,11 @@ from src.storage.concept_mappings_repository import (
     ConceptMappingRepository,
 )
 from src.storage.database import connect_sqlite, initialize_database
-from src.storage.facts_repository import RawFactRepository, StoredRawFact
+from src.storage.facts_repository import (
+    RawFactConflictEvidence,
+    RawFactRepository,
+    StoredRawFact,
+)
 from src.storage.filings_repository import FilingRecord, FilingRepository
 from src.storage.industry_labels_repository import (
     CompanyIndustryLabelRepository,
@@ -42,6 +46,7 @@ __all__ = [
     "MAPPING_SCOPE_INDUSTRY",
     "MAPPING_STATUS_APPROVED",
     "RawFactRepository",
+    "RawFactConflictEvidence",
     "RetrievalIndexState",
     "RetrievalRepository",
     "StoredRawFact",

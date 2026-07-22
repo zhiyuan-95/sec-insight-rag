@@ -50,7 +50,7 @@ src/ingestion/company.py
   |     -> calculate deterministic derived indicators from active base metrics
   |
   +-- src/storage/facts_repository.py
-  |     -> persist normalized facts in SQLite
+  |     -> preserve source-separated raw observations and duplicate evidence in SQLite
   +-- src/storage/company_repository.py
   |     -> persist company registry and refresh state
   +-- src/storage/industry_labels_repository.py
@@ -81,7 +81,7 @@ Generated local data:
 data_store/filings/          downloaded SEC filing HTML
 data_store/knowledge/        local formula proposal cache and versioned retrieval indexes
 stock_data.db                SQLite database
-  raw_xbrl_facts             companyfacts plus Inline XBRL facts with context and dimensions
+  raw_xbrl_facts             source-separated XBRL observations with compact duplicate evidence
   companies                  local company registry
   company_industry_labels    reusable hard-industry labels and assignment evidence
   filings                    ingested filing inventory
@@ -416,7 +416,9 @@ SQLite persistence.
 Current files:
 
 - `database.py`: SQLite connection and schema initialization helpers.
-- `facts_repository.py`: `RawFactRepository` for normalized raw XBRL facts.
+- `facts_repository.py`: `RawFactRepository` for source-separated normalized
+  raw XBRL observations, compact occurrence/conflict evidence, and raw-identity
+  migration.
 - `industry_labels_repository.py`: `CompanyIndustryLabelRepository` for persisted company hard-industry labels and evidence.
 - `concept_mappings_repository.py`: `ConceptMappingRepository` for scoped approved learned raw-concept mappings used by hard mapping.
 - `company_repository.py`: `CompanyRepository` and `CompanyRecord` for company identity and refresh state.
@@ -429,9 +431,12 @@ Current files:
 Key responsibilities:
 
 - Own local SQLite schema helpers.
-- Persist normalized raw XBRL facts.
+- Persist Company Facts and Arelle observations as separate raw rows for the same accession and semantic fact identity.
 - Persist reusable company industry labels and governed learned mapping decisions.
-- Upsert facts using a stable uniqueness key.
+- Upsert facts using semantic identity plus accession and source; keep fiscal
+  labels, form, and SEC frame as provenance rather than identity.
+- Collapse equivalent same-accession occurrences with compact references, and
+  quarantine conflicting values with retained conflict evidence.
 - Retrieve stored facts by CIK and optional concept filters.
 - Delete company-scoped raw facts, filing metadata, base metrics, derived indicators, retrieval chunks/state, and registry rows when reset orchestration requests it.
 - Persist company registry records.

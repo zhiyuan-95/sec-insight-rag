@@ -40,6 +40,10 @@ def initialize_database(connection: sqlite3.Connection) -> None:
             filed_date TEXT,
             accession_number TEXT,
             frame TEXT,
+            occurrence_count INTEGER NOT NULL DEFAULT 1,
+            occurrence_references_json TEXT NOT NULL DEFAULT '[]',
+            conflict_evidence_json TEXT NOT NULL DEFAULT '[]',
+            identity_version INTEGER NOT NULL DEFAULT 2,
             source TEXT NOT NULL,
             quality_flags TEXT NOT NULL,
             created_at TEXT NOT NULL
@@ -65,6 +69,30 @@ def initialize_database(connection: sqlite3.Connection) -> None:
     _ensure_column(connection, "raw_xbrl_facts", "source_document", "TEXT")
     _ensure_column(connection, "raw_xbrl_facts", "balance", "TEXT")
     _ensure_column(connection, "raw_xbrl_facts", "is_numeric", "INTEGER")
+    _ensure_column(
+        connection,
+        "raw_xbrl_facts",
+        "occurrence_count",
+        "INTEGER NOT NULL DEFAULT 1",
+    )
+    _ensure_column(
+        connection,
+        "raw_xbrl_facts",
+        "occurrence_references_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )
+    _ensure_column(
+        connection,
+        "raw_xbrl_facts",
+        "conflict_evidence_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )
+    _ensure_column(
+        connection,
+        "raw_xbrl_facts",
+        "identity_version",
+        "INTEGER NOT NULL DEFAULT 1",
+    )
     connection.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_raw_xbrl_facts_taxonomy_concept

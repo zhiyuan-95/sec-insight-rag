@@ -1,4 +1,6 @@
 import json
+from dataclasses import replace
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -55,6 +57,317 @@ def test_raw_fact_repository_upserts_without_multiplying_rows(tmp_path: Path) ->
     stored = repository.list_facts("0000320193")
 
     assert len(stored) == 1
+
+
+def test_raw_fact_repository_preserves_matching_sources_separately(tmp_path: Path) -> None:
+    connection = connect_sqlite(tmp_path / "stock.db")
+    repository = RawFactRepository(connection)
+    repository.initialize()
+    company_facts_observation = _normalized_facts()[0]
+    arelle_observation = replace(
+        company_facts_observation,
+        source="sec_inline_xbrl",
+    )
+    later_accession_observation = replace(
+        company_facts_observation,
+        accession_number="0000320193-26-000001",
+    )
+
+    repository.upsert_facts(
+        [
+            company_facts_observation,
+            arelle_observation,
+            later_accession_observation,
+        ]
+    )
+    stored = repository.list_facts("0000320193")
+
+    assert len(stored) == 3
+    assert {
+        (fact.source, fact.accession_number)
+        for fact in stored
+    } == {
+        ("sec_companyfacts", company_facts_observation.accession_number),
+        ("sec_inline_xbrl", company_facts_observation.accession_number),
+        ("sec_companyfacts", "0000320193-26-000001"),
+    }
+
+
+def test_raw_fact_repository_collapses_equivalent_occurrences_by_semantic_identity(
+    tmp_path: Path,
+) -> None:
+    connection = connect_sqlite(tmp_path / "stock.db")
+    repository = RawFactRepository(connection)
+    repository.initialize()
+    first = replace(
+        _normalized_facts()[0],
+        fiscal_year=2024,
+        fiscal_period="FY",
+        form="10-K",
+        frame="CY2024",
+        context_id="context-a",
+        source_document="filing-a.htm",
+    )
+    second = replace(
+        first,
+        fiscal_year=2025,
+        fiscal_period="Q4",
+        form="10-K/A",
+        frame="CY2025Q4",
+        context_id="context-b",
+        source_document="filing-b.htm",
+    )
+
+    repository.upsert_facts([first, second])
+    records = repository.list_fact_records("0000320193")
+
+    assert len(records) == 1
+    assert records[0].occurrence_count == 2
+    assert set(records[0].occurrence_references) == {
+        "document=filing-a.htm|context=context-a|form=10-K|fiscal_year=2024|fiscal_period=FY|frame=CY2024",
+        "document=filing-b.htm|context=context-b|form=10-K/A|fiscal_year=2025|fiscal_period=Q4|frame=CY2025Q4",
+    }
+    assert DUPLICATE_FACT not in records[0].fact.quality_flags
+
+
+def test_raw_fact_repository_quarantines_conflicting_occurrences_with_evidence(
+    tmp_path: Path,
+) -> None:
+    connection = connect_sqlite(tmp_path / "stock.db")
+    repository = RawFactRepository(connection)
+    repository.initialize()
+    first = replace(
+        _normalized_facts()[0],
+        value_raw=100,
+        value=Decimal("100"),
+        context_id="context-a",
+        source_document="filing.htm",
+    )
+    second = replace(
+        first,
+        value_raw=200,
+        value=Decimal("200"),
+        context_id="context-b",
+    )
+
+    repository.upsert_facts([first, second])
+    records = repository.list_fact_records("0000320193")
+
+    assert len(records) == 1
+    assert records[0].occurrence_count == 2
+    assert DUPLICATE_FACT in records[0].fact.quality_flags
+    assert tuple(
+        (
+            evidence.value_raw,
+            evidence.value_numeric,
+            evidence.occurrence_references,
+        )
+        for evidence in records[0].conflict_evidence
+    ) == (
+        (
+            100,
+            Decimal("100"),
+            (
+                "document=filing.htm|context=context-a|form=10-K|fiscal_year=2025|fiscal_period=FY|frame=CY2025",
+            ),
+        ),
+        (
+            200,
+            Decimal("200"),
+            (
+                "document=filing.htm|context=context-b|form=10-K|fiscal_year=2025|fiscal_period=FY|frame=CY2025",
+            ),
+        ),
+    )
+
+
+def test_raw_fact_repository_merges_new_conflict_evidence_idempotently(
+    tmp_path: Path,
+) -> None:
+    connection = connect_sqlite(tmp_path / "stock.db")
+    repository = RawFactRepository(connection)
+    repository.initialize()
+    first = replace(
+        _normalized_facts()[0],
+        value_raw=100,
+        value=Decimal("100"),
+        context_id="context-a",
+    )
+    second = replace(
+        first,
+        value_raw=200,
+        value=Decimal("200"),
+        context_id="context-b",
+    )
+
+    repository.upsert_facts([first])
+    original_id = repository.list_fact_records("0000320193")[0].raw_fact_id
+    repository.upsert_facts([second])
+    repository.upsert_facts([second])
+    record = repository.list_fact_records("0000320193")[0]
+
+    assert record.raw_fact_id == original_id
+    assert record.occurrence_count == 2
+    assert DUPLICATE_FACT in record.fact.quality_flags
+    assert {evidence.value_numeric for evidence in record.conflict_evidence} == {
+        Decimal("100"),
+        Decimal("200"),
+    }
+
+
+def test_raw_fact_repository_migrates_legacy_keys_in_place(tmp_path: Path) -> None:
+    connection = connect_sqlite(tmp_path / "stock.db")
+    repository = RawFactRepository(connection)
+    repository.initialize()
+    cursor = connection.execute(
+        """
+        INSERT INTO raw_xbrl_facts (
+            unique_key,
+            cik,
+            entity_name,
+            taxonomy,
+            concept,
+            unit,
+            value_raw,
+            value_numeric,
+            start_date,
+            end_date,
+            period_type,
+            fiscal_year,
+            fiscal_period,
+            form,
+            filed_date,
+            accession_number,
+            frame,
+            context_id,
+            dimensions_json,
+            is_consolidated,
+            source_document,
+            identity_version,
+            source,
+            quality_flags,
+            created_at
+        ) VALUES (
+            'legacy-key',
+            '0000320193',
+            'Apple Inc.',
+            'us-gaap',
+            'Revenues',
+            'USD',
+            '100',
+            '100',
+            '2024-01-01',
+            '2024-12-31',
+            'annual',
+            2024,
+            'FY',
+            '10-K',
+            '2025-01-31',
+            '0000320193-25-000001',
+            'CY2024',
+            'context-a',
+            '[]',
+            1,
+            'filing-a.htm',
+            1,
+            'sec_companyfacts',
+            '[]',
+            '2025-01-31T00:00:00+00:00'
+        )
+        """
+    )
+    connection.commit()
+    legacy_id = cursor.lastrowid
+    connection.execute(
+        """
+        INSERT INTO raw_xbrl_facts (
+            unique_key,
+            cik,
+            entity_name,
+            taxonomy,
+            concept,
+            unit,
+            value_raw,
+            value_numeric,
+            start_date,
+            end_date,
+            period_type,
+            fiscal_year,
+            fiscal_period,
+            form,
+            filed_date,
+            accession_number,
+            frame,
+            context_id,
+            dimensions_json,
+            is_consolidated,
+            source_document,
+            identity_version,
+            source,
+            quality_flags,
+            created_at
+        )
+        SELECT
+            'legacy-key-b',
+            cik,
+            entity_name,
+            taxonomy,
+            concept,
+            unit,
+            value_raw,
+            value_numeric,
+            start_date,
+            end_date,
+            period_type,
+            2025,
+            'Q4',
+            '10-K/A',
+            '2025-02-14',
+            accession_number,
+            'CY2024Q4',
+            'context-b',
+            dimensions_json,
+            is_consolidated,
+            'filing-b.htm',
+            1,
+            source,
+            quality_flags,
+            created_at
+        FROM raw_xbrl_facts
+        WHERE id = ?
+        """,
+        [legacy_id],
+    )
+    connection.commit()
+
+    repository.initialize()
+    migrated_records = repository.list_fact_records("0000320193")
+
+    assert len(migrated_records) == 1
+    assert migrated_records[0].occurrence_count == 2
+
+    updated_provenance = replace(
+        _normalized_facts()[0],
+        value_raw=100,
+        value=Decimal("100"),
+        start_date=date(2024, 1, 1),
+        end_date=date(2024, 12, 31),
+        period_type="annual",
+        fiscal_year=2025,
+        fiscal_period="Q4",
+        form="10-K/A",
+        filed_date=date(2025, 2, 14),
+        accession_number="0000320193-25-000001",
+        frame="CY2024Q4",
+        context_id="context-b",
+        source_document="filing-b.htm",
+    )
+    repository.upsert_facts([updated_provenance])
+    record = repository.list_fact_records("0000320193")[0]
+
+    assert record.raw_fact_id == legacy_id
+    assert record.occurrence_count == 2
+    assert len(record.occurrence_references) == 2
 
 
 def test_raw_fact_repository_round_trips_quality_flags(tmp_path: Path) -> None:

@@ -89,8 +89,8 @@ def test_ingest_company_orchestrates_sec_processing_and_storage(
     assert result.stored_fact_count == 6
     assert result.company_id is not None
     assert result.stored_filing_count == 2
-    assert result.stored_metric_count == 1
-    assert result.active_metric_count == 1
+    assert result.stored_metric_count == 2
+    assert result.active_metric_count == 2
     assert result.status == "initialized"
     assert result.sec_checked is True
     assert result.warnings == (
@@ -125,11 +125,14 @@ def test_ingest_company_orchestrates_sec_processing_and_storage(
         "0000320193-25-000079",
     }
     assert all(filing.is_active_window for filing in filings)
-    assert len(metrics) == 1
-    assert metrics[0].statement_type == "income_statement"
-    assert metrics[0].metric_name == "revenue"
-    assert metrics[0].accession_number == "0000320193-25-000073"
-    assert metrics[0].raw_fact_id is not None
+    assert len(metrics) == 2
+    assert {metric.statement_type for metric in metrics} == {"income_statement"}
+    assert {metric.metric_name for metric in metrics} == {"revenue"}
+    assert {metric.accession_number for metric in metrics} == {
+        "0000320193-25-000073",
+        "0000320193-25-000079",
+    }
+    assert all(metric.raw_fact_id is not None for metric in metrics)
 
 
 def test_ingest_company_persists_gemini_industry_classification(
