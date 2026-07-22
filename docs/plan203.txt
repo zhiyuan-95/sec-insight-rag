@@ -1,0 +1,1163 @@
+Plan 203 - Annual Inline XBRL Ingestion Through Metric Mapping
+
+## Status
+
+This plan is the approved future design for the structured financial-data path
+from SEC filing discovery through base-metric mapping.
+
+It is not current runtime truth. Until this plan is implemented and verified:
+
+- `docs/structure.md` remains authoritative for implemented modules and behavior.
+- The current public ingestion interfaces remain unchanged.
+- Current databases and generated artifacts must not be treated as migrated.
+- Deterministic inferred mappings remain shadow-only.
+- Formula recovery remains governed by the current runtime until its production
+  persistence path in this plan is implemented.
+
+This rewrite replaces the former Plan 203 design. In particular, it removes the
+former 10-Q active window, portable filing-package and taxonomy-registry work,
+top-level degraded Arelle state, report-only formula boundary, fixed resource
+ceilings, fixed `60 companies / 300 decisions` activation gate, and indicator
+work from this plan.
+
+## Purpose
+
+Use Arelle to process every selected Inline XBRL `10-K` and `10-K/A`, preserve
+complete source lineage and validation evidence, map reported concepts to the
+system's existing target metrics, and recover only still-missing target metrics
+through unanimous semantic recommendations from three LLM judges.
+
+The pipeline ends after current base-metric observations are persisted in
+`financial_metrics`. RAG retrieval, derived indicators, later financial
+analysis, and answer generation are outside this plan.
+
+Arelle does not assign project metric names. It is the canonical structural and
+validation processor. Project code owns filing selection, source precedence,
+normalization, metric definitions, direct mapping, semantic recovery,
+persistence, and workflow behavior.
+
+## Core Decisions
+
+1. The structured pipeline is annual-only and accepts selected Inline XBRL
+   `10-K` and `10-K/A` accessions.
+2. All available selected annual accessions are retained; there is no fixed year
+   limit or structured-data active window.
+3. Non-Inline annual filings may be useful to the separate RAG system, but they
+   do not enter this structured pipeline.
+4. All 10-Q and 10-Q/A filings are outside this plan.
+5. Arelle is the canonical structural and validation processor and the preferred
+   fact source when a valid Arelle observation and Company Facts observation
+   overlap within the same accession.
+6. SEC Company Facts is a reconciliation and supplemental fact source for the
+   same selected accessions. Unambiguous Company Facts-only observations remain
+   eligible for mapping.
+7. Each accession runs in a fresh isolated child process with one Arelle Session.
+   Accessions run sequentially initially.
+8. Arelle live objects never cross the process boundary.
+9. Arelle returns only `complete` or `failed` at accession level. Evidence-level
+   warnings and blocking diagnostics remain attached to their facts or
+   relationships.
+10. Arelle inspects presentation, calculation, definition, label, and available
+    XBRL Formula relationships and validates XBRL structure, calculations,
+    dimensions, formulas, and SEC EDGAR rules.
+11. Raw Arelle and Company Facts observations remain separate auditable source
+    records. A precedence-resolved view supplies mapping.
+12. Latest-valid-record precedence is fact-specific. A later omission never
+    erases an earlier valid observation.
+13. Existing source-controlled and human-approved direct mappings run before
+    any LLM recovery.
+14. Deterministic inferred mapping remains shadow-only in the initial system and
+    cannot populate `financial_metrics`.
+15. LLM recovery runs during the metric-mapping stage, never during SEC/Arelle
+    ingestion, and only for still-missing target metrics.
+16. The three judges are `gpt-5-mini`, `gemini-3.1-flash-lite`, and
+    `gemini-2.5-flash`.
+17. Judges are independent, receive the same nonnumeric semantic evidence, and
+    run concurrently for one recommendation group.
+18. A recommendation passes only when all three judges return the same canonical
+    decision.
+19. Production recovery formulas are limited to addition and subtraction of
+    reported concepts. Ratios, multiplication, division, percentages, and
+    arbitrary constants are outside scope.
+20. Successful direct mappings are never sent to LLM recovery. Their raw
+    concepts may still serve as components of a missing target's formula.
+21. Semantic judgment is shared only across periods with the same LLM-visible
+    evidence and exact missing-target set. Numeric validation and calculation
+    always run separately for every period.
+22. Direct and recovered current values coexist in `financial_metrics`, with
+    different provenance links.
+23. Company refreshes publish one internally consistent snapshot. A failed
+    target does not roll back unrelated successful ingestion or mappings.
+24. Complete Arelle results and downloaded inputs are cached per accession.
+    Automatic LRU cleanup is deferred until measured disk growth requires it.
+25. Deadline and resource limits are selected from representative measurements,
+    not copied from the former plan.
+
+## Scope
+
+Plan 203 includes:
+
+- complete SEC submissions traversal for annual filings
+- deterministic Inline XBRL routing
+- controlled local filing and dependency acquisition
+- accession-scoped Arelle process isolation
+- project-owned serializable Arelle results
+- Arelle facts, concepts, contexts, units, dimensions, relationships, and
+  diagnostics
+- XBRL and SEC EDGAR validation
+- Company Facts reconciliation and supplementation
+- raw fact identity, duplicate handling, and amendment precedence
+- period-specific industry-label snapshots
+- direct metric mapping and minimal compatibility checks
+- shadow deterministic mapping inference
+- three-judge missing-target recovery
+- formula/zero validation and recovered metric persistence
+- result caching and incremental annual refreshes
+- atomic persistence and auditable failure states
+- focused automated tests and one inspectable real-company proof run
+
+Plan 203 does not include:
+
+- RAG document acquisition, parsing, chunking, indexing, or retrieval
+- derived indicators or indicator recomputation
+- 10-Q or 10-Q/A support
+- conventional non-Inline XBRL processing
+- frontend, macro-data, graph, deployment, queue, or multi-agent work
+- a taxonomy-package registry or installer
+- a sealed portable filing-package builder
+- an offline empty-cache release gate
+- preselected fact, concept, relationship, diagnostic, or payload ceilings
+- automatic cache eviction
+- a concurrent Arelle process pool before a measured need exists
+- production activation of deterministic inferred mappings
+- fixed calibration or holdout sample counts
+- retroactive rejudging after prompt changes
+- formula operators beyond addition and subtraction
+
+## Responsibility Boundary
+
+| Responsibility | Owner |
+| --- | --- |
+| Ticker and CIK resolution | Existing SEC ingestion modules |
+| SEC submissions and historical accession discovery | Existing ingestion layer, extended for full history |
+| SEC request, retry, and user-agent behavior | Existing `SecClient` boundary |
+| Filing and referenced dependency download | Ingestion layer |
+| Inline XBRL and DTS loading | Isolated Arelle adapter |
+| Structural extraction and XBRL/SEC validation | Arelle adapter |
+| Serializable result and evidence schemas | Project processing code |
+| Company Facts normalization | Existing processing layer |
+| Cross-source reconciliation and precedence | Project processing code |
+| Industry-label assignment | Existing classification behavior with period snapshots |
+| Fixed metric target catalog | Existing mapping catalog |
+| Direct mapping and shadow inference | Project processing code |
+| LLM prompt templates | `src/analyze/prompts.py` |
+| Three-judge orchestration and canonical comparison | Mapping/recovery processing code |
+| Raw facts, mappings, metrics, and provenance | Storage repositories |
+| Atomic company refresh | Thin workflow/orchestration layer |
+
+## Canonical Data Flow
+
+```text
+Ticker or CIK
+  -> SEC submissions: filings.recent plus every filings.files history file
+  -> deduplicate 10-K and 10-K/A accessions
+  -> select isInlineXBRL = true
+  -> download or reuse local filing and referenced dependencies
+  -> process each new or invalidated accession in a fresh Arelle child process
+  -> inspect relationships and run XBRL/SEC validations
+  -> normalize Arelle and selected Company Facts observations separately
+  -> reconcile sources and select latest valid facts
+  -> freeze the complete company ingestion snapshot
+  -> assign or reuse fiscal-period industry labels
+  -> apply source-controlled and approved direct mappings
+  -> record shadow deterministic candidates for unresolved targets
+  -> identify exact still-missing target metrics
+  -> build nonnumeric Arelle/Company Facts semantic evidence packets
+  -> run three independent judges concurrently
+  -> require unanimous canonical decisions
+  -> validate and calculate every period application deterministically
+  -> stage direct metrics, recovered metrics, provenance, and failures
+  -> commit one atomic company snapshot
+```
+
+Metric mapping begins only after every applicable accession has finished its
+ingestion attempt, reconciliation, and latest-valid-record selection. The
+workflow never maps an accession while later company accessions are still
+pending.
+
+## Annual Filing Discovery
+
+### Complete history
+
+The discovery step must merge:
+
+- the main submissions payload's `filings.recent` arrays
+- every older submissions file referenced by `filings.files`
+
+The combined rows are deduplicated by accession number. Discovery filters the
+form family to `10-K` and `10-K/A` but does not use a latest-per-form selector.
+
+The SEC submission record's `isInlineXBRL` field is the deterministic router:
+
+- `true`: enter Plan 203
+- `false`: remain outside Plan 203
+- missing or invalid: record a visible discovery error for investigation
+
+Do not infer Inline XBRL status from filenames or document contents. This rule
+does not declare a non-Inline filing useless; it only keeps that filing outside
+this structured pipeline.
+
+### Initial and subsequent runs
+
+The initial company run processes every selected annual accession. A normal
+refresh preserves existing results and processes only:
+
+- newly discovered original accessions
+- newly discovered amendments
+- accessions invalidated by changed filing content or processing contract
+
+A no-change refresh launches no Arelle workers and no judge calls.
+
+### Schedule
+
+Keep the existing low-frequency annual policy:
+
+- schedule the next submissions check approximately twelve months after the
+  latest 10-K filing date
+- when that due check finds no new eligible filing, retry the check on the next
+  business day
+- allow an explicit manual refresh
+
+There is no separate `10-K/A` polling schedule. An amendment filed between
+annual checks is applied when the next scheduled or manual refresh discovers it.
+
+## Local Acquisition And Arelle Lifecycle
+
+### Acquisition
+
+Use the controlled SEC client to download each selected filing and the
+dependencies referenced by its Inline XBRL/DTS entry point. Record:
+
+- accession, form, filing date, and source URLs
+- local paths and content hashes
+- entry document identity
+- Arelle, adapter, extraction, validation, and result-schema versions
+
+Retain downloaded inputs and complete processed results by default. Do not add
+the former taxonomy registry, package installer, portable package builder, or
+offline empty-cache proof. Those are deferred until a demonstrated need exists.
+
+### Process isolation
+
+Process accessions one at a time initially. For every accession:
+
+1. Start a fresh child process.
+2. Create one Arelle Session inside that child.
+3. Load the local Inline XBRL entry point and DTS.
+4. Extract project-owned records and run required validations.
+5. Serialize one result envelope.
+6. Close the Arelle model and Session.
+7. Terminate the child before starting the next accession.
+
+Never pass `ModelXbrl`, `ModelFact`, relationship sets, or another live Arelle
+object to the parent, storage, or mapping layers.
+
+### Result contract
+
+The project-owned result must include at least:
+
+```text
+ArelleFilingResult
+  result schema version
+  accession identity and filing metadata
+  complete or failed status
+  extracted facts
+  concept evidence
+  contexts, units, and dimensions
+  presentation relationships
+  calculation relationships and weights
+  definition and dimensional relationships
+  label relationships
+  available XBRL Formula relationships and assertion results
+  validation diagnostics
+  namespaces and source documents
+  timings and record counts
+  content and payload hashes
+```
+
+Facts preserve the original display value and parsed numeric value separately.
+Concept evidence preserves available identifiers, labels, documentation,
+numeric/type metadata, period type, balance, and accounting references.
+Relationship edges preserve network kind, link role, endpoints, order, weight,
+and preferred label when available. Diagnostics preserve original category,
+severity, code, message, and fact/relationship/source references.
+
+### Result status
+
+Use only two accession-level statuses:
+
+- `complete`: a trustworthy core fact set was returned
+- `failed`: no trustworthy Arelle result can be used
+
+Warnings, missing optional relationships, and evidence-specific blocking
+diagnostics do not create a third accession-level state. They remain attached
+to the evidence they affect.
+
+A fatal filing or DTS diagnostic makes the result `failed`. A fact-specific or
+relationship-specific blocking diagnostic disqualifies only that evidence.
+Warnings remain visible to mapping and the judges without automatically
+blocking a recommendation.
+
+### Validation scope
+
+Arelle processing must inspect and expose:
+
+- presentation relationships
+- calculation relationships and weights
+- definition and dimensional relationships
+- label and documentation relationships
+- available XBRL Formula relationships, rules, and assertion results
+
+It must validate:
+
+- XBRL and Inline XBRL structure
+- calculations
+- dimensions
+- available formulas
+- SEC EDGAR/EFM rules
+
+Absence of an optional relationship is not a failed result and does not by
+itself reject an LLM recommendation. The judges may still use accounting
+semantics, while deterministic application continues to enforce usable facts
+and accounting context.
+
+## Source Observations And Reconciliation
+
+### Raw source separation
+
+Normalize Arelle and Company Facts observations into separate immutable source
+rows. Do not physically merge or overwrite them. Build the mapping pool as a
+precedence-resolved view over those rows.
+
+Only Company Facts observations associated with a selected Inline XBRL
+`10-K`/`10-K/A` accession may enter this plan. Company Facts rows from other
+forms or unselected accessions remain outside the Plan 203 persistence and
+mapping path.
+
+### Semantic fact identity
+
+Use this identity for reconciliation and cross-accession precedence:
+
+```text
+semantic_fact_identity =
+  company/entity
+  + normalized concept
+  + actual instant or duration dates
+  + unit
+  + canonical dimensions/consolidation state
+```
+
+Accession, form, filing date, fiscal year, fiscal period, and SEC frame are
+provenance metadata rather than semantic identity.
+
+The raw storage identity additionally includes accession and source. This keeps
+historical accessions and matching Arelle/Company Facts observations as
+separate auditable rows.
+
+### Preserved observation fields
+
+Preserve at least:
+
+- company/entity identity
+- taxonomy and normalized concept
+- namespace/prefix metadata currently available from the source
+- label and description/documentation
+- original and parsed value
+- unit
+- actual start/end or instant date
+- fiscal labels as provenance
+- accession, form, filing date, and source document
+- context ID and canonical dimensions when available
+- consolidation state
+- decimals, precision, nil state, balance, and numeric type when available
+- validation and project quality flags
+- source system
+- occurrence evidence
+
+Never invent dimensions, namespaces, relationships, labels, or validation
+evidence that the source does not provide.
+
+### Reconciliation outcomes
+
+Every overlapping or supplemental observation receives a visible outcome:
+
+- exact match
+- numerically equivalent after valid normalization
+- Arelle only
+- Company Facts only
+- conflicting value
+- conflicting context
+- conflicting unit
+- ambiguous Company Facts observation
+- blocked Arelle observation with usable Company Facts replacement
+
+A valid Arelle fact remains eligible when Company Facts disagrees. Record the
+conflict, but do not let Company Facts quarantine or overwrite a valid Arelle
+observation.
+
+### Source and accession precedence
+
+For one semantic fact identity:
+
+1. Select the latest valid accession that actually reports the fact.
+2. Within that accession, prefer the valid Arelle observation when both sources
+   provide it.
+3. If the Arelle observation is absent or blocked and one unambiguous Company
+   Facts observation exists, use Company Facts.
+4. Preserve `arelle_fact_unavailable` or `arelle_fact_blocked` and relevant
+   diagnostics in Company Facts provenance.
+5. Omission from a later accession does not erase the earlier valid observation.
+6. A nil or otherwise invalid later observation does not replace an earlier
+   valid value.
+
+If the selected Company Facts observation comes from a later accession than an
+earlier Arelle observation, accession recency wins; the later valid Company
+Facts observation is selected.
+
+### Company Facts supplementation
+
+A Company Facts-only observation remains in the normal mapping pool when its
+accession, form, period, and unit resolve to one compatible value. It must pass
+the same minimal target-compatibility checks as an Arelle fact.
+
+Fact availability and structural-evidence availability are separate:
+
+- if Arelle contains the concept and relationships but no usable fact, use the
+  real Arelle semantic evidence with the Company Facts value
+- if Arelle lacks that structural evidence, label it unavailable
+- never fabricate Arelle evidence
+
+Build semantic metadata field by field. Prefer valid Arelle metadata, but allow
+Company Facts to fill a field Arelle leaves missing. Record the source for every
+retained field. This metadata union never combines or changes numeric values.
+
+### Duplicate occurrences
+
+Within one accession and accounting identity:
+
+- collapse equivalent normalized values into one observation
+- store an occurrence count and compact source references on that observation
+- do not add a separate occurrence-ledger table
+- quarantine conflicting values that remain within the same accession
+- retain compact conflict evidence and produce no selected fact from that group
+
+Across different accessions, conflicting or updated observations are handled by
+latest-valid-accession precedence, not by same-accession duplicate quarantine.
+
+## Amendment And Evidence Precedence
+
+Apply precedence independently rather than replacing an entire filing.
+
+### Facts
+
+A later valid observation replaces the same semantic fact identity. Omission
+does not erase an earlier fact. Formula components may therefore come from
+different accessions: an amended component may be combined with a still-valid
+original component when both share the required accounting context.
+
+### Statement networks
+
+A newer accession replaces presentation, calculation, definition, label, or
+formula evidence only for a statement network it validly provides. A partial
+amendment's omission of a network does not erase the original valid network.
+
+### Concept metadata
+
+Apply field-level precedence to labels, documentation, and other semantic
+metadata. Use a newer valid value when provided; retain the older valid value
+when the amendment leaves that field missing. Preserve source accession and
+source system for every retained field.
+
+## Industry Label Assignment
+
+Keep the current industry-label vocabulary, prompt behavior, confidence rules,
+multi-label behavior, and source-controlled fallback. Change only the model and
+persistence scope required by this plan.
+
+- Use `gemini-3.1-flash-lite` through a dedicated
+  `industry_classification_model` setting.
+- Classify the original 10-K's Item 1 Business section once for its primary
+  fiscal year.
+- Store one immutable label snapshot per original 10-K accession/fiscal period.
+- Never change a label because of a 10-K/A.
+- Never rewrite historical labels when the company later expands into another
+  industry.
+- A later filing's comparative prior-year facts use the original corresponding
+  fiscal year's label snapshot.
+- For multiple approved labels, use the deduplicated union of common base
+  targets and every assigned label's target bundle.
+- If no label is assigned, search only common base metric targets.
+
+Industry classification is separate from missing-metric judgment and never
+counts as one of the three judge votes.
+
+## Metric Mapping Pipeline
+
+### Mapping order
+
+For each affected annual accounting context:
+
+```text
+1. source-controlled direct mappings
+2. active human-approved direct mappings
+3. compatible previously approved mappings after revalidation
+4. shadow deterministic inferred-mapping candidates
+5. exact still-missing target metrics
+6. unanimous three-judge formula or zero recovery
+7. deterministic period application
+8. financial_metrics persistence or explicit failure state
+```
+
+Arelle supplies evidence but never decides which project metric a concept
+represents.
+
+### Target set
+
+The target set for one fiscal period is:
+
+```text
+common base targets
+  + every target bundle associated with that period's approved industry labels
+  -> deduplicate
+```
+
+Later-period labels do not change earlier target sets.
+
+### Direct mapping
+
+Direct mappings may use a valid precedence-selected Arelle or Company Facts
+observation. Preserve the selected raw fact ID and source lineage.
+
+Before one raw fact can populate a target, apply only these first-version
+compatibility safeguards:
+
+- numeric value is available
+- instant-versus-duration period type is compatible
+- basic unit family, such as currency versus shares, is compatible
+- consolidation and dimensional context is usable
+- no blocking diagnostic disqualifies the selected observation
+
+These rules reject impossible candidates. They do not choose a mapping. Defer
+fine-grained balance behavior, elaborate numeric-type taxonomies, and other
+metric-specific compatibility frameworks until observed errors justify them.
+
+### Shadow deterministic inference
+
+After hard and approved mappings, project code may score one-concept-to-target
+candidates from Arelle semantic evidence. Initial behavior is shadow-only:
+
+- candidates and evidence are inspectable
+- candidates cannot populate `financial_metrics`
+- unresolved targets continue to LLM recovery
+- shadow candidates and scores are never shown to the judges
+- no production activation threshold is selected in advance
+
+Choose any future evaluation sample, industry coverage, and precision gate from
+observed shadow results. Do not reinstate the former fixed 60-company,
+300-decision, or zero-false-activation counts without new evidence and approval.
+
+### Missing targets
+
+A target is missing only after all eligible direct mappings have run for that
+accounting context. Successfully mapped targets never enter LLM recovery.
+
+## Semantic Evidence For Recovery
+
+### Current statement evidence
+
+Build one accession-aware evidence set for a company, statement, and period:
+
+- use statement-level relationship precedence
+- use fact-level latest-valid-record precedence
+- preserve every fact, relationship, metadata-field, and source accession
+- allow valid components from different accessions when their accounting
+  context is compatible
+
+Prioritize concepts on the applicable statement from the latest valid evidence.
+Allow a cross-statement component only when the recommendation explains a valid
+accounting relationship.
+
+### Eligible components
+
+A concept may be selected as a formula component only when it has a usable,
+precedence-selected source fact for that period. Both mapped and unmapped
+concepts may be eligible components; existing mappings remain unchanged.
+
+Related concepts without a usable period fact may appear as clearly marked
+structural context, but judges cannot select them as components.
+
+### Judge packet
+
+Build one compact, versioned, deterministic, nonnumeric packet containing:
+
+- exact missing-target set
+- target definitions and primary statement types
+- eligible concept identifiers
+- labels and documentation with source attribution
+- presentation hierarchy and roles
+- calculation edges and weights
+- definition and dimensional relationships
+- available XBRL Formula rules and assertion results
+- validation diagnostics and evidence availability markers
+- focused statement and target neighborhoods
+- stable evidence IDs linking to stored/cached source evidence
+
+Prioritize US-GAAP and SEC concepts while retaining relevant company-extension
+concepts. Do not invent unavailable metadata. Do not include numeric values,
+raw fact IDs, dates, units, accessions, fiscal labels, or shadow mapping scores
+as semantic judgment inputs.
+
+The three judges receive the identical packet. Provider-specific packet content
+is prohibited.
+
+## Three-Judge Recovery
+
+### Models and independence
+
+Use these three blind independent judges:
+
+- OpenAI `gpt-5-mini`
+- Gemini `gemini-3.1-flash-lite`
+- Gemini `gemini-2.5-flash`
+
+Run their calls concurrently for one recommendation group. No judge sees
+another judge's response. The models are not currently required to come from
+three distinct providers.
+
+All prompt templates belong in `src/analyze/prompts.py` and must require source
+evidence, forbid unsupported causal claims, and separate semantic judgment from
+numeric validation.
+
+### Structured output
+
+Every judge returns one structured result per missing target:
+
+```text
+target
+decision: formula | zero | no_formula
+components and + / - operators when applicable
+cited evidence IDs
+short accounting rationale
+```
+
+Free-form-only answers and numeric values are invalid judge outputs.
+
+### Canonical agreement
+
+Normalize each response to a canonical decision:
+
+- use exact concept identifiers and operators
+- ignore prose wording and confidence scores
+- normalize harmless commutative addition ordering
+- treat a different component or operator as a different formula
+
+Approve only when all three canonical decisions match.
+
+- three matching formulas: eligible for deterministic application
+- three matching validated-zero recommendations: eligible for deterministic
+  zero application
+- three `no_formula` responses: unanimous abstention, no metric
+- successful but disagreeing responses: `needs_review`, no metric
+- provider unavailability/request failure: `technical_failure`, no metric
+- unanimous recommendation that fails deterministic validation:
+  `invalid_proposal`, no metric
+
+No majority rule exists.
+
+### Semantic recommendation groups
+
+Group annual periods only when all of these match:
+
+- company
+- statement evidence visible to the judges
+- eligible semantic concept pool
+- exact missing-target set
+- three-model judge lineup
+
+Numeric values, units, dates, fiscal labels, accessions, and raw fact IDs do not
+affect semantic grouping. Run the judges once for the group and apply the result
+separately to every period.
+
+A later refresh may reuse a stored recommendation for a new period when the
+visible semantic evidence, exact missing-target set, and judge lineup still
+match. A changed lineup requires a new judgment for the new period, but does
+not retroactively rejudge historical periods. Prompt-change rejudging is
+deferred.
+
+## Formula And Zero Application
+
+### Formula scope
+
+A formula pattern may contain only:
+
+- reported eligible concepts
+- addition
+- subtraction
+
+A one-concept recovered formula remains a context-specific recovery; it does
+not create a reusable approved direct mapping.
+
+### Deterministic period validation
+
+After unanimous semantic agreement, validate every period independently:
+
+- resolve every component to one usable precedence-selected source fact
+- reject blocking fact diagnostics
+- require compatible company/entity, actual period, and
+  dimensions/consolidation state
+- require compatible units for the arithmetic
+- evaluate only the approved addition/subtraction expression
+- preserve every component raw fact ID, source, accession, and diagnostic
+
+Judges never see the numeric values used here.
+
+One period may fail even when another period in the same recommendation group
+succeeds.
+
+### Zero decisions
+
+Absence of a reported fact is not evidence of zero. Accept zero only when all
+three judges agree and deterministic Arelle-backed evidence affirmatively
+entails zero for that accounting context. Store the cited evidence and
+rationale. Otherwise the target remains missing.
+
+### Production metric behavior
+
+A successful formula or zero application produces a current base metric in
+`financial_metrics`. It is a calculated recovery, not a reported fact.
+
+- a directly mapped metric points to its selected raw fact
+- a recovered metric points to its period-specific recovery application
+- both are available to downstream consumers after this plan's boundary
+- neither loses its source provenance
+
+## Persistence And Schema Migration
+
+Schema changes occur only as an explicit Plan 203 migration. The implementation
+must preserve current public interfaces unless a separately approved change is
+required.
+
+### Raw observations
+
+Keep one `raw_xbrl_facts` table. Change its stable raw observation key so it
+includes:
+
+- semantic fact identity fields
+- accession number
+- source
+
+Remove fiscal year, fiscal period, form, and SEC frame from semantic matching;
+retain them as provenance columns. Adding source to the raw key prevents a
+matching Arelle and Company Facts row from overwriting the other.
+
+Add compact duplicate evidence fields as needed, such as occurrence count and
+source/conflict references. Do not add an occurrence-ledger table.
+
+### Filing processing metadata
+
+Persist the current accession result status, filing-content hash, adapter and
+result-schema versions, validation/extraction policy versions, cache reference,
+and latest processing time. The complete relationship/diagnostic graph remains
+in the regenerable result cache rather than dedicated SQLite edge tables.
+
+### Industry-label snapshots
+
+Change industry-label persistence from one replaceable company-wide assignment
+to immutable original-10-K accession/fiscal-period snapshots. Preserve existing
+label vocabulary and evidence fields.
+
+### Mapping and recovery provenance
+
+Persist separate logical records for:
+
+- a group-level semantic recommendation containing the exact evidence packet,
+  all three judge responses, canonical outcome, models, and timestamps
+- a period-specific recovery application containing selected source facts,
+  accounting context, deterministic validation, calculated value, and failure
+  reason
+
+One group recommendation may have many period applications. A recovered metric
+points to its successful application. Do not duplicate the complete judge
+record for every period.
+
+### Annual-only compatibility migration
+
+- remove company-level `latest_10q_filing_date`
+- remove company-level `next_check_date_10q`
+- retain general filing form fields for future compatibility
+- retain shared `is_active_window` columns temporarily because indicator and
+  retrieval code outside Plan 203 still uses them
+- ignore `is_active_window` when Plan 203 selects annual filings, facts, or
+  metrics
+
+Removing shared active-window fields belongs to later work owned by all their
+consumers.
+
+## Atomic Company Refresh
+
+Stage acquisition results, reconciliation, precedence, mappings, judge
+outcomes, and recovery applications before publishing the company snapshot.
+Commit related current state in one transaction.
+
+The committed snapshot may contain:
+
+- successfully processed and failed accessions
+- selected Arelle and Company Facts observations
+- direct mappings
+- shadow inferred candidates
+- recovered metrics
+- needs-review, invalid-proposal, and technical-failure targets
+- mapping, prompt, model, evidence, and processor versions
+- snapshot completion time
+
+Any SQLite write failure rolls back the publication transaction.
+
+A target-level recovery failure does not invalidate successful ingestion,
+direct mappings, or other recoveries. Consumers must not observe a partial
+mixture of old and new company state.
+
+If changed evidence invalidates an old current mapping or recovery and its
+replacement cannot complete, retain the old result only in immutable audit
+history. Publish the current target as missing with its failure reason. Never
+silently keep a stale metric current.
+
+Indicators are not recomputed by Plan 203.
+
+## Incremental Refresh Behavior
+
+After processing a new or amended accession:
+
+1. Recompute source reconciliation and precedence.
+2. Identify periods whose selected facts or Arelle semantic evidence changed.
+3. Re-run direct mapping only for affected periods.
+4. Preserve all unchanged historical mapping and recovery records.
+5. If only numeric values changed, reuse the applicable unanimous semantic
+   formula and rerun only deterministic period application.
+6. Call judges again only when relevant concepts, LLM-visible evidence, exact
+   missing targets, or the judge lineup changed.
+
+Industry labels remain immutable for earlier fiscal periods. A 10-K/A never
+changes an industry label.
+
+## Processed Result Cache
+
+Store one complete, versioned, per-accession Arelle result under generated local
+storage. Cache identity must include enough information to prevent reuse across
+incompatible processing contracts, including:
+
+- accession and filing/dependency content hashes
+- Arelle version
+- adapter version
+- result-schema version
+- extraction-policy version
+- validation profile/version
+
+Verify accession, status, schema, and payload hash on read. Never reuse a
+failed, partial, corrupt, mismatched, or undecodable result as complete.
+
+SQLite remains authoritative for normalized facts and published domain state.
+It stores the exact evidence packet used by every mapping decision. It does not
+duplicate all Arelle relationship edges and diagnostics in dedicated tables.
+
+Deleting the complete-result cache is safe but causes Arelle to rerun when that
+structural evidence is next required. Cache deletion is an explicit manual
+operation initially. Do not implement automatic LRU eviction until disk
+measurements justify it.
+
+## Deadlines And Resource Guardrails
+
+The company deadline covers:
+
+- filing acquisition and dependency loading
+- sequential Arelle workers
+- reconciliation and precedence
+- industry classification
+- direct mapping
+- all three judge calls
+- deterministic recovery validation
+- persistence
+
+The former 900-second initial and 300-second warm deadlines are provisional and
+must not become final defaults without representative full-history annual-only
+measurements.
+
+Start with:
+
+- controlled download-size checks
+- one fresh Arelle process at a time
+- rejection of malformed or incomplete result envelopes
+- one measured company workflow deadline
+
+Do not preselect fact, concept, relationship, diagnostic, or serialized-payload
+ceilings. Add a limit only after observed data supports a defensible threshold.
+
+When the company deadline expires, stop new expensive work, terminate the
+current worker or request when safe, retain completed staged work, and record
+explicit failures for unfinished accessions or missing targets. Publish only an
+internally consistent atomic snapshot. A deadline does not justify serving a
+stale metric as current.
+
+## Failure Behavior
+
+| Failure | Required behavior |
+| --- | --- |
+| Missing/invalid `isInlineXBRL` metadata | Record discovery error; do not guess |
+| Filing or dependency acquisition failure | Mark accession failed with diagnostic |
+| Worker crash, timeout, or malformed result | Reject partial result and mark accession failed |
+| Fatal Arelle filing/DTS diagnostic | Mark accession failed |
+| Fact/relationship blocking diagnostic | Block only affected evidence |
+| Ordinary Arelle warning or missing optional relationship | Preserve visibly; do not fail accession |
+| Arelle failed | Use labeled Company Facts fallback where available |
+| Arelle fact missing/blocked, Company Facts unambiguous | Use Company Facts with evidence-availability marker |
+| Arelle/Company Facts value conflict | Record conflict; use valid Arelle within same accession |
+| Later valid Company Facts accession versus earlier Arelle | Use latest valid accession |
+| Equivalent duplicate occurrences | Collapse with compact occurrence lineage |
+| Conflicting same-accession duplicate values | Quarantine group; no selected fact |
+| Direct compatibility failure | Do not map that candidate |
+| Shadow inference uncertainty | Preserve candidate only; never populate metric |
+| Judge disagreement | `needs_review`; no recovered metric |
+| Three unanimous `no_formula` answers | Abstention; no recovered metric |
+| Judge/provider request failure | `technical_failure`; no recovered metric for affected target |
+| Unanimous formula fails deterministic application | `invalid_proposal`; no recovered metric |
+| SQLite publication failure | Roll back snapshot publication |
+| Cache corruption | Reject cache entry and regenerate on the next required run |
+
+Do not build an elaborate automatic retry or revalidation system for exceptional
+Arelle/data failures in the initial implementation. Preserve the error, use the
+agreed Company Facts fallback, and investigate/reprocess explicitly.
+
+## Verification Strategy
+
+### Focused automated tests
+
+Use small typed and serialized fixtures for:
+
+- complete historical submissions merging and accession deduplication
+- annual form and `isInlineXBRL` selection
+- fresh process/session lifecycle and serializable result validation
+- complete versus failed Arelle results
+- semantic fact identity and raw source identity
+- Arelle/Company Facts reconciliation and source precedence
+- Company Facts-only supplementation
+- amendment replacement and omission behavior
+- statement-network and metadata precedence
+- equivalent and conflicting duplicate occurrences
+- period-specific immutable industry labels
+- minimal direct compatibility rules
+- shadow inference isolation from judges
+- exact missing-target selection
+- semantic grouping and recommendation reuse
+- three-judge canonical unanimity
+- formula, zero, abstention, disagreement, invalid proposal, and technical
+  failure outcomes
+- deterministic period application with mixed-accession components
+- atomic transaction rollback and stale-current-metric removal
+- cache hit, invalidation, and corruption rejection
+- annual refresh scheduling without a quarterly branch
+
+Do not add 10-Q fixtures, a portable taxonomy package, or an offline empty-cache
+fixture for the initial slice.
+
+### Real-company proof run
+
+Run one company across its complete selected Inline XBRL `10-K`/`10-K/A`
+history and save a human-inspectable report containing:
+
+- discovered, selected, skipped, new, and reused accessions
+- Arelle status, validation summaries, timings, and cache use per accession
+- Arelle-only, Company Facts-only, matching, conflicting, and selected fact
+  counts
+- duplicate and amendment-precedence evidence
+- fiscal-period industry-label snapshots
+- direct-mapping coverage and shadow inferred candidates
+- exact missing targets and semantic recommendation groups
+- judge models, call/cache counts, canonical outcomes, and evidence citations
+- period application success/failure and current metric provenance
+- total workflow timing and measured storage/cache growth
+
+The report exposes evidence and measurements. It must not predeclare success by
+hiding failures or reducing output to a pass/fail label.
+
+## Implementation Work Order
+
+The first implementation slice is one company's complete selected annual
+history from discovery through atomic metric persistence.
+
+### Increment 1 - Annual discovery and Arelle boundary
+
+- traverse `filings.recent` and every referenced historical submissions file
+- select annual Inline XBRL accessions
+- remove normal 10-Q discovery and refresh branches from this structured path
+- add controlled local dependency acquisition
+- define project-owned Arelle request/result records
+- run one fresh child process and Session per accession
+- extract relationships and required validation diagnostics
+- cache complete results with exact invalidation
+
+Likely surfaces:
+
+- `src/ingestion/submissions.py`
+- `src/ingestion/filings.py`
+- `src/ingestion/inline_xbrl.py`
+- `src/ingestion/refresh_policy.py`
+- focused Arelle boundary/record modules under `src/processing/`
+
+### Increment 2 - Source preservation and precedence
+
+- migrate raw observation identity to include accession and source
+- preserve separate Arelle and Company Facts rows
+- add compact occurrence evidence
+- implement semantic identity, reconciliation, source selection, and amendment
+  precedence
+- implement statement-network and metadata precedence
+- persist filing result metadata
+
+Likely surfaces:
+
+- `src/processing/xbrl_normalizer.py`
+- `src/processing/inline_xbrl.py`
+- focused reconciliation/precedence modules under `src/processing/`
+- `src/storage/database.py`
+- `src/storage/facts_repository.py`
+- `src/storage/filings_repository.py`
+
+### Increment 3 - Period labels and direct mapping
+
+- switch industry classification to `gemini-3.1-flash-lite`
+- persist immutable original-10-K fiscal-period label snapshots
+- build period target sets from common and all assigned industry bundles
+- apply approved direct mappings with minimal compatibility rules
+- retain deterministic inferred mapping in shadow-only mode
+- produce exact missing-target sets
+
+Likely surfaces:
+
+- `src/config/settings.py`
+- `src/processing/company_industry_labels.py`
+- `src/processing/mapping_catalog.py`
+- `src/processing/mapping_targets.py`
+- `src/processing/base_metrics.py`
+- industry-label and concept-mapping repositories
+
+### Increment 4 - Three-judge production recovery
+
+- move every judge prompt template into `src/analyze/prompts.py`
+- build versioned nonnumeric semantic evidence packets
+- implement identical-evidence/exact-missing-target grouping
+- run the three model calls concurrently and independently
+- canonicalize and require unanimity
+- validate and apply formula/zero outcomes per period
+- persist group recommendations, period applications, and recovered metrics
+
+Likely surfaces:
+
+- `src/analyze/prompts.py`
+- `src/processing/formula_proposals.py` or a focused recovery module
+- `src/processing/metric_recovery.py`
+- `src/storage/database.py`
+- `src/storage/metrics_repository.py`
+- focused recovery repositories
+
+### Increment 5 - Atomic and incremental company workflow
+
+- stage the complete company result before publication
+- commit current mappings, metrics, provenance, and failures atomically
+- preserve the public `src.ingestion.company.ingest_company()` wrapper
+- keep orchestration thin; add a workflow module only where needed
+- implement affected-period invalidation and semantic-recommendation reuse
+- remove annual pipeline dependence on active-window filtering
+- remove company 10-Q refresh fields through an explicit migration
+
+Likely surfaces:
+
+- `src/ingestion/company.py`
+- optional thin module under `src/workflows/`
+- storage repositories and schema migration
+
+### Increment 6 - Verification and documentation alignment
+
+- add the focused automated tests
+- run the one-company full-history experiment
+- save the inspectable evidence report
+- select deadline/resource defaults from measured results
+- update `proposal.md`, `docs/mapping_policy.md`, `docs/structure.md`,
+  `docs/experiments.md`, and relevant experiment proposals only when runtime
+  behavior actually changes
+
+Do not call Plan 203 implemented merely because unit tests pass. The real-company
+full-history report and named success criteria must also be satisfied.
+
+## Success Criteria
+
+Plan 203 is complete only when all of the following are demonstrated:
+
+- complete `10-K`/`10-K/A` submissions history is traversed for the proof company
+- every selected `isInlineXBRL = true` accession is processed or has an explicit
+  failure record
+- no 10-Q data enters the Plan 203 structured path
+- every Arelle Session is closed and its child process terminates
+- Arelle relationships and required XBRL/SEC validation evidence are available
+  through project-owned records
+- Arelle and Company Facts raw observations remain separate and auditable
+- Company Facts-only observations can enter mapping without fabricated Arelle
+  evidence
+- latest-accession, omission, duplicate, and source-preference rules are proven
+- current approved direct mappings retain correct values and provenance
+- deterministic inferred mappings remain shadow-only
+- only exact missing targets reach the three judges
+- all judges receive identical nonnumeric evidence and no shadow score
+- only unanimous canonical decisions can produce a recovered metric
+- every recovered metric has a successful period application and complete
+  source/judge/validation provenance
+- disagreements, abstentions, invalid proposals, and technical failures produce
+  no current metric
+- a failed target does not roll back unrelated successful work
+- a stale invalidated metric cannot remain current
+- a no-change refresh launches no Arelle workers and no judge calls
+- a database publication failure rolls back the snapshot
+- one real company completes the full annual-history proof run with an
+  inspectable report
+- representative timing and storage measurements support the selected initial
+  deadline and resource policy
+- governing documentation and implemented runtime behavior agree
+
+## Deferred Decisions
+
+Do not implement these until later evidence or an explicit new design decision
+requires them:
+
+- concurrent Arelle process pools
+- automatic LRU cache cleanup
+- fixed relationship/fact/diagnostic/payload ceilings
+- portable offline filing packages and taxonomy registry
+- production activation and promotion of deterministic inferred mappings
+- fixed calibration and holdout sizes
+- prompt-change-driven retroactive rejudging
+- automatic retry/revalidation machinery for exceptional Arelle failures
+- additional formula operators
+- RAG and indicator integration
+
+## Assumptions
+
+- The repository continues to use the reviewed `arelle-release` dependency
+  range unless a separate adapter change approves an upgrade.
+- The fixed system metric catalog remains project-owned.
+- Existing source-controlled and human-approved mappings remain authoritative.
+- SQLite remains the authoritative local domain store.
+- Lower recovery recall is acceptable when the three judges do not agree or
+  deterministic application fails.
+- Abstention and explicit missing metrics are correct outcomes.
+- Model changes named in this plan are limited to the approved industry model
+  and three-judge lineup.
+- Creating or rewriting this plan does not itself migrate the database or
+  change runtime behavior.

@@ -1,0 +1,606 @@
+Milestone 200 Design: Advanced Company Ingestion, Local Inspection, Refresh State, And Base Metric Mapping
+
+Purpose
+Milestone 200 upgrades company ingestion into a registry-aware, filing-aware, refresh-aware workflow that stores all normalized SEC companyfacts as the raw archive, maintains an active 10-K and 10-Q analysis window, maps traceable base financial metrics, and manages filing evidence retention.
+
+When a user asks to ingest or initialize a company, the program uses the advanced ingestion workflow:
+
+- check whether the company already exists locally
+- initialize missing company registry state from SEC metadata
+- ingest all available normalized SEC companyfacts XBRL facts into `raw_xbrl_facts`
+- keep `raw_xbrl_facts` as the full source-of-truth archive
+- ingest and store filing inventory for the active 10-K and 10-Q scope
+- default active annual scope to the latest 5 fiscal years of 10-K data
+- default active quarterly scope to the latest 12 quarters of 10-Q data
+- map active-window raw facts into business-friendly base financial metrics
+- preserve traceability from every base metric back to raw XBRL facts and filings
+- track latest ingested 10-K and 10-Q filing dates
+- track next-check dates for annual and quarterly refresh checks
+- reuse local data when refresh is not due
+- check SEC and ingest only missing filings/data when refresh is due
+- delete or deactivate bulky filing-evidence artifacts outside the active window
+- preserve the raw XBRL fact archive outside active-window cleanup
+
+Why This Milestone Exists
+Milestone 2 stores normalized raw XBRL facts. Milestone 200 turns that raw data foundation into a company-level ingestion workflow that can support later indicators, analytics, and grounded explanations.
+
+The system should be able to answer:
+
+- Has this company already been initialized locally?
+- Which SEC identity and metadata are stored for this company?
+- Which 10-K and 10-Q filings are currently inside the active analysis window?
+- Which latest 5 annual and latest 12 quarterly periods are available for normal use?
+- Which next SEC check dates are stored for annual and quarterly updates?
+- Which raw XBRL facts are stored as the full source-of-truth archive?
+- Which business-friendly base metrics are available by statement type?
+- Which raw XBRL fact and SEC filing supports each base metric?
+- Which local filing evidence artifacts can be kept, deleted, or deactivated?
+
+This makes Plan 3 indicator formulas cleaner because formulas can use stable base metric names such as `revenue`, `net_income`, `total_assets`, and `operating_cash_flow` without losing the ability to trace each value back to the original XBRL fact.
+
+Core Principle
+The shortest way to understand Milestone 200:
+
+```text
+Company ingestion becomes:
+
+Company registry
+  -> Filing inventory and refresh state
+    -> Full raw XBRL fact archive
+      -> Active-window base metrics
+        -> Inspectable ingestion evidence
+```
+
+The important distinction:
+
+```text
+raw_xbrl_facts
+  keep all normalized SEC companyfacts XBRL facts
+  source-of-truth history
+  not deleted by active-window cleanup
+
+active analysis window
+  latest 5 fiscal years of 10-K data
+  latest 12 quarters of 10-Q data
+  default scope for inspection, metrics, analytics, and RAG evidence selection
+
+filing evidence bundle
+  downloaded filing HTML
+  parsed filing text
+  filing chunks
+  embeddings
+  vector index records
+  chunk metadata
+  can be deleted or deactivated outside active window
+```
+
+Success Criteria
+- A requested ticker can be checked against a local `companies` table before SEC ingestion.
+- A missing company can be initialized from SEC metadata and stored locally.
+- Company ingestion stores local company registry state, filing inventory, raw facts, base metrics, and refresh state as one coordinated workflow.
+- The system ingests all available normalized SEC companyfacts XBRL facts for the company into `raw_xbrl_facts`.
+- `raw_xbrl_facts` remains the full source-of-truth archive.
+- Normal inspection, metrics, analytics, and RAG scope defaults to the latest 5 fiscal years of 10-K data and latest 12 quarters of 10-Q data.
+- Ingested 10-K and 10-Q filing metadata can be stored in a `filings` table.
+- The system can track latest ingested annual and quarterly filing dates for a company.
+- The system can store next-check dates for annual and quarterly update checks.
+- The system can decide whether an existing company should reuse local data or check SEC for updates.
+- If refresh is due, the system checks SEC submissions and ingests only missing filings/data.
+- Selected active-window raw facts can be mapped into business-friendly base metrics grouped by financial statement type.
+- Base metrics can be retrieved by company, statement type, metric name, fiscal year, fiscal period, and filing.
+- Every base metric row can be traced back to a filing and a source raw XBRL fact or source fact key.
+- Filing evidence artifacts outside the active analysis window can be deleted or deactivated without deleting raw XBRL facts or filing metadata.
+- Derived indicators such as revenue growth, margins, ratios, free cash flow, and total debt are not calculated in this milestone.
+
+Core Data Flow
+
+```text
+User requests company ingestion
+  -> normalize ticker or CIK
+  -> check companies table
+  -> if missing:
+       initialize company from SEC metadata
+       fetch SEC submissions
+       fetch SEC companyfacts
+       ingest all normalized companyfacts into raw_xbrl_facts
+       identify active 10-K and 10-Q filing scope
+       download/store active-window filing evidence when needed
+       upsert filing inventory
+       map active-window facts into financial_metrics
+       store latest filing dates and next-check dates
+       return inspectable ingestion evidence
+  -> if already local:
+       inspect stored company refresh state
+       if not due:
+           reuse local facts, filings, and metrics
+           return inspectable local evidence
+       if due:
+           check SEC submissions
+           compare SEC accessions against local filings
+           ingest only missing filings/data
+           refresh raw facts, filings, metrics, active-window flags, and next-check dates
+           cleanup or deactivate filing evidence outside active window
+           return inspectable refresh evidence
+```
+
+Concrete Table Relationship
+
+```text
+companies
+  What company is this?
+  What is its CIK?
+  What is the latest local 10-K and 10-Q state?
+  When should SEC be checked again?
+        |
+        | company_id
+        v
+filings
+  Which 10-K and 10-Q filings are stored locally?
+  Which filings are inside the active analysis window?
+  Where is each downloaded filing document?
+        |
+        | accession_number / filing_id
+        v
+raw_xbrl_facts
+  What exactly did SEC companyfacts report?
+  This keeps all normalized available XBRL facts for the company.
+  This remains the source-of-truth archive.
+        |
+        | raw_fact_id
+        v
+financial_metrics
+  What clean base metrics can the app use in the active scope?
+  Example: income_statement.revenue, balance_sheet.total_assets
+```
+
+Example:
+
+```text
+AAPL company ingestion
+  -> companies row for CIK 0000320193
+  -> active 10-K and 10-Q filing inventory
+  -> all normalized SEC companyfacts stored in raw_xbrl_facts
+  -> active-window us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax
+  -> income_statement.revenue in financial_metrics
+  -> metric row links back to raw_fact_id and accession number
+```
+
+Raw Archive And Active Window Policy
+
+Raw XBRL fact archive:
+
+```text
+raw_xbrl_facts
+  keep all normalized XBRL facts available from SEC companyfacts
+  source-of-truth history
+  not deleted by active-window policy
+  used for audit, debugging, remapping, and future rebuilds
+```
+
+Active analysis window:
+
+```text
+annual default: latest 5 fiscal years of 10-K data
+quarterly default: latest 12 quarters of 10-Q data
+normal use: inspection, base metrics, future analytics, and future RAG evidence selection
+```
+
+Filing evidence bundle:
+
+```text
+filing HTML
+parsed filing text
+filing chunks
+embeddings
+vector index records
+chunk metadata used for semantic retrieval
+```
+
+Active-window rule:
+
+```text
+Inside active window:
+  keep filing metadata
+  keep raw XBRL facts
+  keep base metrics active
+  keep downloaded HTML and retrieval artifacts when available
+
+Outside active window:
+  keep filing metadata
+  keep raw XBRL facts
+  mark base metrics inactive or exclude them from default queries
+  delete or deactivate the whole filing-evidence bundle
+```
+
+This keeps compact structured history while bounding bulky filing and retrieval storage.
+
+Planned Storage Tables
+
+companies
+- Own local company identity and update state.
+- Use CIK as the canonical external company identifier.
+- Store ticker, company name, exchange, SIC, SIC description, and local timestamps.
+- Store latest ingested 10-K and 10-Q filing dates.
+- Store next-check dates for 10-K and 10-Q update checks.
+
+filings
+- Own filing-level metadata for ingested SEC filings.
+- Store company_id, accession_number, form_type, filing_date, report_date, fiscal_year, fiscal_period, source, document URL, local file path, and ingested_at.
+- Treat accession_number as the stable SEC filing identifier.
+- Track whether the filing is inside the active analysis window.
+- Store amendments as separate filings unless a future policy explicitly supersedes older filings.
+- Keep filing metadata for audit and rebuilds even when bulky filing evidence is deleted or deactivated.
+
+financial_metrics
+- Own mapped base metrics, not derived indicators.
+- Store company_id, filing_id or accession_number, source raw fact reference, statement_type, metric_name, value, unit, period_type, fiscal_year, fiscal_period, start_date, end_date, filing_date, and created_at.
+- Store numeric values in a decimal-safe text representation, not SQLite REAL, to avoid floating-point drift.
+- Track whether the metric is inside the active analysis window.
+- Use a uniqueness rule that includes company, metric name, period, filing, and source fact identity.
+- Default retrieval should return active-window metrics unless audit/debug mode asks for all rows.
+
+Recommended Minimum Schema Shape
+
+```sql
+CREATE TABLE companies (
+    company_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cik TEXT UNIQUE NOT NULL,
+    name TEXT NOT NULL,
+    ticker TEXT,
+    exchange TEXT,
+    sic TEXT,
+    sic_description TEXT,
+    latest_10k_filing_date TEXT,
+    latest_10q_filing_date TEXT,
+    next_check_date_10k TEXT,
+    next_check_date_10q TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+```
+
+```sql
+CREATE TABLE filings (
+    filing_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL,
+    accession_number TEXT UNIQUE NOT NULL,
+    form_type TEXT NOT NULL,
+    filing_date TEXT NOT NULL,
+    report_date TEXT,
+    fiscal_year INTEGER,
+    fiscal_period TEXT,
+    source TEXT NOT NULL DEFAULT 'SEC',
+    document_url TEXT,
+    local_path TEXT,
+    is_active_window INTEGER NOT NULL DEFAULT 1,
+    ingested_at TEXT NOT NULL,
+    FOREIGN KEY (company_id) REFERENCES companies(company_id)
+);
+```
+
+```sql
+CREATE TABLE financial_metrics (
+    metric_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    company_id INTEGER NOT NULL,
+    filing_id INTEGER,
+    accession_number TEXT NOT NULL,
+    raw_fact_id INTEGER,
+    statement_type TEXT NOT NULL,
+    metric_name TEXT NOT NULL,
+    value_numeric TEXT,
+    value_raw TEXT,
+    unit TEXT NOT NULL,
+    period_type TEXT NOT NULL,
+    fiscal_year INTEGER,
+    fiscal_period TEXT,
+    start_date TEXT,
+    end_date TEXT,
+    filing_date TEXT,
+    is_active_window INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    UNIQUE(company_id, metric_name, period_type, fiscal_year, fiscal_period, accession_number, raw_fact_id),
+    FOREIGN KEY (company_id) REFERENCES companies(company_id),
+    FOREIGN KEY (filing_id) REFERENCES filings(filing_id),
+    FOREIGN KEY (raw_fact_id) REFERENCES raw_xbrl_facts(id)
+);
+```
+
+Metric Mapping Scope
+
+Income statement base metrics:
+- revenue
+- cost_of_revenue
+- gross_profit
+- operating_income
+- net_income
+- eps_basic
+- eps_diluted
+- research_and_development_expense
+- selling_general_and_administrative_expense
+- interest_expense
+- income_tax_expense
+
+Balance sheet base metrics:
+- cash_and_equivalents
+- accounts_receivable
+- inventory
+- total_assets
+- current_assets
+- short_term_debt
+- long_term_debt
+- accounts_payable
+- total_liabilities
+- current_liabilities
+- shareholders_equity
+
+Cash flow statement base metrics:
+- operating_cash_flow
+- capital_expenditure
+- investing_cash_flow
+- financing_cash_flow
+- share_repurchases
+- dividends_paid
+
+Do not include in Milestone 200:
+- revenue_growth
+- gross_margin
+- operating_margin
+- net_margin
+- current_ratio
+- debt_ratio
+- total_debt
+- free_cash_flow
+- cash_conversion
+
+Those belong to Plan 3 because they require formulas over one or more base metrics.
+
+Update-Check Design
+
+Refresh Date Generation Rule
+
+After company ingestion or refresh, generate next-check dates from the latest ingested periodic filing dates:
+
+```text
+next_check_date_10k
+  source date: latest ingested 10-K filing date
+  rule: add 12 calendar months
+  weekend adjustment: if the result lands on Saturday or Sunday, move back to Friday,
+			if the result lands on any holiday that stock market will close, move back to prior business day that stock market is open.
+
+next_check_date_10q
+  source date: latest ingested 10-Q filing date and fiscal quarter
+  if latest 10-Q fiscal period is Q1 or Q2:
+      add 3 calendar months
+  if latest 10-Q fiscal period is Q3:
+      add 6 calendar months
+      because the next major periodic filing is usually the annual 10-K
+  weekend adjustment: if the result lands on Saturday or Sunday, move back to Friday
+```			if the result lands on any holiday that stock market will close, move back to prior business day that stock market is open.
+
+These dates are local refresh heuristics. They decide when the system should check SEC submissions again. They do not guarantee that a newer filing exists.
+
+Company request flow:
+
+```text
+company requested
+  -> check companies table
+  -> initialize if missing
+  -> retrieve local state if present
+  -> check next_check_date_10k and next_check_date_10q
+  -> if not due: use local data
+  -> if due: check SEC submissions
+  -> compare SEC accessions with local filings
+  -> ingest only missing filings/data
+  -> refresh raw facts, filing inventory, base metrics, active-window flags, and next-check dates
+```
+
+Annual update rule:
+- Use latest ingested 10-K filing date as the starting point.
+- Set next_check_date_10k to the previous business day before approximately one year after the latest 10-K filing date.
+- When the check date is reached, query SEC submissions for newer 10-K filings.
+
+Quarterly update rule:
+- Use latest ingested 10-Q filing date and fiscal period as the starting point.
+- If the latest 10-Q is Q1 or Q2, set next_check_date_10q to approximately three months after the latest 10-Q filing date, adjusted to the previous business day.
+- If the latest 10-Q is Q3, set next_check_date_10q to approximately six months after the latest 10-Q filing date, adjusted to the previous business day, because the next major periodic filing is usually the annual 10-K.
+
+Important rule:
+- Next-check dates are heuristics, not guarantees.
+- When a check is due, SEC submissions remain the authority for whether a newer filing exists.
+
+Refresh Policy
+
+Default behavior:
+- Use local data when a company exists and today is before the relevant next-check date.
+- Check SEC submissions when today is on or after the relevant next-check date.
+- Compare SEC submission accession numbers against the local `filings` table.
+- Ingest only filings whose accession numbers are not already stored locally.
+- Process missing filings in chronological order so company state moves forward predictably.
+
+If no new filing is found:
+- Keep existing raw facts, filings, and base metrics unchanged.
+- Set the relevant next-check date to the next business day.
+- Return local data with a status such as `checked_no_update`.
+- Do not repeatedly query SEC on every request during the same day.
+
+If one or more new filings are found:
+- Download and store each missing active-window filing.
+- Normalize and upsert raw XBRL facts from SEC companyfacts.
+- Upsert the filing records.
+- Map active-window raw facts into base financial metrics.
+- Recalculate which filings and base metrics are inside the active analysis window.
+- Delete or deactivate filing evidence artifacts tied to filings outside the active window.
+- Update latest ingested 10-K or 10-Q filing dates after the newest filing is processed.
+- Recalculate the relevant next-check date from the newest filing date and fiscal period.
+- Return local data with a status such as `updated`.
+
+If a local filing already exists:
+- Do not download or reprocess it by default.
+- Retrieve existing local facts and base metrics.
+- Reprocessing existing filings should require an explicit future repair or rebuild command.
+
+Amended filings:
+- Store `10-K/A` and `10-Q/A` as separate filing records when they are ingested.
+- Do not delete or overwrite the original filing record.
+- Mark amended filings by form type and accession number.
+- A future supersession policy may choose which filing should be preferred for metrics, but Milestone 200 should preserve both records.
+
+Restatements and duplicate facts:
+- Preserve all source raw facts in `raw_xbrl_facts`.
+- Do not silently replace prior facts when a restated or amended filing appears.
+- Base metrics should prefer facts from the newest relevant accession only when the mapping policy can do so explicitly and traceably.
+- If the preferred fact is ambiguous, skip the base metric or store a quality flag rather than guessing.
+
+Metric refresh behavior:
+- Base metric rows should be upserted by company, metric name, period, accession number, and raw fact reference.
+- New filings should add new metric rows or update rows tied to the same source fact identity.
+- Existing metrics from other accessions should remain available for audit, but default metric retrieval should filter to the active analysis window.
+- Derived indicators are not refreshed in Milestone 200 because they belong to Plan 3.
+
+Active-window cleanup behavior:
+- Do not delete `raw_xbrl_facts` because they are the source-of-truth archive.
+- Do not delete filing metadata because it is needed to audit or rebuild evidence.
+- Delete downloaded HTML files for filings outside the active window by default.
+- Delete parsed text, chunk rows, embeddings, and vector index records for filings outside the active window when those retrieval artifacts exist.
+- If deletion is not supported by the vector store, mark inactive records so retrieval excludes them.
+
+Failure behavior:
+- If SEC is unavailable or returns a retryable error during a due check, keep local data available.
+- Return local data with a warning status such as `refresh_failed_using_local_data`.
+- Do not advance next-check dates after a failed SEC check unless a future retry policy explicitly adds backoff state.
+- Do not delete local facts, filings, metrics, or filing metadata because a refresh failed.
+
+Module Responsibility Design
+
+src/storage:
+- Own table creation and repository methods for companies, filings, update state, raw facts, and financial_metrics.
+- Preserve `raw_xbrl_facts` as the full raw archive.
+- Do not fetch SEC data, normalize XBRL payloads, calculate derived indicators, run analytics, retrieve filing text, or call LLMs.
+
+src/processing:
+- Own XBRL normalization, fact cleanup, active-window selection, and deterministic raw-fact to base-metric mapping.
+- Do not calculate formulas that combine multiple metrics.
+- Do not fetch SEC data or write directly to SQLite.
+
+src/ingestion/company.py or future src/workflows/company_ingestion.py:
+- Own the advanced company ingestion workflow.
+- Check whether the company exists locally.
+- Initialize missing companies.
+- Decide whether an existing company should reuse local data or check SEC.
+- Call ingestion, processing, storage, and cleanup helpers in order.
+- Return inspectable ingestion evidence.
+- Do not duplicate SEC HTTP logic, XBRL normalization logic, SQL persistence logic, or indicator formulas.
+
+Public Interface Design
+
+Planned repository APIs:
+- CompanyRepository.initialize() -> None
+- CompanyRepository.get_by_cik(cik) -> CompanyRecord | None
+- CompanyRepository.get_by_ticker(ticker) -> CompanyRecord | None
+- CompanyRepository.upsert_company(company) -> CompanyRecord
+- CompanyRepository.update_check_state(company_id, ...) -> None
+- FilingRepository.initialize() -> None
+- FilingRepository.upsert_filings(company_id, filings) -> int
+- FilingRepository.list_filings(company_id, forms=None) -> list[FilingRecord]
+- FinancialMetricRepository.initialize() -> None
+- FinancialMetricRepository.upsert_metrics(metrics) -> int
+- FinancialMetricRepository.list_metrics(company_id, statement_type=None, metric_names=None) -> list[FinancialMetric]
+
+Planned workflow API:
+- ingest_company(ticker, settings) -> CompanyIngestionResult
+- The result should expose enough evidence to inspect whether the run initialized, reused, refreshed, or failed while using local data.
+
+Planned mapping API:
+- map_raw_facts_to_financial_metrics(facts, filings) -> list[FinancialMetric]
+
+Data Integrity Rules
+- Do not replace or truncate `raw_xbrl_facts` during normal ingestion.
+- Do not delete raw XBRL facts because a filing moves outside the active window.
+- Do not drop source XBRL concept, accession number, unit, period, or quality flag information.
+- Store base metrics only when they can be traced to a source raw fact.
+- Preserve raw and numeric values separately.
+- Store numeric values as text parsed from Decimal-compatible values.
+- Keep amended filings traceable.
+- Do not silently choose between duplicate or ambiguous source facts without a quality flag or explicit selection policy.
+
+Testing Design
+
+SQLite repository tests:
+- Create companies, filings, and financial_metrics tables.
+- Upsert a company by CIK without duplicate company rows.
+- Upsert filings by accession number without duplicate filing rows.
+- Store and retrieve latest 10-K and 10-Q filing state.
+- Store and retrieve next-check dates.
+- Store and retrieve base financial metrics.
+- Confirm financial_metrics rows link to filings and raw_xbrl_facts.
+- Confirm default retrieval filters to latest 5 annual periods and latest 12 quarterly periods.
+- Confirm inactive filings and inactive metrics are excluded from default inspection queries.
+- Confirm Decimal-compatible text values round-trip without floating-point drift.
+
+Metric mapping tests:
+- Map us-gaap revenue concepts to `revenue`.
+- Map balance sheet concepts such as Assets and StockholdersEquity to base metrics.
+- Map cash flow concepts such as NetCashProvidedByUsedInOperatingActivities to base metrics.
+- Do not produce free_cash_flow, total_debt, margins, or ratios.
+- Skip or flag metrics when required source facts are ambiguous.
+
+Workflow tests:
+- If a company does not exist locally, initialize company registry, raw facts, filing records, base metrics, and update-check state.
+- If a company exists and today is before next-check date, retrieve local data without SEC calls.
+- If a company exists and today is on or after next-check date, check SEC submissions for newer filings.
+- If multiple new filings are found, ingest them in chronological order.
+- Confirm all normalized SEC companyfacts are preserved in raw_xbrl_facts.
+- Confirm active-window metrics default to latest 5 annual and latest 12 quarterly periods.
+- After refresh, mark filings and base metrics outside the active window as inactive.
+- If retrieval artifacts exist for filings outside the active window, delete or deactivate those artifacts without deleting raw XBRL facts.
+
+Manual Acceptance Checks
+- Run the Milestone 200 experiment for a chosen ticker.
+- Confirm the report shows first-time setup ingestion evidence.
+- Confirm the report shows already-ingested company inspection evidence.
+- Confirm company metadata is stored once.
+- Confirm all normalized SEC companyfacts are stored in `raw_xbrl_facts`.
+- Confirm latest 10-K and 10-Q filing state is recorded.
+- Confirm next-check dates are recorded.
+- Confirm active 10-K scope is latest 5 fiscal years.
+- Confirm active 10-Q scope is latest 12 quarters.
+- Confirm base metrics can be listed by statement type.
+- Confirm each base metric can be traced back to an accession number and raw XBRL fact.
+- Confirm no derived indicators are calculated by this milestone.
+
+Out of Scope
+- Indicator formulas.
+- Derived metrics such as free cash flow, total debt, margins, ratios, growth, and cash conversion.
+- Financial trend analysis.
+- Benchmark or peer comparison.
+- Filing text chunking or retrieval indexes, except cleanup/deactivation hooks for future artifacts.
+- LlamaIndex integration.
+- Gemini integration.
+- RAG answers.
+- Frontend code.
+
+Implementation Order
+1. Keep `raw_xbrl_facts` as the full source-of-truth archive from SEC companyfacts.
+2. Add or verify company and filing record types.
+3. Add or verify SQLite schema support for companies and filings.
+4. Add or verify repository methods for company and filing lookup/upsert.
+5. Add or verify financial metric record type and SQLite table.
+6. Add deterministic raw fact to base metric mapping.
+7. Add update-check date helpers.
+8. Add active-window helpers for latest 5 annual periods and latest 12 quarterly periods.
+9. Upgrade company ingestion orchestration so ingestion itself populates companies, filings, raw facts, financial_metrics, and refresh state.
+10. Add existing-company reuse behavior when refresh is not due.
+11. Add due-refresh behavior that checks SEC submissions and ingests only missing filings/data.
+12. Mark filings and metrics outside the active window as inactive.
+13. Add cleanup hooks for filing evidence artifacts outside the active window when retrieval artifacts exist.
+14. Add focused repository, mapping, active-window, workflow, and experiment tests.
+15. Run `uv run pytest`.
+
+Assumptions
+- Milestone 2 is complete enough to provide normalized raw XBRL facts from SEC companyfacts.
+- Milestone 200 owns the upgraded company ingestion workflow and the inspection surface that comes with it.
+- `financial_metrics` means base metrics only.
+- `derived_indicators` begins in Plan 3.
+- The first version can use heuristic next-check dates and SEC submissions as the final authority for new filings.
+- Active-window limits are default query and evidence-retention limits, not raw XBRL fact deletion rules.
+- Filing HTML, chunks, embeddings, and vector index records are the bulky filing-evidence bundle and can be deleted or deactivated outside the active window.

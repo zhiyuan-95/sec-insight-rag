@@ -153,6 +153,7 @@ The important rule is that each box should remain traceable. Reported facts, cal
 ```text
 .
   .gitignore
+  CONTEXT.md
   README.md
   agents.md
   config.env
@@ -172,6 +173,7 @@ The important rule is that each box should remain traceable. Reported facts, cal
 ## Top-Level Responsibilities
 
 - `.gitignore`: Git ignore rules.
+- `CONTEXT.md`: Domain glossary for canonical financial-evidence terminology. It does not contain implementation or architecture decisions.
 - `README.md`: Local setup and run notes.
 - `agents.md`: Project instructions for coding agents.
 - `config.env`: Local configuration and secrets. Do not treat as public documentation.
