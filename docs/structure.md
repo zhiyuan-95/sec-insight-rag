@@ -416,6 +416,11 @@ Current files:
   quarantine; selects only usable numeric observations; preserves source rows,
   diagnostics, field-level metadata attribution, semantic fact identity, and
   the complete Arelle structural result for later precedence and mapping.
+- `accession_precedence.py`: Resolves reconciled annual accessions independently
+  per semantic fact identity, statement-network identity, and concept metadata
+  field. It preserves valid earlier facts and networks through partial or
+  invalid amendments, retains duplicate/conflict lineage, and exposes an exact
+  accounting-context gate for mixed-accession formula components.
 - `mapping_targets.py`: Builds canonical target definitions and missing-target checks for hard-mapping coverage.
 - `formula_proposals.py`: Builds target-unit-compatible, statement-bucketed raw fact contexts for report-only LLM formula proposals, keeps only the primary monetary unit per filing period for monetary targets while preserving all raw units in storage/export evidence, collapses identical period raw-concept pools into one provider context with period coverage, computes exact reusable formula context fingerprints and statement-scoped batch keys, normalizes single-target and batch provider responses, caches successful structured formula, zero-target, or no-formula decisions per target/context/provider, and deterministically validates formula components or cited zero-evidence facts against representative raw XBRL facts. Formula validation distinguishes actual fact dates inside comparative filings, prefers an undimensioned fact when dimensional variants coexist for the same concept/date, and still rejects truly ambiguous same-date duplicates.
 - `metric_coverage.py`: Collapses tag-level target coverage and formula/zero diagnostics into one metric-level review surface. It does not approve mappings, persist recovered values, or feed indicators.
@@ -446,6 +451,10 @@ Key responsibilities:
 - Preserve namespace URI, context ID, dimensions, consolidation state, concept balance, numeric type, and source document for Inline XBRL facts.
 - Reconcile Arelle and Company Facts observations within an accession without
   merging source rows or applying the later cross-accession precedence policy.
+- Build the mapping fact view with latest-valid-accession precedence while
+  retaining invalid, quarantined, equivalent, and superseded source history;
+  apply amendment precedence separately to facts, statement networks, and
+  concept metadata fields.
 - Resolve coverage at the internal-metric level before human or LLM review:
   mapped metrics need no action, approved alternate concepts count as covered,
   and unresolved metrics expose formula-from-raw-concepts, zero-target, or
@@ -640,6 +649,10 @@ The project uses focused pytest coverage alongside milestone experiments:
   Arelle result records to verify matches, numerical equivalence, conflicts,
   source-only supplements, ambiguity quarantine, blocked or unusable facts,
   metadata attribution, retained structural evidence, and accession scoping.
+- `tests/test_accession_precedence.py` verifies latest-valid fact selection,
+  invalid and omitted amendment handling, equivalent duplicate lineage,
+  unresolved conflict quarantine, partial statement-network replacement,
+  field-level concept metadata, and compatible mixed-accession components.
 - Extend automated coverage when changing deterministic logic, repositories,
   public interfaces, regressions, or important failure paths.
 
