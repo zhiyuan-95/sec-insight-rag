@@ -339,7 +339,9 @@ Current files:
   versions, and canonical payload hashes before reusing an exact per-accession
   result; cache misses run through the isolated worker one at a time. Complete
   and failed results remain explicit, while corrupt, changed, or incompatible
-  cache entries are regenerated.
+  cache entries are regenerated. A sibling versioned input manifest records
+  every locally acquired file path and hash so dependency repairs also
+  invalidate cached failures that intentionally contain no partial evidence.
 - `arelle_worker.py`: Plan 203 accession boundary that starts a fresh spawned
   child process, creates one Arelle Session, loads and validates one local entry
   point, closes the session, and returns only canonical project-owned JSON.
@@ -365,8 +367,8 @@ Key responsibilities:
 - Process an ordered set of already acquired annual accession requests
   sequentially and reuse unchanged results from a caller-selected local cache.
   Failed results with a verified entry-point hash remain visible and reusable
-  until their input or processing contract changes, preventing automatic retry
-  loops during an unchanged refresh.
+  only while the versioned local-input manifest is also unchanged, preventing
+  automatic retry loops without hiding repaired dependencies.
 - Backfill Inline XBRL enrichment once for previously ingested companies whose active local filing artifacts predate the adaptive mapping layer.
 - Check local company registry state before live SEC ingestion.
 - Reuse local company data when refresh is not due.
@@ -622,7 +624,8 @@ The project uses focused pytest coverage alongside milestone experiments:
 - `tests/test_arelle_inventory.py` copies that taxonomy into temporary storage
   and verifies sequential processing, exact warm-cache reuse with zero workers,
   visible failed-result reuse, acquisition and dependency hash checks, corrupt
-  cache regeneration, and processing-contract invalidation.
+  cache regeneration, failed-dependency repair, and processing-contract
+  invalidation.
 - Extend automated coverage when changing deterministic logic, repositories,
   public interfaces, regressions, or important failure paths.
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from importlib.metadata import version
@@ -22,6 +23,7 @@ from src.processing.arelle_extraction import file_sha256
 
 ARELLE_INVENTORY_CACHE = "cache"
 ARELLE_INVENTORY_WORKER = "worker"
+ARELLE_INPUT_MANIFEST_VERSION = "1"
 
 
 @dataclass(frozen=True)
@@ -63,7 +65,11 @@ def process_arelle_inventory(
     for request in requests:
         prepared_request = _prepare_request(request)
         cache_path = _result_cache_path(cache_dir, prepared_request)
-        cached_result = _read_valid_cached_result(cache_path, prepared_request)
+        cached_result = _read_valid_cached_result(
+            cache_path,
+            prepared_request,
+            cache_dir,
+        )
         if cached_result is not None:
             items.append(
                 ArelleInventoryItem(
@@ -82,7 +88,12 @@ def process_arelle_inventory(
             ARELLE_RESULT_COMPLETE,
             ARELLE_RESULT_FAILED,
         }:
-            _write_cached_result(cache_path, result)
+            _write_cached_result(
+                cache_path,
+                result,
+                prepared_request,
+                cache_dir,
+            )
         items.append(
             ArelleInventoryItem(
                 result=result,
@@ -123,8 +134,11 @@ def _result_cache_path(cache_dir: Path, request: ArelleFilingRequest) -> Path:
 def _read_valid_cached_result(
     cache_path: Path,
     request: ArelleFilingRequest,
+    cache_dir: Path,
 ) -> ArelleFilingResult | None:
     if not cache_path.is_file() or not _entry_point_matches_request(request):
+        return None
+    if not _input_manifest_matches(cache_path, request, cache_dir):
         return None
     try:
         result = ArelleFilingResult.from_json(
@@ -196,8 +210,77 @@ def _failed_result_is_empty(result: ArelleFilingResult) -> bool:
     )
 
 
-def _write_cached_result(cache_path: Path, result: ArelleFilingResult) -> None:
+def _input_manifest_matches(
+    cache_path: Path,
+    request: ArelleFilingRequest,
+    cache_dir: Path,
+) -> bool:
+    manifest_path = cache_path.with_name("inputs.json")
+    try:
+        cached_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        current_manifest = _build_input_manifest(request, cache_dir)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    return cached_manifest == current_manifest
+
+
+def _build_input_manifest(
+    request: ArelleFilingRequest,
+    cache_dir: Path,
+) -> dict[str, object]:
+    entry_point = Path(request.entry_point_path)
+    input_root = entry_point.parent.resolve()
+    cache_root = cache_dir.resolve()
+    if _is_within(input_root, cache_root):
+        raise ValueError(
+            "Arelle cache directory cannot contain the acquired filing directory"
+        )
+    files: list[dict[str, str]] = []
+    for path in sorted(input_root.rglob("*"), key=lambda item: str(item)):
+        if not path.is_file() or _is_within(path.resolve(), cache_root):
+            continue
+        files.append(
+            {
+                "path": path.relative_to(input_root).as_posix(),
+                "sha256": file_sha256(path),
+            }
+        )
+    return {
+        "manifest_version": ARELLE_INPUT_MANIFEST_VERSION,
+        "entry_point": entry_point.relative_to(input_root).as_posix(),
+        "files": files,
+    }
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _write_cached_result(
+    cache_path: Path,
+    result: ArelleFilingResult,
+    request: ArelleFilingRequest,
+    cache_dir: Path,
+) -> None:
     cache_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path = cache_path.with_name("inputs.json")
+    temporary_manifest_path = manifest_path.with_suffix(".json.tmp")
+    temporary_manifest_path.write_text(
+        json.dumps(
+            _build_input_manifest(request, cache_dir),
+            ensure_ascii=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
     temporary_path = cache_path.with_suffix(".json.tmp")
     temporary_path.write_text(result.to_json(), encoding="utf-8")
+    # Publish the manifest last so an interrupted refresh cannot pair an old
+    # failed result with a new input snapshot and make that failure reusable.
     temporary_path.replace(cache_path)
+    temporary_manifest_path.replace(manifest_path)

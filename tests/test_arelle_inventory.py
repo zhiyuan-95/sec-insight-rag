@@ -195,6 +195,43 @@ def test_process_arelle_inventory_invalidates_changed_dependency(
     assert second_linkbase.content_sha256 != first_linkbase.content_sha256
 
 
+def test_process_arelle_inventory_retries_failure_after_dependency_repair(
+    tmp_path: Path,
+) -> None:
+    filing_dir = tmp_path / "filing"
+    shutil.copytree(ARELLE_FIXTURE_DIR, filing_dir)
+    entry_point = filing_dir / "minimal-instance.xbrl"
+    schema_path = filing_dir / "minimal-company.xsd"
+    schema_content = schema_path.read_bytes()
+    schema_path.unlink()
+    request = _request(
+        entry_point,
+        accession_number="0000320193-25-000001",
+    )
+    cache_dir = tmp_path / "cache"
+
+    failed = process_arelle_inventory(
+        (request,),
+        cache_dir=cache_dir,
+        timeout_seconds=30.0,
+    )
+
+    assert failed.worker_count == 1
+    assert failed.results[0].status == ARELLE_RESULT_FAILED
+    assert Path(failed.items[0].cache_path).is_file()
+
+    schema_path.write_bytes(schema_content)
+    repaired = process_arelle_inventory(
+        (request,),
+        cache_dir=cache_dir,
+        timeout_seconds=30.0,
+    )
+
+    assert repaired.worker_count == 1
+    assert repaired.results[0].status != ARELLE_RESULT_FAILED
+    assert repaired.items[0].source == ARELLE_INVENTORY_WORKER
+
+
 def test_process_arelle_inventory_rejects_and_regenerates_corrupt_cache(
     tmp_path: Path,
 ) -> None:
