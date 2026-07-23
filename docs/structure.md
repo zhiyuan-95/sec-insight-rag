@@ -64,6 +64,17 @@ src/ingestion/company.py
   +-- src/storage/indicators_repository.py
         -> persist derived financial indicators and skipped calculations
 
+Plan 203 accession evidence adapter (implemented, not yet wired into
+`ingest_company`):
+
+src/ingestion/arelle_worker.py
+  |
+  +-- spawn one fresh child process and one Arelle Session per accession
+  +-- src/processing/arelle_extraction.py
+  |     -> extract facts, taxonomy metadata, relationships, validations, and diagnostics
+  +-- src/processing/arelle_evidence.py
+        -> return an immutable, canonical JSON `complete` or `failed` result
+
 experiments/MS5/milestone5_retrieval_pipeline.py
   |
   v
@@ -198,7 +209,10 @@ data_store/
   knowledge/
 ```
 
-- `data/fixtures/`: Saved SEC API responses and sample data. Treat fixtures as immutable inputs.
+- `data/fixtures/`: Saved SEC API responses and sample data. The `arelle/`
+  subfolder contains a minimal local XBRL instance and taxonomy used to verify
+  the isolated Plan 203 adapter without SEC network access. Treat fixtures as
+  immutable inputs.
 - `data/exports/`: Generated CSV export location.
 - `data_store/filings/`: Downloaded SEC filing documents.
 - `data_store/knowledge/formula_proposals/`: Generated exact-context cache for report-only LLM formula proposal decisions. It stores structured successful formula, zero-target, or `no_formula` decisions, not recovered metrics.
@@ -318,6 +332,9 @@ Current files:
   annual Inline XBRL inventory discovery for Plan 203.
 - `companyfacts.py`: SEC companyfacts URL building and retrieval.
 - `inline_xbrl.py`: Arelle-backed loading of active SEC Inline XBRL documents and extension taxonomy dependencies.
+- `arelle_worker.py`: Plan 203 accession boundary that starts a fresh spawned
+  child process, creates one Arelle Session, loads and validates one local entry
+  point, closes the session, and returns only canonical project-owned JSON.
 - `filings.py`: Filing metadata listing, latest-form selection helpers, and filing document download.
 - `refresh_policy.py`: Next-check date heuristics for 10-K and 10-Q refresh checks, plus business-day helpers.
 - `company.py`: Refresh-aware `ingest_company` orchestration and `CompanyIngestionResult`.
@@ -333,6 +350,10 @@ Key responsibilities:
   submissions and every referenced history file, without changing the legacy
   active-window company workflow yet.
 - Load active Inline XBRL filings when deterministic target coverage remains incomplete.
+- Produce an additive Plan 203 evidence result for one locally acquired
+  accession with explicit `complete` or `failed` status. This seam is not yet
+  connected to the legacy company ingestion workflow or
+  `get_inline_xbrl_facts()`.
 - Backfill Inline XBRL enrichment once for previously ingested companies whose active local filing artifacts predate the adaptive mapping layer.
 - Check local company registry state before live SEC ingestion.
 - Reuse local company data when refresh is not due.
@@ -362,6 +383,15 @@ Current files:
 
 - `xbrl_normalizer.py`: Defines `NormalizedFact`, `normalize_companyfacts`, `normalize_fact_entry`, and duplicate fact marking.
 - `inline_xbrl.py`: Converts Arelle filing models into normalized issuer-extension and dimensional raw facts without fetching SEC data or writing storage.
+- `arelle_evidence.py`: Immutable request, filing, fact, concept, context, unit,
+  relationship, formula assertion, diagnostic, namespace, source-document,
+  count, timing, and result records plus canonical JSON encoding and payload
+  verification for the Plan 203 adapter.
+- `arelle_extraction.py`: Extracts project-owned facts, concept metadata,
+  presentation, calculation, definition, label, reference and formula
+  relationships, formula assertion counts, scoped validation diagnostics,
+  namespaces, source documents, hashes, and counts from a live Arelle model
+  inside the child process.
 - `mapping_targets.py`: Builds canonical target definitions and missing-target checks for hard-mapping coverage.
 - `formula_proposals.py`: Builds target-unit-compatible, statement-bucketed raw fact contexts for report-only LLM formula proposals, keeps only the primary monetary unit per filing period for monetary targets while preserving all raw units in storage/export evidence, collapses identical period raw-concept pools into one provider context with period coverage, computes exact reusable formula context fingerprints and statement-scoped batch keys, normalizes single-target and batch provider responses, caches successful structured formula, zero-target, or no-formula decisions per target/context/provider, and deterministically validates formula components or cited zero-evidence facts against representative raw XBRL facts. Formula validation distinguishes actual fact dates inside comparative filings, prefers an undimensioned fact when dimensional variants coexist for the same concept/date, and still rejects truly ambiguous same-date duplicates.
 - `metric_coverage.py`: Collapses tag-level target coverage and formula/zero diagnostics into one metric-level review surface. It does not approve mappings, persist recovered values, or feed indicators.
@@ -385,6 +415,9 @@ Key responsibilities:
 - Keep hard industry label definitions and fallback assignments auditable; use SIC and observed concepts as supporting evidence for review, while Gemini classification from 10-K Item 1 Business owns automated label inference when configured.
 - Compare hard-industry target raw facts against observed raw facts and mapped financial metrics for experiment report coverage.
 - Preserve raw values separately from parsed numeric values.
+- Keep live Arelle objects inside their child process and preserve warnings or
+  errors on the affected fact or relationship evidence when Arelle supplies an
+  object reference.
 - Normalize CIK, taxonomy, concept, unit, periods, fiscal year/period, form, filing date, accession number, frame, and source metadata.
 - Preserve namespace URI, context ID, dimensions, consolidation state, concept balance, numeric type, and source document for Inline XBRL facts.
 - Resolve coverage at the internal-metric level before human or LLM review:
@@ -569,6 +602,9 @@ The project uses focused pytest coverage alongside milestone experiments:
   and lineage, filing parsing, retrieval generation integrity and rollback,
   fused evidence lineage, API health, concise CLI reporting, and MS2/MS2.5
   experiment behavior.
+- `tests/test_arelle_worker.py` uses the local `data/fixtures/arelle/` taxonomy
+  to verify complete and failed result envelopes, JSON round trips, validation
+  scoping, session closure, and child-process cleanup.
 - Extend automated coverage when changing deterministic logic, repositories,
   public interfaces, regressions, or important failure paths.
 

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<link:linkbase
+    xmlns:link="http://www.xbrl.org/2003/linkbase"
+    xmlns:xlink="http://www.w3.org/1999/xlink">
+  <link:roleRef
+      roleURI="https://example.com/role/statement"
+      xlink:type="simple"
+      xlink:href="minimal-company.xsd#role_statement"/>
+  <link:presentationLink xlink:type="extended" xlink:role="https://example.com/role/statement">
+    <link:loc xlink:type="locator" xlink:href="minimal-company.xsd#concept_Revenue" xlink:label="revenue"/>
+    <link:loc xlink:type="locator" xlink:href="minimal-company.xsd#concept_ProductRevenue" xlink:label="product"/>
+    <link:loc xlink:type="locator" xlink:href="minimal-company.xsd#concept_ServiceRevenue" xlink:label="service"/>
+    <link:presentationArc xlink:type="arc" xlink:arcrole="http://www.xbrl.org/2003/arcrole/parent-child" xlink:from="revenue" xlink:to="product" order="1"/>
+    <link:presentationArc xlink:type="arc" xlink:arcrole="http://www.xbrl.org/2003/arcrole/parent-child" xlink:from="revenue" xlink:to="service" order="2"/>
+  </link:presentationLink>
+  <link:calculationLink xlink:type="extended" xlink:role="https://example.com/role/statement">
+    <link:loc xlink:type="locator" xlink:href="minimal-company.xsd#concept_Revenue" xlink:label="revenue"/>
+    <link:loc xlink:type="locator" xlink:href="minimal-company.xsd#concept_ProductRevenue" xlink:label="product"/>
+    <link:loc xlink:type="locator" xlink:href="minimal-company.xsd#concept_ServiceRevenue" xlink:label="service"/>
+    <link:calculationArc xlink:type="arc" xlink:arcrole="http://www.xbrl.org/2003/arcrole/summation-item" xlink:from="revenue" xlink:to="product" order="1" weight="1"/>
+    <link:calculationArc xlink:type="arc" xlink:arcrole="http://www.xbrl.org/2003/arcrole/summation-item" xlink:from="revenue" xlink:to="service" order="2" weight="0"/>
+  </link:calculationLink>
+  <link:definitionLink xlink:type="extended" xlink:role="https://example.com/role/statement">
+    <link:loc xlink:type="locator" xlink:href="minimal-company.xsd#concept_Revenue" xlink:label="revenue"/>
+    <link:loc xlink:type="locator" xlink:href="minimal-company.xsd#concept_ProductRevenue" xlink:label="product"/>
+    <link:definitionArc xlink:type="arc" xlink:arcrole="http://www.xbrl.org/2003/arcrole/general-special" xlink:from="revenue" xlink:to="product" order="1"/>
+  </link:definitionLink>
+  <link:labelLink xlink:type="extended" xlink:role="http://www.xbrl.org/2003/role/link">
+    <link:loc xlink:type="locator" xlink:href="minimal-company.xsd#concept_Revenue" xlink:label="revenue"/>
+    <link:label xlink:type="resource" xlink:label="revenue_label" xlink:role="http://www.xbrl.org/2003/role/label" xml:lang="en">Revenue</link:label>
+    <link:label xlink:type="resource" xlink:label="revenue_documentation" xlink:role="http://www.xbrl.org/2003/role/documentation" xml:lang="en">Revenue from products and services.</link:label>
+    <link:labelArc xlink:type="arc" xlink:arcrole="http://www.xbrl.org/2003/arcrole/concept-label" xlink:from="revenue" xlink:to="revenue_label"/>
+    <link:labelArc xlink:type="arc" xlink:arcrole="http://www.xbrl.org/2003/arcrole/concept-label" xlink:from="revenue" xlink:to="revenue_documentation"/>
+  </link:labelLink>
+</link:linkbase>

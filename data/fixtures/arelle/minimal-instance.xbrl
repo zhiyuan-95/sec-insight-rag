@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xbrli:xbrl
+    xmlns:xbrli="http://www.xbrl.org/2003/instance"
+    xmlns:link="http://www.xbrl.org/2003/linkbase"
+    xmlns:xlink="http://www.w3.org/1999/xlink"
+    xmlns:iso4217="http://www.xbrl.org/2003/iso4217"
+    xmlns:test="https://example.com/test/2025">
+  <link:schemaRef xlink:type="simple" xlink:href="minimal-company.xsd"/>
+  <xbrli:context id="duration-2025">
+    <xbrli:entity>
+      <xbrli:identifier scheme="https://www.sec.gov/CIK">0000320193</xbrli:identifier>
+    </xbrli:entity>
+    <xbrli:period>
+      <xbrli:startDate>2024-09-29</xbrli:startDate>
+      <xbrli:endDate>2025-09-27</xbrli:endDate>
+    </xbrli:period>
+  </xbrli:context>
+  <xbrli:unit id="usd">
+    <xbrli:measure>iso4217:USD</xbrli:measure>
+  </xbrli:unit>
+  <test:Revenue contextRef="duration-2025" unitRef="usd" decimals="0">100</test:Revenue>
+  <test:ProductRevenue contextRef="duration-2025" unitRef="usd" decimals="0">70</test:ProductRevenue>
+  <test:ServiceRevenue contextRef="duration-2025" unitRef="usd" decimals="0">30</test:ServiceRevenue>
+</xbrli:xbrl>

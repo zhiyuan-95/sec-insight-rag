@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema
+    xmlns:xs="http://www.w3.org/2001/XMLSchema"
+    xmlns:xbrli="http://www.xbrl.org/2003/instance"
+    xmlns:link="http://www.xbrl.org/2003/linkbase"
+    xmlns:xlink="http://www.w3.org/1999/xlink"
+    xmlns:test="https://example.com/test/2025"
+    targetNamespace="https://example.com/test/2025"
+    elementFormDefault="qualified">
+  <xs:import
+      namespace="http://www.xbrl.org/2003/instance"
+      schemaLocation="minimal-xbrli.xsd"/>
+  <xs:annotation>
+    <xs:appinfo>
+      <link:roleType id="role_statement" roleURI="https://example.com/role/statement">
+        <link:definition>Minimal statement</link:definition>
+        <link:usedOn>link:presentationLink</link:usedOn>
+        <link:usedOn>link:calculationLink</link:usedOn>
+        <link:usedOn>link:definitionLink</link:usedOn>
+      </link:roleType>
+      <link:linkbaseRef
+          xlink:type="simple"
+          xlink:href="minimal-linkbase.xml"
+          xlink:role="http://www.xbrl.org/2003/role/presentationLinkbaseRef"
+          xlink:arcrole="http://www.w3.org/1999/xlink/properties/linkbase"/>
+    </xs:appinfo>
+  </xs:annotation>
+  <xs:element
+      id="concept_Revenue"
+      name="Revenue"
+      type="xbrli:monetaryItemType"
+      substitutionGroup="xbrli:item"
+      xbrli:periodType="duration"
+      xbrli:balance="credit"/>
+  <xs:element
+      id="concept_ProductRevenue"
+      name="ProductRevenue"
+      type="xbrli:monetaryItemType"
+      substitutionGroup="xbrli:item"
+      xbrli:periodType="duration"
+      xbrli:balance="credit"/>
+  <xs:element
+      id="concept_ServiceRevenue"
+      name="ServiceRevenue"
+      type="xbrli:monetaryItemType"
+      substitutionGroup="xbrli:item"
+      xbrli:periodType="duration"
+      xbrli:balance="credit"/>
+</xs:schema>
