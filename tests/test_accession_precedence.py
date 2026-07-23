@@ -7,6 +7,7 @@ import pytest
 from src.processing import (
     ARELLE_RESULT_COMPLETE,
     RECONCILIATION_ARELLE_ONLY,
+    RECONCILIATION_AMBIGUOUS_COMPANY_FACTS,
     AccessionReconciliationResult,
     ArelleConceptRecord,
     ArelleDiagnosticRecord,
@@ -125,6 +126,27 @@ def test_unresolved_same_accession_conflict_remains_quarantined() -> None:
         for candidate in resolution.quarantined_candidates
     ) == ("0000320193-25-000001",)
     assert resolution.invalid_candidates == ()
+
+
+def test_ambiguous_company_facts_candidate_remains_quarantined() -> None:
+    ambiguous = _reconciliation(
+        accession="0000320193-25-000001",
+        filing_date="2025-10-31",
+        value="120",
+        usable=False,
+        reconciliation_outcome=RECONCILIATION_AMBIGUOUS_COMPANY_FACTS,
+        fact_source="sec_companyfacts",
+    )
+
+    result = resolve_accession_precedence((ambiguous,))
+
+    resolution = result.fact_resolutions[0]
+    assert resolution.selected is None
+    assert resolution.invalid_candidates == ()
+    assert tuple(
+        candidate.accession_number
+        for candidate in resolution.quarantined_candidates
+    ) == ("0000320193-25-000001",)
 
 
 def test_partial_amendment_updates_only_facts_it_reports() -> None:
@@ -385,6 +407,8 @@ def _reconciliation(
     unit: str = "USD",
     usable: bool = True,
     conflicting_duplicate: bool = False,
+    reconciliation_outcome: str = RECONCILIATION_ARELLE_ONLY,
+    fact_source: str = "sec_inline_xbrl",
     relationships: tuple[ArelleRelationshipRecord, ...] = (),
     diagnostics: tuple[ArelleDiagnosticRecord, ...] = (),
     concepts: tuple[ArelleConceptRecord, ...] = (),
@@ -395,10 +419,14 @@ def _reconciliation(
         concept=concept,
         value=value,
         unit=unit,
+        source=fact_source,
     )
     if conflicting_duplicate:
         fact = replace(fact, quality_flags=(DUPLICATE_FACT,))
-    source = ReconciliationSourceObservation(raw_fact_id=raw_fact_id, fact=fact)
+    source_observation = ReconciliationSourceObservation(
+        raw_fact_id=raw_fact_id,
+        fact=fact,
+    )
     identity = SemanticFactIdentity(
         cik=fact.cik,
         taxonomy=fact.taxonomy,
@@ -413,10 +441,10 @@ def _reconciliation(
         observations=(
             ReconciledObservation(
                 semantic_identity=identity,
-                outcome=RECONCILIATION_ARELLE_ONLY,
+                outcome=reconciliation_outcome,
                 match_kind=None,
-                selected=source if usable else None,
-                source_observations=(source,),
+                selected=source_observation if usable else None,
+                source_observations=(source_observation,),
                 availability_markers=(
                     () if usable else ("arelle_fact_unavailable",)
                 ),
@@ -439,6 +467,7 @@ def _fact(
     concept: str,
     value: str,
     unit: str,
+    source: str,
 ) -> NormalizedFact:
     return NormalizedFact(
         cik="0000320193",
@@ -459,7 +488,7 @@ def _fact(
         filed_date=date.fromisoformat(filing_date),
         accession_number=accession,
         frame="CY2024",
-        source="sec_inline_xbrl",
+        source=source,
         namespace_uri="https://fasb.org/us-gaap/2024",
         context_id="duration-2024",
         source_document="filing.htm",

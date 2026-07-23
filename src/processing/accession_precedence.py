@@ -12,6 +12,7 @@ from src.processing.arelle_evidence import (
     ArelleRelationshipRecord,
 )
 from src.processing.observation_reconciliation import (
+    RECONCILIATION_AMBIGUOUS_COMPANY_FACTS,
     AccessionReconciliationResult,
     ReconciledObservation,
     ReconciliationSourceObservation,
@@ -256,14 +257,7 @@ def _resolve_concept_metadata(
     reconciliations: Sequence[AccessionReconciliationResult],
 ) -> tuple[ConceptMetadataResolution, ...]:
     selected: dict[ConceptIdentity, dict[str, PrecedenceMetadataField]] = {}
-    ordered_reconciliations = sorted(
-        reconciliations,
-        key=lambda item: (
-            date.fromisoformat(item.arelle_result.filing.filing_date),
-            item.arelle_result.filing.accession_number,
-        ),
-    )
-    for reconciliation in ordered_reconciliations:
+    for reconciliation in _ordered_reconciliations(reconciliations):
         result = reconciliation.arelle_result
         filing_date = date.fromisoformat(result.filing.filing_date)
         for concept in result.concepts:
@@ -332,14 +326,7 @@ def _resolve_statement_networks(
     reconciliations: Sequence[AccessionReconciliationResult],
 ) -> tuple[PrecedenceStatementNetwork, ...]:
     selected: dict[StatementNetworkIdentity, PrecedenceStatementNetwork] = {}
-    ordered_reconciliations = sorted(
-        reconciliations,
-        key=lambda item: (
-            date.fromisoformat(item.arelle_result.filing.filing_date),
-            item.arelle_result.filing.accession_number,
-        ),
-    )
-    for reconciliation in ordered_reconciliations:
+    for reconciliation in _ordered_reconciliations(reconciliations):
         result = reconciliation.arelle_result
         grouped: dict[StatementNetworkIdentity, list[ArelleRelationshipRecord]] = {}
         for relationship in result.relationships:
@@ -396,10 +383,28 @@ def _resolve_statement_networks(
     )
 
 
+def _ordered_reconciliations(
+    reconciliations: Sequence[AccessionReconciliationResult],
+) -> tuple[AccessionReconciliationResult, ...]:
+    return tuple(
+        sorted(
+            reconciliations,
+            key=lambda item: (
+                date.fromisoformat(item.arelle_result.filing.filing_date),
+                item.arelle_result.filing.accession_number,
+            ),
+        )
+    )
+
+
 def _candidate_is_quarantined(candidate: PrecedenceObservationCandidate) -> bool:
-    return candidate.reconciliation.selected is None and any(
-        DUPLICATE_FACT in observation.fact.quality_flags
-        for observation in candidate.reconciliation.source_observations
+    reconciliation = candidate.reconciliation
+    return reconciliation.selected is None and (
+        reconciliation.outcome == RECONCILIATION_AMBIGUOUS_COMPANY_FACTS
+        or any(
+            DUPLICATE_FACT in observation.fact.quality_flags
+            for observation in reconciliation.source_observations
+        )
     )
 
 
