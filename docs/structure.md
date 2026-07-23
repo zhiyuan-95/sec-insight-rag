@@ -410,6 +410,12 @@ Current files:
   relationships, formula assertion counts, scoped validation diagnostics,
   namespaces, source documents, hashes, and counts from a live Arelle model
   inside the child process.
+- `observation_reconciliation.py`: Reconciles separately persisted Arelle and
+  Company Facts rows within one selected accession. It records matches,
+  conflicts, source-only supplements, blocked-fact replacements, and ambiguity
+  quarantine; selects only usable numeric observations; preserves source rows,
+  diagnostics, field-level metadata attribution, semantic fact identity, and
+  the complete Arelle structural result for later precedence and mapping.
 - `mapping_targets.py`: Builds canonical target definitions and missing-target checks for hard-mapping coverage.
 - `formula_proposals.py`: Builds target-unit-compatible, statement-bucketed raw fact contexts for report-only LLM formula proposals, keeps only the primary monetary unit per filing period for monetary targets while preserving all raw units in storage/export evidence, collapses identical period raw-concept pools into one provider context with period coverage, computes exact reusable formula context fingerprints and statement-scoped batch keys, normalizes single-target and batch provider responses, caches successful structured formula, zero-target, or no-formula decisions per target/context/provider, and deterministically validates formula components or cited zero-evidence facts against representative raw XBRL facts. Formula validation distinguishes actual fact dates inside comparative filings, prefers an undimensioned fact when dimensional variants coexist for the same concept/date, and still rejects truly ambiguous same-date duplicates.
 - `metric_coverage.py`: Collapses tag-level target coverage and formula/zero diagnostics into one metric-level review surface. It does not approve mappings, persist recovered values, or feed indicators.
@@ -438,6 +444,8 @@ Key responsibilities:
   object reference.
 - Normalize CIK, taxonomy, concept, unit, periods, fiscal year/period, form, filing date, accession number, frame, and source metadata.
 - Preserve namespace URI, context ID, dimensions, consolidation state, concept balance, numeric type, and source document for Inline XBRL facts.
+- Reconcile Arelle and Company Facts observations within an accession without
+  merging source rows or applying the later cross-accession precedence policy.
 - Resolve coverage at the internal-metric level before human or LLM review:
   mapped metrics need no action, approved alternate concepts count as covered,
   and unresolved metrics expose formula-from-raw-concepts, zero-target, or
@@ -628,6 +636,10 @@ The project uses focused pytest coverage alongside milestone experiments:
   visible failed-result reuse, acquisition and dependency hash checks, corrupt
   cache regeneration, internal and caller-declared external dependency repair,
   interrupted cache publication, and processing-contract invalidation.
+- `tests/test_observation_reconciliation.py` uses typed source observations and
+  Arelle result records to verify matches, numerical equivalence, conflicts,
+  source-only supplements, ambiguity quarantine, blocked or unusable facts,
+  metadata attribution, retained structural evidence, and accession scoping.
 - Extend automated coverage when changing deterministic logic, repositories,
   public interfaces, regressions, or important failure paths.
 

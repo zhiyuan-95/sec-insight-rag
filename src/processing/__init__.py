@@ -76,6 +76,20 @@ from src.processing.mapping_targets import (
     canonical_metric_targets,
     missing_metric_targets,
 )
+from src.processing.observation_reconciliation import (
+    RECONCILIATION_ARELLE_ONLY,
+    RECONCILIATION_AMBIGUOUS_COMPANY_FACTS,
+    RECONCILIATION_COMPANY_FACTS_ONLY,
+    RECONCILIATION_COMPANY_FACTS_REPLACEMENT,
+    RECONCILIATION_CONFLICTING,
+    RECONCILIATION_MATCHED,
+    AccessionReconciliationResult,
+    ReconciledMetadataField,
+    ReconciledObservation,
+    ReconciliationSourceObservation,
+    SemanticFactIdentity,
+    reconcile_accession_observations,
+)
 from src.processing.periods import classify_period, parse_sec_date, validate_period
 from src.processing.xbrl_normalizer import NormalizedFact, find_duplicate_facts, normalize_companyfacts, normalize_fact_entry
 
@@ -85,6 +99,13 @@ __all__ = [
     "ARELLE_RESULT_COMPLETE",
     "ARELLE_RESULT_FAILED",
     "ARELLE_RESULT_SCHEMA_VERSION",
+    "RECONCILIATION_MATCHED",
+    "RECONCILIATION_CONFLICTING",
+    "RECONCILIATION_ARELLE_ONLY",
+    "RECONCILIATION_AMBIGUOUS_COMPANY_FACTS",
+    "RECONCILIATION_COMPANY_FACTS_ONLY",
+    "RECONCILIATION_COMPANY_FACTS_REPLACEMENT",
+    "AccessionReconciliationResult",
     "ArelleConceptRecord",
     "ArelleContextRecord",
     "ArelleDiagnosticRecord",
@@ -107,6 +128,10 @@ __all__ = [
     "CanonicalMetricTarget",
     "COMMON_BASE_LABEL",
     "NormalizedFact",
+    "ReconciledObservation",
+    "ReconciledMetadataField",
+    "ReconciliationSourceObservation",
+    "SemanticFactIdentity",
     "MetricCoverageResolution",
     "TargetConceptCandidate",
     "CompanyIndustryLabelAssignment",
@@ -148,6 +173,7 @@ __all__ = [
     "normalize_inline_xbrl_model",
     "parse_sec_date",
     "resolve_metric_coverage",
+    "reconcile_accession_observations",
     "target_facts_for_industry_labels",
     "validate_period",
 ]
