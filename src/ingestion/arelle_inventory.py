@@ -23,7 +23,7 @@ from src.processing.arelle_extraction import file_sha256
 
 ARELLE_INVENTORY_CACHE = "cache"
 ARELLE_INVENTORY_WORKER = "worker"
-ARELLE_INPUT_MANIFEST_VERSION = "2"
+ARELLE_INPUT_MANIFEST_VERSION = "3"
 
 
 @dataclass(frozen=True)
@@ -138,8 +138,6 @@ def _read_valid_cached_result(
 ) -> ArelleFilingResult | None:
     if not cache_path.is_file() or not _entry_point_matches_request(request):
         return None
-    if not _input_manifest_matches(cache_path, request, cache_dir):
-        return None
     try:
         result = ArelleFilingResult.from_json(
             cache_path.read_text(encoding="utf-8")
@@ -156,6 +154,8 @@ def _read_valid_cached_result(
     ):
         return None
     if not _filing_identity_matches(result, request):
+        return None
+    if not _input_manifest_matches(cache_path, request, cache_dir, result):
         return None
     if result.status == ARELLE_RESULT_FAILED:
         return result if _failed_result_is_empty(result) else None
@@ -214,11 +214,13 @@ def _input_manifest_matches(
     cache_path: Path,
     request: ArelleFilingRequest,
     cache_dir: Path,
+    result: ArelleFilingResult,
 ) -> bool:
     manifest_path = cache_path.with_name("inputs.json")
     try:
         cached_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         current_manifest = _build_input_manifest(request, cache_dir)
+        current_manifest["result_payload_sha256"] = result.payload_sha256
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return False
     return cached_manifest == current_manifest
@@ -292,7 +294,10 @@ def _write_cached_result(
     temporary_manifest_path = manifest_path.with_suffix(".json.tmp")
     temporary_manifest_path.write_text(
         json.dumps(
-            _build_input_manifest(request, cache_dir),
+            {
+                **_build_input_manifest(request, cache_dir),
+                "result_payload_sha256": result.payload_sha256,
+            },
             ensure_ascii=False,
             separators=(",", ":"),
             sort_keys=True,

@@ -341,8 +341,9 @@ Current files:
   and failed results remain explicit, while corrupt, changed, or incompatible
   cache entries are regenerated. A sibling versioned input manifest records
   the accession directory plus caller-declared external local dependency paths
-  and hashes, so dependency repairs also invalidate cached failures that
-  intentionally contain no partial evidence.
+  and hashes and binds them to the result payload hash, so dependency repairs
+  and interrupted cache publication cannot reuse a failed result produced from
+  different inputs.
 - `arelle_worker.py`: Plan 203 accession boundary that starts a fresh spawned
   child process, creates one Arelle Session, loads and validates one local entry
   point, closes the session, and returns only canonical project-owned JSON.

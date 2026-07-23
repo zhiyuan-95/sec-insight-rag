@@ -311,6 +311,7 @@ def test_process_arelle_inventory_rejects_interrupted_cache_publication(
             timeout_seconds=30.0,
         )
     monkeypatch.setattr(Path, "replace", original_replace)
+    dependency.write_text("first", encoding="utf-8")
 
     regenerated = process_arelle_inventory(
         (request,),
