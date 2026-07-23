@@ -1,5 +1,12 @@
 """SEC ingestion package."""
 
+from src.ingestion.arelle_inventory import (
+    ARELLE_INVENTORY_CACHE,
+    ARELLE_INVENTORY_WORKER,
+    ArelleInventoryItem,
+    ArelleInventoryResult,
+    process_arelle_inventory,
+)
 from src.ingestion.arelle_worker import process_arelle_accession
 from src.ingestion.company import CompanyDeletionResult, CompanyIngestionResult, delete_ingested_company, ingest_company
 from src.ingestion.companyfacts import build_companyfacts_url, get_companyfacts
@@ -38,10 +45,14 @@ from src.processing.arelle_evidence import (
 __all__ = [
     "FilingMetadata",
     "FilingNotFoundError",
+    "ARELLE_INVENTORY_CACHE",
+    "ARELLE_INVENTORY_WORKER",
     "ARELLE_RESULT_COMPLETE",
     "ARELLE_RESULT_FAILED",
     "ArelleFilingRequest",
     "ArelleFilingResult",
+    "ArelleInventoryItem",
+    "ArelleInventoryResult",
     "CompanyDeletionResult",
     "CompanyIngestionResult",
     "SecClient",
@@ -65,6 +76,7 @@ __all__ = [
     "list_recent_filings",
     "load_ticker_mapping",
     "process_arelle_accession",
+    "process_arelle_inventory",
     "require_latest_filings",
     "resolve_ticker_to_cik",
     "select_latest_filings",

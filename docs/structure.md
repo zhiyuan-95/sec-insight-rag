@@ -67,9 +67,11 @@ src/ingestion/company.py
 Plan 203 accession evidence adapter (implemented, not yet wired into
 `ingest_company`):
 
-src/ingestion/arelle_worker.py
+src/ingestion/arelle_inventory.py
   |
-  +-- spawn one fresh child process and one Arelle Session per accession
+  +-- verify a per-accession result cache and process misses sequentially
+  +-- src/ingestion/arelle_worker.py
+  |     -> spawn one fresh child process and one Arelle Session per accession
   +-- src/processing/arelle_extraction.py
   |     -> extract facts, taxonomy metadata, relationships, validations, and diagnostics
   +-- src/processing/arelle_evidence.py
@@ -332,6 +334,12 @@ Current files:
   annual Inline XBRL inventory discovery for Plan 203.
 - `companyfacts.py`: SEC companyfacts URL building and retrieval.
 - `inline_xbrl.py`: Arelle-backed loading of active SEC Inline XBRL documents and extension taxonomy dependencies.
+- `arelle_inventory.py`: Plan 203 sequential annual-inventory runner. It
+  verifies filing identity, entry-point and dependency hashes, Arelle and result
+  versions, and canonical payload hashes before reusing an exact per-accession
+  result; cache misses run through the isolated worker one at a time. Complete
+  and failed results remain explicit, while corrupt, changed, or incompatible
+  cache entries are regenerated.
 - `arelle_worker.py`: Plan 203 accession boundary that starts a fresh spawned
   child process, creates one Arelle Session, loads and validates one local entry
   point, closes the session, and returns only canonical project-owned JSON.
@@ -354,6 +362,11 @@ Key responsibilities:
   accession with explicit `complete` or `failed` status. This seam is not yet
   connected to the legacy company ingestion workflow or
   `get_inline_xbrl_facts()`.
+- Process an ordered set of already acquired annual accession requests
+  sequentially and reuse unchanged results from a caller-selected local cache.
+  Failed results with a verified entry-point hash remain visible and reusable
+  until their input or processing contract changes, preventing automatic retry
+  loops during an unchanged refresh.
 - Backfill Inline XBRL enrichment once for previously ingested companies whose active local filing artifacts predate the adaptive mapping layer.
 - Check local company registry state before live SEC ingestion.
 - Reuse local company data when refresh is not due.
@@ -386,7 +399,8 @@ Current files:
 - `arelle_evidence.py`: Immutable request, filing, fact, concept, context, unit,
   relationship, formula assertion, diagnostic, namespace, source-document,
   count, timing, and result records plus canonical JSON encoding and payload
-  verification for the Plan 203 adapter.
+  verification for the Plan 203 adapter. Source-document records retain both
+  the source URI and resolved local path so dependency hashes can be rechecked.
 - `arelle_extraction.py`: Extracts project-owned facts, concept metadata,
   presentation, calculation, definition, label, reference and formula
   relationships, formula assertion counts, scoped validation diagnostics,
@@ -605,6 +619,10 @@ The project uses focused pytest coverage alongside milestone experiments:
 - `tests/test_arelle_worker.py` uses the local `data/fixtures/arelle/` taxonomy
   to verify complete and failed result envelopes, JSON round trips, validation
   scoping, session closure, and child-process cleanup.
+- `tests/test_arelle_inventory.py` copies that taxonomy into temporary storage
+  and verifies sequential processing, exact warm-cache reuse with zero workers,
+  visible failed-result reuse, acquisition and dependency hash checks, corrupt
+  cache regeneration, and processing-contract invalidation.
 - Extend automated coverage when changing deterministic logic, repositories,
   public interfaces, regressions, or important failure paths.
 

@@ -9,7 +9,7 @@ from typing import Any, ClassVar
 
 ARELLE_RESULT_COMPLETE = "complete"
 ARELLE_RESULT_FAILED = "failed"
-ARELLE_RESULT_SCHEMA_VERSION = "1"
+ARELLE_RESULT_SCHEMA_VERSION = "2"
 ARELLE_ADAPTER_VERSION = "1"
 
 
@@ -141,6 +141,7 @@ class ArelleNamespaceRecord:
 @dataclass(frozen=True)
 class ArelleSourceDocumentRecord:
     uri: str
+    local_path: str | None
     document_type: str
     target_namespace: str | None
     content_sha256: str | None

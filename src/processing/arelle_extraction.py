@@ -402,19 +402,30 @@ def _extract_namespaces(model_xbrl: Any) -> tuple[ArelleNamespaceRecord, ...]:
 def _extract_source_documents(model_xbrl: Any) -> tuple[ArelleSourceDocumentRecord, ...]:
     records: list[ArelleSourceDocumentRecord] = []
     for uri, document in sorted(model_xbrl.urlDocs.items(), key=lambda item: str(item[0])):
-        path = Path(str(uri))
-        content_sha256 = file_sha256(path) if path.is_file() else None
+        local_path = _local_source_document_path(document, uri)
+        content_sha256 = file_sha256(local_path) if local_path is not None else None
         document_type = getattr(document, "type", "unknown")
         type_name = _document_type_name(document_type)
         records.append(
             ArelleSourceDocumentRecord(
                 uri=str(uri),
+                local_path=str(local_path) if local_path is not None else None,
                 document_type=str(type_name),
                 target_namespace=_optional_text(getattr(document, "targetNamespace", None)),
                 content_sha256=content_sha256,
             )
         )
     return tuple(records)
+
+
+def _local_source_document_path(document: Any, uri: Any) -> Path | None:
+    for value in (getattr(document, "filepath", None), uri):
+        if value is None:
+            continue
+        path = Path(str(value))
+        if path.is_file():
+            return path.resolve()
+    return None
 
 
 def _network_kind(arcrole: str) -> str:
