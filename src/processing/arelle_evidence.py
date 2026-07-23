@@ -25,6 +25,7 @@ class ArelleFilingRequest:
     source_url: str | None
     content_sha256: str | None
     sec_user_agent: str | None = None
+    local_dependency_paths: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

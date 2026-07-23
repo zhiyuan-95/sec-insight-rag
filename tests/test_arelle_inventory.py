@@ -4,6 +4,8 @@ from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 
+import pytest
+
 from src.ingestion import (
     ARELLE_INVENTORY_CACHE,
     ARELLE_INVENTORY_WORKER,
@@ -230,6 +232,94 @@ def test_process_arelle_inventory_retries_failure_after_dependency_repair(
     assert repaired.worker_count == 1
     assert repaired.results[0].status != ARELLE_RESULT_FAILED
     assert repaired.items[0].source == ARELLE_INVENTORY_WORKER
+
+
+def test_process_arelle_inventory_retries_after_external_dependency_repair(
+    tmp_path: Path,
+) -> None:
+    filing_dir = tmp_path / "filing"
+    shared_dir = tmp_path / "shared-taxonomy"
+    shutil.copytree(ARELLE_FIXTURE_DIR, filing_dir)
+    shared_dir.mkdir()
+    for name in ("minimal-xbrli.xsd", "minimal-linkbase.xml"):
+        shutil.copy2(ARELLE_FIXTURE_DIR / name, shared_dir / name)
+    schema_content = (ARELLE_FIXTURE_DIR / "minimal-company.xsd").read_bytes()
+    entry_point = filing_dir / "minimal-instance.xbrl"
+    entry_point.write_text(
+        entry_point.read_text(encoding="utf-8").replace(
+            'xlink:href="minimal-company.xsd"',
+            'xlink:href="../shared-taxonomy/minimal-company.xsd"',
+        ),
+        encoding="utf-8",
+    )
+    request = replace(
+        _request(entry_point, accession_number="0000320193-25-000001"),
+        local_dependency_paths=(str(shared_dir),),
+    )
+    cache_dir = tmp_path / "cache"
+
+    failed = process_arelle_inventory(
+        (request,),
+        cache_dir=cache_dir,
+        timeout_seconds=30.0,
+    )
+
+    assert failed.results[0].status == ARELLE_RESULT_FAILED
+
+    (shared_dir / "minimal-company.xsd").write_bytes(schema_content)
+    repaired = process_arelle_inventory(
+        (request,),
+        cache_dir=cache_dir,
+        timeout_seconds=30.0,
+    )
+
+    assert repaired.worker_count == 1
+    assert repaired.results[0].status != ARELLE_RESULT_FAILED
+
+
+def test_process_arelle_inventory_rejects_interrupted_cache_publication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entry_point = tmp_path / "invalid.xbrl"
+    entry_point.write_text("<not-xbrl/>", encoding="utf-8")
+    dependency = tmp_path / "dependency.xsd"
+    dependency.write_text("first", encoding="utf-8")
+    request = replace(
+        _request(entry_point, accession_number="0000320193-25-000099"),
+        local_dependency_paths=(str(dependency),),
+    )
+    cache_dir = tmp_path / "cache"
+    process_arelle_inventory(
+        (request,),
+        cache_dir=cache_dir,
+        timeout_seconds=30.0,
+    )
+    dependency.write_text("second", encoding="utf-8")
+    original_replace = Path.replace
+
+    def interrupt_manifest_publish(path: Path, target: Path) -> Path:
+        if path.name == "inputs.json.tmp":
+            raise OSError("simulated interrupted manifest publication")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", interrupt_manifest_publish)
+    with pytest.raises(OSError, match="interrupted manifest"):
+        process_arelle_inventory(
+            (request,),
+            cache_dir=cache_dir,
+            timeout_seconds=30.0,
+        )
+    monkeypatch.setattr(Path, "replace", original_replace)
+
+    regenerated = process_arelle_inventory(
+        (request,),
+        cache_dir=cache_dir,
+        timeout_seconds=30.0,
+    )
+
+    assert regenerated.worker_count == 1
+    assert regenerated.items[0].source == ARELLE_INVENTORY_WORKER
 
 
 def test_process_arelle_inventory_rejects_and_regenerates_corrupt_cache(

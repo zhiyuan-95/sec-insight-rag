@@ -340,8 +340,9 @@ Current files:
   result; cache misses run through the isolated worker one at a time. Complete
   and failed results remain explicit, while corrupt, changed, or incompatible
   cache entries are regenerated. A sibling versioned input manifest records
-  every locally acquired file path and hash so dependency repairs also
-  invalidate cached failures that intentionally contain no partial evidence.
+  the accession directory plus caller-declared external local dependency paths
+  and hashes, so dependency repairs also invalidate cached failures that
+  intentionally contain no partial evidence.
 - `arelle_worker.py`: Plan 203 accession boundary that starts a fresh spawned
   child process, creates one Arelle Session, loads and validates one local entry
   point, closes the session, and returns only canonical project-owned JSON.
@@ -624,8 +625,8 @@ The project uses focused pytest coverage alongside milestone experiments:
 - `tests/test_arelle_inventory.py` copies that taxonomy into temporary storage
   and verifies sequential processing, exact warm-cache reuse with zero workers,
   visible failed-result reuse, acquisition and dependency hash checks, corrupt
-  cache regeneration, failed-dependency repair, and processing-contract
-  invalidation.
+  cache regeneration, internal and caller-declared external dependency repair,
+  interrupted cache publication, and processing-contract invalidation.
 - Extend automated coverage when changing deterministic logic, repositories,
   public interfaces, regressions, or important failure paths.
 

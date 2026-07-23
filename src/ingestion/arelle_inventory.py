@@ -23,7 +23,7 @@ from src.processing.arelle_extraction import file_sha256
 
 ARELLE_INVENTORY_CACHE = "cache"
 ARELLE_INVENTORY_WORKER = "worker"
-ARELLE_INPUT_MANIFEST_VERSION = "1"
+ARELLE_INPUT_MANIFEST_VERSION = "2"
 
 
 @dataclass(frozen=True)
@@ -231,23 +231,44 @@ def _build_input_manifest(
     entry_point = Path(request.entry_point_path)
     input_root = entry_point.parent.resolve()
     cache_root = cache_dir.resolve()
-    if _is_within(input_root, cache_root):
+    declared_dependencies = tuple(
+        sorted(
+            {Path(path).resolve() for path in request.local_dependency_paths},
+            key=lambda path: path.as_posix(),
+        )
+    )
+    input_locations = (input_root, *declared_dependencies)
+    if any(_is_within(location, cache_root) for location in input_locations):
         raise ValueError(
-            "Arelle cache directory cannot contain the acquired filing directory"
+            "Arelle result cache cannot contain acquired filing inputs"
         )
-    files: list[dict[str, str]] = []
-    for path in sorted(input_root.rglob("*"), key=lambda item: str(item)):
-        if not path.is_file() or _is_within(path.resolve(), cache_root):
+    files_by_path: dict[str, Path] = {}
+    missing_paths: list[str] = []
+    for location in input_locations:
+        if location.is_file():
+            files_by_path[location.as_posix()] = location
             continue
-        files.append(
-            {
-                "path": path.relative_to(input_root).as_posix(),
-                "sha256": file_sha256(path),
-            }
-        )
+        if not location.is_dir():
+            missing_paths.append(location.as_posix())
+            continue
+        for path in location.rglob("*"):
+            resolved_path = path.resolve()
+            if path.is_file() and not _is_within(resolved_path, cache_root):
+                files_by_path[resolved_path.as_posix()] = resolved_path
+    files = [
+        {
+            "path": path_text,
+            "sha256": file_sha256(path),
+        }
+        for path_text, path in sorted(files_by_path.items())
+    ]
     return {
         "manifest_version": ARELLE_INPUT_MANIFEST_VERSION,
-        "entry_point": entry_point.relative_to(input_root).as_posix(),
+        "entry_point": entry_point.resolve().as_posix(),
+        "local_dependency_paths": [
+            path.as_posix() for path in declared_dependencies
+        ],
+        "missing_paths": sorted(missing_paths),
         "files": files,
     }
 
