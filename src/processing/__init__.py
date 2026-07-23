@@ -112,6 +112,19 @@ from src.processing.observation_reconciliation import (
     SemanticFactIdentity,
     reconcile_accession_observations,
 )
+from src.processing.semantic_evidence import (
+    SEMANTIC_EVIDENCE_SCHEMA_VERSION,
+    SemanticConceptEvidence,
+    SemanticEvidencePacket,
+    SemanticEvidencePeriod,
+    SemanticFormulaAssertionEvidence,
+    SemanticRecommendationGroup,
+    SemanticRelationshipEvidence,
+    SemanticTargetDefinition,
+    SemanticValidationEvidence,
+    build_semantic_evidence_packet,
+    group_semantic_evidence_packets,
+)
 from src.processing.periods import classify_period, parse_sec_date, validate_period
 from src.processing.xbrl_normalizer import NormalizedFact, find_duplicate_facts, normalize_companyfacts, normalize_fact_entry
 
@@ -168,6 +181,15 @@ __all__ = [
     "ReconciledMetadataField",
     "ReconciliationSourceObservation",
     "SemanticFactIdentity",
+    "SemanticConceptEvidence",
+    "SemanticEvidencePacket",
+    "SemanticEvidencePeriod",
+    "SemanticFormulaAssertionEvidence",
+    "SemanticRecommendationGroup",
+    "SemanticRelationshipEvidence",
+    "SemanticTargetDefinition",
+    "SemanticValidationEvidence",
+    "SEMANTIC_EVIDENCE_SCHEMA_VERSION",
     "StatementNetworkIdentity",
     "MetricCoverageResolution",
     "TargetConceptCandidate",
@@ -195,6 +217,8 @@ __all__ = [
     "active_period_keys_from_periods",
     "all_canonical_metric_targets",
     "canonical_metric_targets",
+    "build_semantic_evidence_packet",
+    "group_semantic_evidence_packets",
     "classify_period",
     "find_duplicate_facts",
     "industry_label_assignments_for_company",

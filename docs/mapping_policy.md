@@ -217,6 +217,39 @@ mapping has run. Successfully mapped metrics are excluded. Shadow candidates
 do not remove a target from this set and their scores or evidence are not part
 of the interface supplied to the later LLM judge-packet builder.
 
+The Plan 203 judge-packet builder consumes that exact missing-target set. It
+creates one versioned, deterministic semantic packet containing:
+
+1. target definitions and governed candidate concept identities
+2. usable period-backed concepts, plus focused context-only concepts
+3. labels, documentation, taxonomy and source-system attribution
+4. precedence-selected presentation, calculation, definition and formula
+   relationships, including validation-blocked relationships marked unusable
+5. formula assertion status and validation evidence identifiers
+
+Only a concept backed by a usable precedence-selected fact for the period is
+marked as an executable formula component. Related concepts without such a
+fact remain visible as context but cannot be selected as components. Arelle
+relationship validation does not silently remove evidence from the packet:
+blocked relationships remain visible with an explicit unusable marker so the
+judges can assess the available accounting context.
+
+The packet explicitly marks Arelle semantic evidence as available or
+unavailable. When cached Arelle concept IDs are unavailable, the judges still
+receive the target definitions and usable concept pool, but no unscoped
+relationship graph is substituted.
+
+Reported numeric values, raw fact IDs, dates, units, accessions, fiscal labels,
+and shadow-inference scores are excluded from packet content and its stable
+hash. Period identifiers are carried only as application membership.
+
+Annual periods share one future recommendation request only when their company,
+complete semantic packet (including exact missing targets), and set of exactly
+three distinct judge models are identical. Model order is not material; a
+different model, target, concept, relationship, assertion, validation, or
+company creates a different group. This grouping seam does not call models,
+record judge responses, create financial metrics, or change approved mappings.
+
 Unresolved coverage should be reviewed at the internal-metric level. The metric
 coverage resolver groups all target tags for one metric and presents one review
 surface with:

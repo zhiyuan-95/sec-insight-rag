@@ -93,6 +93,13 @@ src/processing/direct_metric_mapping.py
   +-- src/storage/mapping_shadow_candidates_repository.py
         -> persist inspectable shadow evidence outside financial_metrics
 
+src/processing/semantic_evidence.py
+  |
+  +-- build a versioned nonnumeric packet for the exact missing-target set
+  +-- mark only precedence-selected period concepts as executable components
+  +-- retain focused Arelle context, relationships, assertions, and validations
+  +-- group company periods with identical packets and three-model lineups
+
 experiments/MS5/milestone5_retrieval_pipeline.py
   |
   v
@@ -471,6 +478,18 @@ Current files:
   concept metadata; and returns the exact canonical targets still missing.
   Shadow suggestions never create metrics and remain separate from the missing
   targets that the later judge-packet increment will consume.
+- `semantic_evidence.py`: Builds deterministic, versioned evidence packets from
+  the exact direct-mapping missing-target set, the precedence-selected usable
+  period concepts, and cached Arelle structural results. Packets contain target
+  definitions, field-level concept meaning and source identifiers, focused
+  relationship neighborhoods, assertion statuses, and validation identifiers.
+  They exclude reported values and filing/period lineage, mark related
+  concepts without a usable period fact as context-only, and preserve blocked
+  relationships as explicitly unusable judge context. When target-scoped
+  Arelle concept IDs are unavailable, the packet says so and does not admit an
+  unscoped relationship graph. The module also groups
+  periods only when company, packet content, and the normalized three-model
+  lineup match; it does not call judges or persist recommendations.
 - `formula_proposals.py`: Builds target-unit-compatible, statement-bucketed raw fact contexts for report-only LLM formula proposals, keeps only the primary monetary unit per filing period for monetary targets while preserving all raw units in storage/export evidence, collapses identical period raw-concept pools into one provider context with period coverage, computes exact reusable formula context fingerprints and statement-scoped batch keys, normalizes single-target and batch provider responses, caches successful structured formula, zero-target, or no-formula decisions per target/context/provider, and deterministically validates formula components or cited zero-evidence facts against representative raw XBRL facts. Formula validation distinguishes actual fact dates inside comparative filings, prefers an undimensioned fact when dimensional variants coexist for the same concept/date, and still rejects truly ambiguous same-date duplicates.
 - `metric_coverage.py`: Collapses tag-level target coverage and formula/zero diagnostics into one metric-level review surface. It does not approve mappings, persist recovered values, or feed indicators.
 - `active_window.py`: Selects the active analysis window: latest 5 fiscal years of 10-K data and latest 12 quarters of 10-Q data.
@@ -513,6 +532,16 @@ Key responsibilities:
 - Keep deterministic inferred candidates shadow-only: preserve their score and
   Arelle metadata evidence separately, never count them as mapped coverage, and
   never include them in the exact missing-target interface.
+- Build the later judge input only for the exact targets still missing after
+  direct mapping. Keep numeric values, raw fact IDs, units, dates, accessions,
+  fiscal labels, and shadow scores outside the packet and its content hash.
+- Mark a semantic concept as formula-component eligible only when the current
+  period has a usable precedence-selected fact. Keep relationship-connected
+  concepts without such a fact as context-only, including validation-blocked
+  relationship evidence for the judges to assess.
+- Reuse one future recommendation request only for the same company, identical
+  packet content and exact same set of three judge models. Period IDs remain
+  application membership and never affect semantic grouping.
 - Resolve coverage at the internal-metric level before human or LLM review:
   mapped metrics need no action, approved alternate concepts count as covered,
   and unresolved metrics expose formula-from-raw-concepts, zero-target, or
@@ -742,6 +771,10 @@ The project uses focused pytest coverage alongside milestone experiments:
   targets, and shadow-only separation.
 - `tests/test_mapping_shadow_candidates.py` verifies inspectable shadow
   persistence while the financial-metric store remains unchanged.
+- `tests/test_semantic_evidence.py` verifies packet contents, nonnumeric and
+  filing-field exclusions, executable-versus-context-only concepts, retained
+  blocked relationships, exact grouping reuse, grouping boundaries, and the
+  required three-distinct-model lineup.
 - Extend automated coverage when changing deterministic logic, repositories,
   public interfaces, regressions, or important failure paths.
 
