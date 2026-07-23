@@ -526,6 +526,61 @@ def test_unusable_company_facts_cannot_replace_unusable_arelle() -> None:
     )
 
 
+def test_reconciliation_retains_every_equivalent_source_observation() -> None:
+    arelle = ReconciliationSourceObservation(
+        raw_fact_id=1,
+        fact=_fact(source="sec_inline_xbrl", value_raw=100),
+        arelle_fact_id="fact-revenue",
+    )
+    company_facts = ReconciliationSourceObservation(
+        raw_fact_id=2,
+        fact=_fact(source="sec_companyfacts", value_raw=100),
+    )
+    equivalent_company_facts = replace(company_facts, raw_fact_id=3)
+
+    result = reconcile_accession_observations(
+        _arelle_result(),
+        (arelle, company_facts, equivalent_company_facts),
+    )
+
+    reconciled = result.observations[0]
+    assert reconciled.outcome == RECONCILIATION_MATCHED
+    assert reconciled.selected == arelle
+    assert reconciled.source_observations == (
+        arelle,
+        company_facts,
+        equivalent_company_facts,
+    )
+
+
+def test_unusable_company_facts_does_not_create_conflict_with_valid_arelle() -> None:
+    arelle = ReconciliationSourceObservation(
+        raw_fact_id=1,
+        fact=_fact(source="sec_inline_xbrl", value_raw=100),
+        arelle_fact_id="fact-revenue",
+    )
+    company_facts = ReconciliationSourceObservation(
+        raw_fact_id=2,
+        fact=replace(
+            _fact(source="sec_companyfacts", value_raw=100),
+            value_raw=None,
+            value=None,
+            quality_flags=(MISSING_VALUE,),
+        ),
+    )
+
+    result = reconcile_accession_observations(
+        _arelle_result(),
+        (arelle, company_facts),
+    )
+
+    reconciled = result.observations[0]
+    assert reconciled.outcome == RECONCILIATION_ARELLE_ONLY
+    assert reconciled.selected == arelle
+    assert reconciled.availability_markers == ("company_facts_unusable",)
+    assert reconciled.source_observations == (arelle, company_facts)
+
+
 def _fact(*, source: str, value_raw: object) -> NormalizedFact:
     return NormalizedFact(
         cik="0000320193",

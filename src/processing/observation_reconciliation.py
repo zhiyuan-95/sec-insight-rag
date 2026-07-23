@@ -11,6 +11,7 @@ from src.processing.arelle_evidence import (
     ArelleDiagnosticRecord,
     ArelleFilingResult,
 )
+from src.processing.inline_xbrl import INLINE_XBRL_SOURCE
 from src.processing.quality import (
     AMBIGUOUS_UNIT,
     DUPLICATE_FACT,
@@ -25,7 +26,7 @@ from src.processing.quality import (
 )
 from src.processing.xbrl_normalizer import NormalizedFact
 
-ARELLE_OBSERVATION_SOURCE = "sec_inline_xbrl"
+ARELLE_OBSERVATION_SOURCE = INLINE_XBRL_SOURCE
 COMPANY_FACTS_OBSERVATION_SOURCE = "sec_companyfacts"
 RECONCILIATION_ARELLE_ONLY = "arelle_only"
 RECONCILIATION_AMBIGUOUS_COMPANY_FACTS = "ambiguous_company_facts"
@@ -195,7 +196,7 @@ def reconcile_accession_observations(
                     outcome=RECONCILIATION_AMBIGUOUS_COMPANY_FACTS,
                     match_kind=None,
                     selected=None,
-                    source_observations=(arelle, *company_facts_observations),
+                    source_observations=tuple(group),
                     availability_markers=(
                         "arelle_fact_blocked"
                         if blocking_diagnostics
@@ -224,7 +225,7 @@ def reconcile_accession_observations(
                     outcome=RECONCILIATION_COMPANY_FACTS_REPLACEMENT,
                     match_kind=None,
                     selected=company_facts if company_facts_usable else None,
-                    source_observations=(arelle, company_facts),
+                    source_observations=tuple(group),
                     availability_markers=tuple(availability_markers),
                     blocking_diagnostics=blocking_diagnostics,
                     metadata=metadata,
@@ -238,8 +239,21 @@ def reconcile_accession_observations(
                     outcome=RECONCILIATION_AMBIGUOUS_COMPANY_FACTS,
                     match_kind=None,
                     selected=arelle,
-                    source_observations=(arelle, *company_facts_observations),
+                    source_observations=tuple(group),
                     availability_markers=("company_facts_ambiguous",),
+                    metadata=metadata,
+                )
+            )
+            continue
+        if not _numeric_observation_is_usable(company_facts):
+            reconciled.append(
+                ReconciledObservation(
+                    semantic_identity=semantic_identity,
+                    outcome=RECONCILIATION_ARELLE_ONLY,
+                    match_kind=None,
+                    selected=arelle,
+                    source_observations=tuple(group),
+                    availability_markers=("company_facts_unusable",),
                     metadata=metadata,
                 )
             )
@@ -263,7 +277,7 @@ def reconcile_accession_observations(
                     else "numeric_equivalent" if numeric_match else None
                 ),
                 selected=arelle,
-                source_observations=(arelle, company_facts),
+                source_observations=tuple(group),
                 metadata=metadata,
             )
         )
