@@ -78,7 +78,7 @@ def process_arelle_inventory(
             prepared_request,
             timeout_seconds=timeout_seconds,
         )
-        if prepared_request.content_sha256 is not None and result.status in {
+        if _entry_point_matches_request(prepared_request) and result.status in {
             ARELLE_RESULT_COMPLETE,
             ARELLE_RESULT_FAILED,
         }:
@@ -124,7 +124,7 @@ def _read_valid_cached_result(
     cache_path: Path,
     request: ArelleFilingRequest,
 ) -> ArelleFilingResult | None:
-    if not cache_path.is_file() or request.content_sha256 is None:
+    if not cache_path.is_file() or not _entry_point_matches_request(request):
         return None
     try:
         result = ArelleFilingResult.from_json(
@@ -165,6 +165,13 @@ def _filing_identity_matches(
         and filing.entry_point_path == request.entry_point_path
         and filing.source_url == request.source_url
     )
+
+
+def _entry_point_matches_request(request: ArelleFilingRequest) -> bool:
+    if request.content_sha256 is None:
+        return False
+    path = Path(request.entry_point_path)
+    return path.is_file() and file_sha256(path) == request.content_sha256
 
 
 def _source_document_matches(document: ArelleSourceDocumentRecord) -> bool:

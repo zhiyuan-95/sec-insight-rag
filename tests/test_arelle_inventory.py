@@ -1,6 +1,7 @@
 import multiprocessing
 import shutil
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 
 from src.ingestion import (
@@ -115,12 +116,16 @@ def test_process_arelle_inventory_preserves_acquisition_content_hash(
 ) -> None:
     filing_dir = tmp_path / "filing"
     shutil.copytree(ARELLE_FIXTURE_DIR, filing_dir)
+    entry_point = filing_dir / "minimal-instance.xbrl"
+    expected_content = entry_point.read_bytes()
+    expected_sha256 = sha256(expected_content).hexdigest()
+    entry_point.write_text("<changed-after-acquisition/>", encoding="utf-8")
     request = replace(
         _request(
-            filing_dir / "minimal-instance.xbrl",
+            entry_point,
             accession_number="0000320193-25-000001",
         ),
-        content_sha256="0" * 64,
+        content_sha256=expected_sha256,
     )
 
     result = process_arelle_inventory(
@@ -132,6 +137,18 @@ def test_process_arelle_inventory_preserves_acquisition_content_hash(
     assert result.worker_count == 1
     assert result.results[0].status == ARELLE_RESULT_FAILED
     assert "content hash" in result.results[0].diagnostics[0].message
+    assert not Path(result.items[0].cache_path).exists()
+
+    entry_point.write_bytes(expected_content)
+    repaired = process_arelle_inventory(
+        (request,),
+        cache_dir=tmp_path / "cache",
+        timeout_seconds=30.0,
+    )
+
+    assert repaired.worker_count == 1
+    assert repaired.results[0].status != ARELLE_RESULT_FAILED
+    assert Path(repaired.items[0].cache_path).is_file()
 
 
 def test_process_arelle_inventory_invalidates_changed_dependency(
