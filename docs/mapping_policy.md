@@ -14,6 +14,9 @@ raw_xbrl_facts
 mapping catalog
   source-controlled expectations and approved raw concept mappings
 
+mapping_shadow_candidates
+  inspectable non-authoritative Plan 203 mapping suggestions
+
 financial_metrics
   curated base metrics used by indicators and analysis
 ```
@@ -194,9 +197,25 @@ Mapping runs through deterministic hard mapping only:
 1. source-controlled mappings from `src/processing/mapping_catalog.py`
 2. previously approved learned mappings from `xbrl_concept_mappings`
 
-Only those approved mappings can create `financial_metrics` rows. Missing target
-metrics do not trigger candidate mapping generation. They remain unavailable as
-base metrics until a source-controlled or approved learned mapping covers them.
+Only those approved mappings can create direct `financial_metrics` rows. The
+legacy active-window workflow does not trigger candidate mapping generation.
+The additive Plan 203 annual mapping seam may generate deterministic shadow
+candidates after direct mapping, but those candidates are stored only in
+`mapping_shadow_candidates`; they never count as mapped coverage and cannot
+populate `financial_metrics`.
+
+For each Plan 203 fiscal period, direct mapping consumes only the
+latest-valid, precedence-selected Arelle or Company Facts observation view. A
+known concept-to-metric mapping is usable only when the selected observation
+has a numeric value, compatible instant or duration period type, compatible
+basic unit family, usable consolidated/dimensional context, and no blocking
+diagnostic tied to that selected fact. A rejected direct candidate leaves its
+target missing.
+
+The period's missing-target set is calculated only after every eligible direct
+mapping has run. Successfully mapped metrics are excluded. Shadow candidates
+do not remove a target from this set and their scores or evidence are not part
+of the interface supplied to the later LLM judge-packet builder.
 
 Unresolved coverage should be reviewed at the internal-metric level. The metric
 coverage resolver groups all target tags for one metric and presents one review

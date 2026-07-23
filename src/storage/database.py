@@ -231,6 +231,47 @@ def initialize_database(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         """
+        CREATE TABLE IF NOT EXISTS mapping_shadow_candidates (
+            shadow_candidate_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            raw_fact_id INTEGER NOT NULL,
+            taxonomy TEXT NOT NULL,
+            concept TEXT NOT NULL,
+            metric_name TEXT NOT NULL,
+            statement_type TEXT NOT NULL,
+            fiscal_year INTEGER NOT NULL,
+            fiscal_period TEXT NOT NULL,
+            score REAL NOT NULL,
+            match_method TEXT NOT NULL,
+            evidence_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (
+                company_id,
+                raw_fact_id,
+                metric_name,
+                match_method
+            ),
+            FOREIGN KEY (company_id)
+                REFERENCES companies(company_id) ON DELETE CASCADE,
+            FOREIGN KEY (raw_fact_id)
+                REFERENCES raw_xbrl_facts(id) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_mapping_shadow_candidates_period
+        ON mapping_shadow_candidates (
+            company_id,
+            fiscal_year,
+            fiscal_period,
+            metric_name
+        )
+        """
+    )
+    connection.execute(
+        """
         CREATE TABLE IF NOT EXISTS filings (
             filing_id INTEGER PRIMARY KEY AUTOINCREMENT,
             company_id INTEGER NOT NULL,

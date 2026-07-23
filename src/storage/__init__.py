@@ -24,6 +24,10 @@ from src.storage.industry_labels_repository import (
 )
 from src.storage.indicators_repository import FinancialIndicatorRepository
 from src.storage.metrics_repository import FinancialMetric, FinancialMetricRepository
+from src.storage.mapping_shadow_candidates_repository import (
+    MappingShadowCandidateRepository,
+    StoredMappingShadowCandidate,
+)
 from src.storage.retrieval_repository import (
     FilingChunk,
     RetrievalIndexState,
@@ -48,6 +52,7 @@ __all__ = [
     "MAPPING_SCOPE_GLOBAL",
     "MAPPING_SCOPE_INDUSTRY",
     "MAPPING_STATUS_APPROVED",
+    "MappingShadowCandidateRepository",
     "RawFactRepository",
     "RawFactConflictEvidence",
     "RetrievalIndexState",
@@ -56,6 +61,7 @@ __all__ = [
     "StoredCompanyIndustryLabel",
     "StoredFiscalPeriodIndustryLabelSnapshot",
     "StoredFilingChunk",
+    "StoredMappingShadowCandidate",
     "connect_sqlite",
     "initialize_database",
 ]

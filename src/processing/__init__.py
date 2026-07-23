@@ -52,6 +52,14 @@ from src.processing.company_industry_labels import (
     industry_label_assignments_for_company,
     industry_label_evidence_for_company,
 )
+from src.processing.direct_metric_mapping import (
+    DirectConceptMapping,
+    DirectMetricMappingLineage,
+    DirectMappingRejection,
+    PeriodMetricMappingResult,
+    ShadowMappingCandidate,
+    map_precedence_selected_period,
+)
 from src.processing.concepts import COMMON_GAAP_CONCEPTS, DEFAULT_FORMS, SUPPORTED_REPORT_FORMS
 from src.processing.errors import InlineXbrlExtractionError, XbrlPayloadError, XbrlProcessingError
 from src.processing.inline_xbrl import (
@@ -144,6 +152,9 @@ __all__ = [
     "CompanyPrecedenceResult",
     "ConceptIdentity",
     "ConceptMetadataResolution",
+    "DirectConceptMapping",
+    "DirectMetricMappingLineage",
+    "DirectMappingRejection",
     "COMMON_BASE_LABEL",
     "FactPrecedenceResolution",
     "NormalizedFact",
@@ -151,6 +162,8 @@ __all__ = [
     "PrecedenceObservationCandidate",
     "PrecedenceSelectedObservation",
     "PrecedenceStatementNetwork",
+    "PeriodMetricMappingResult",
+    "ShadowMappingCandidate",
     "ReconciledObservation",
     "ReconciledMetadataField",
     "ReconciliationSourceObservation",
@@ -190,6 +203,7 @@ __all__ = [
     "mapping_candidates_by_concept",
     "mapping_candidates_by_key",
     "map_raw_facts_to_base_metrics",
+    "map_precedence_selected_period",
     "metric_coverage_report_rows",
     "missing_metric_targets",
     "normalize_companyfacts",

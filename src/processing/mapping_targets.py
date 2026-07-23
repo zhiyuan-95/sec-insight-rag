@@ -24,6 +24,8 @@ class TargetConceptCandidate:
     industry_labels: tuple[str, ...]
     required_for_core: bool
     required_for_specialized_indicators: bool
+    consolidated_or_segment: str = "consolidated"
+    priority: int = 100
 
 
 @dataclass(frozen=True)
@@ -105,6 +107,8 @@ def _canonical_metric_targets_from_facts(
                 split_labels,
                 target.required_for_core,
                 target.required_for_specialized_indicators,
+                target.consolidated_or_segment,
+                target.priority,
             )
         row["required_for_core"] = bool(
             row["required_for_core"] or target.required_for_core
@@ -147,6 +151,8 @@ def _merge_target_concept_candidate(
     industry_labels: tuple[str, ...],
     required_for_core: bool,
     required_for_specialized_indicators: bool,
+    consolidated_or_segment: str,
+    priority: int,
 ) -> None:
     key = (taxonomy, concept)
     current = candidates.get(key)
@@ -159,6 +165,8 @@ def _merge_target_concept_candidate(
             industry_labels=tuple(sorted(industry_labels)),
             required_for_core=required_for_core,
             required_for_specialized_indicators=required_for_specialized_indicators,
+            consolidated_or_segment=consolidated_or_segment,
+            priority=priority,
         )
         return
     candidates[key] = TargetConceptCandidate(
@@ -172,4 +180,6 @@ def _merge_target_concept_candidate(
             current.required_for_specialized_indicators
             or required_for_specialized_indicators
         ),
+        consolidated_or_segment=current.consolidated_or_segment,
+        priority=min(current.priority, priority),
     )

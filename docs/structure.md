@@ -84,6 +84,15 @@ src/ingestion/industry_labels.py
   +-- src/storage/industry_labels_repository.py
         -> reject any attempt to rewrite an accession-period decision
 
+src/processing/direct_metric_mapping.py
+  |
+  +-- map only precedence-selected observations for one annual period
+  +-- apply numeric, period, unit, dimension, and diagnostic compatibility
+  +-- return exact still-missing metric targets after approved direct mapping
+  +-- keep deterministic lexical alternatives in shadow-only output
+  +-- src/storage/mapping_shadow_candidates_repository.py
+        -> persist inspectable shadow evidence outside financial_metrics
+
 experiments/MS5/milestone5_retrieval_pipeline.py
   |
   v
@@ -108,6 +117,7 @@ stock_data.db                SQLite database
                              immutable original-accession fiscal-period label decisions
   filings                    ingested filing inventory
   xbrl_concept_mappings      governed approved learned mappings
+  mapping_shadow_candidates  non-authoritative period mapping suggestions
   financial_metrics          base metrics mapped from raw XBRL facts
   financial_indicators       derived indicators with formulas and traceability
   filing_chunks              canonical section-aware filing text chunks
@@ -419,8 +429,9 @@ Boundary rule:
 ### `src/processing/`
 
 Companyfacts and Inline XBRL normalization, active-window selection,
-canonical target coverage helpers, deterministic base metric mapping, and
-metric-first formula/zero evidence resolution for mapping review.
+canonical target coverage helpers, legacy base metric mapping, Plan 203
+precedence-selected direct mapping, and metric-first formula/zero evidence
+resolution for mapping review.
 
 Current files:
 
@@ -447,7 +458,19 @@ Current files:
   field. It preserves valid earlier facts and networks through partial or
   invalid amendments, retains duplicate/conflict lineage, and exposes an exact
   accounting-context gate for mixed-accession formula components.
-- `mapping_targets.py`: Builds canonical target definitions and missing-target checks for hard-mapping coverage.
+- `mapping_targets.py`: Builds canonical target definitions, preserves
+  source-controlled concept priority and consolidation contracts, and provides
+  missing-target checks for hard-mapping coverage.
+- `direct_metric_mapping.py`: Maps precedence-selected Arelle or Company Facts
+  observations for one fiscal period through source-controlled and active
+  approved concept mappings. It applies the minimal numeric, period-type,
+  basic-unit-family, dimensional/consolidation, and fact-diagnostic
+  compatibility rules; preserves source-controlled or approved-mapping
+  lineage; returns rejected-candidate evidence; generates
+  non-authoritative lexical shadow suggestions from precedence-selected Arelle
+  concept metadata; and returns the exact canonical targets still missing.
+  Shadow suggestions never create metrics and remain separate from the missing
+  targets that the later judge-packet increment will consume.
 - `formula_proposals.py`: Builds target-unit-compatible, statement-bucketed raw fact contexts for report-only LLM formula proposals, keeps only the primary monetary unit per filing period for monetary targets while preserving all raw units in storage/export evidence, collapses identical period raw-concept pools into one provider context with period coverage, computes exact reusable formula context fingerprints and statement-scoped batch keys, normalizes single-target and batch provider responses, caches successful structured formula, zero-target, or no-formula decisions per target/context/provider, and deterministically validates formula components or cited zero-evidence facts against representative raw XBRL facts. Formula validation distinguishes actual fact dates inside comparative filings, prefers an undimensioned fact when dimensional variants coexist for the same concept/date, and still rejects truly ambiguous same-date duplicates.
 - `metric_coverage.py`: Collapses tag-level target coverage and formula/zero diagnostics into one metric-level review surface. It does not approve mappings, persist recovered values, or feed indicators.
 - `active_window.py`: Selects the active analysis window: latest 5 fiscal years of 10-K data and latest 12 quarters of 10-Q data.
@@ -481,6 +504,15 @@ Key responsibilities:
   retaining invalid, quarantined, equivalent, and superseded source history;
   apply amendment precedence separately to facts, statement networks, and
   concept metadata fields.
+- Map only the selected observation view for an annual fiscal period. Revalidate
+  catalog and approved mappings for numeric value, period type, basic unit
+  family, dimensions/consolidation, and blocking diagnostics before producing
+  a direct base metric.
+- Keep source-controlled priority deterministic when one raw concept is an
+  applicable alias for more than one period target.
+- Keep deterministic inferred candidates shadow-only: preserve their score and
+  Arelle metadata evidence separately, never count them as mapped coverage, and
+  never include them in the exact missing-target interface.
 - Resolve coverage at the internal-metric level before human or LLM review:
   mapped metrics need no action, approved alternate concepts count as covered,
   and unresolved metrics expose formula-from-raw-concepts, zero-target, or
@@ -524,6 +556,11 @@ Current files:
   snapshots. Exact snapshot replays are idempotent; a different payload for the
   same company, original accession, fiscal year, and fiscal period is rejected.
 - `concept_mappings_repository.py`: `ConceptMappingRepository` for scoped approved learned raw-concept mappings used by hard mapping.
+- `mapping_shadow_candidates_repository.py`:
+  `MappingShadowCandidateRepository` for period-scoped deterministic
+  suggestions and their evidence. Its period adapter accepts the shadow output
+  of `direct_metric_mapping.py` directly. These rows are non-authoritative and
+  are stored separately from governed concept mappings and financial metrics.
 - `company_repository.py`: `CompanyRepository` and `CompanyRecord` for company identity and refresh state.
 - `filings_repository.py`: `FilingRepository` and `FilingRecord` for ingested filing metadata and active-window state.
 - `metrics_repository.py`: `FinancialMetricRepository` and `FinancialMetric` for mapped base financial metrics.
@@ -538,6 +575,9 @@ Key responsibilities:
 - Persist legacy company labels, immutable original-accession fiscal-period
   label snapshots (including empty-label decisions), and governed learned
   mapping decisions.
+- Persist inspectable shadow mapping candidates with company, raw-fact, target,
+  period, score, method, and evidence lineage without creating a
+  `financial_metrics` row.
 - Upsert facts using semantic identity plus accession and source; keep fiscal
   labels, form, and SEC frame as provenance rather than identity.
 - Collapse equivalent same-accession occurrences with compact references, and
@@ -696,6 +736,12 @@ The project uses focused pytest coverage alongside milestone experiments:
   invalid and omitted amendment handling, equivalent duplicate lineage,
   unresolved conflict quarantine, partial statement-network replacement,
   field-level concept metadata, and compatible mixed-accession components.
+- `tests/test_direct_metric_mapping.py` verifies precedence-selected Arelle and
+  Company Facts direct mapping, active approved mappings, all minimal
+  compatibility rejections, source-controlled conflict priority, exact missing
+  targets, and shadow-only separation.
+- `tests/test_mapping_shadow_candidates.py` verifies inspectable shadow
+  persistence while the financial-metric store remains unchanged.
 - Extend automated coverage when changing deterministic logic, repositories,
   public interfaces, regressions, or important failure paths.
 
