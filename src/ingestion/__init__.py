@@ -28,6 +28,10 @@ from src.ingestion.filings import (
     select_latest_filings,
 )
 from src.ingestion.inline_xbrl import get_inline_xbrl_facts
+from src.ingestion.industry_labels import (
+    FiscalPeriodIndustryClassificationSource,
+    classify_and_persist_fiscal_period_industry_labels,
+)
 from src.ingestion.sec_client import SecClient
 from src.ingestion.submissions import (
     build_submissions_url,
@@ -55,6 +59,7 @@ __all__ = [
     "ArelleInventoryResult",
     "CompanyDeletionResult",
     "CompanyIngestionResult",
+    "FiscalPeriodIndustryClassificationSource",
     "SecClient",
     "SecConfigurationError",
     "SecHttpError",
@@ -64,6 +69,7 @@ __all__ = [
     "TickerMapping",
     "TickerNotFoundError",
     "build_companyfacts_url",
+    "classify_and_persist_fiscal_period_industry_labels",
     "build_filing_document_url",
     "build_submissions_url",
     "download_filing_document",

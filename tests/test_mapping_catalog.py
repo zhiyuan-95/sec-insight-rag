@@ -66,6 +66,41 @@ def test_industry_targets_extend_common_targets_without_duplicate_mappings() -> 
     assert any("Energy" in target.industry_label for target in targets)
 
 
+def test_multiple_period_labels_produce_one_deduplicated_target_union() -> None:
+    targets = target_facts_for_industry_labels(("Energy", "Materials"))
+    mapping_keys = {
+        (
+            target.taxonomy,
+            target.raw_concept,
+            target.internal_metric_name,
+            target.statement_type,
+        )
+        for target in targets
+    }
+    expected_keys = {
+        (
+            target.taxonomy,
+            target.raw_concept,
+            target.internal_metric_name,
+            target.statement_type,
+        )
+        for label in ("Energy", "Materials")
+        for target in target_facts_for_industry_labels((label,))
+    }
+
+    assert len(mapping_keys) == len(targets)
+    assert mapping_keys == expected_keys
+
+
+def test_period_without_labels_uses_common_base_targets_only() -> None:
+    targets = target_facts_for_industry_labels(())
+
+    assert targets
+    assert {target.industry_label for target in targets} == {
+        COMMON_BASE_LABEL
+    }
+
+
 def test_mapping_candidates_prefer_common_mapping_for_shared_concepts() -> None:
     candidates = mapping_candidates_by_concept(("Energy",))
 

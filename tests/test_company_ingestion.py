@@ -176,6 +176,7 @@ def test_ingest_company_persists_gemini_industry_classification(
         business_section = kwargs["business_section"]
         classified.append(business_section.accession_number)
         assert business_section.text.startswith("Apple designs consumer devices")
+        assert kwargs["model"] == "industry-test-model"
         return CompanyIndustryLabelAssignment(
             ticker="AAPL",
             cik="0000320193",
@@ -208,6 +209,7 @@ def test_ingest_company_persists_gemini_industry_classification(
         stock_sql_db_path=tmp_path / "stock.db",
         stock_filings_base_dir=tmp_path / "filings",
         gemini_api_key="fake-key",
+        industry_classification_model="industry-test-model",
     )
     result = ingest_company("AAPL", settings)
 

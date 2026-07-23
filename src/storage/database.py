@@ -153,6 +153,43 @@ def initialize_database(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         """
+        CREATE TABLE IF NOT EXISTS company_industry_label_snapshots (
+            company_industry_label_snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            accession_number TEXT NOT NULL,
+            fiscal_year INTEGER NOT NULL,
+            fiscal_period TEXT NOT NULL,
+            assigned_labels_json TEXT NOT NULL DEFAULT '[]',
+            label_status TEXT NOT NULL,
+            assignment_source TEXT NOT NULL,
+            assignment_reason TEXT NOT NULL,
+            confidence REAL,
+            evidence_json TEXT NOT NULL DEFAULT '[]',
+            classifier_version TEXT,
+            reviewed_at TEXT,
+            created_at TEXT NOT NULL,
+            UNIQUE (
+                company_id,
+                accession_number,
+                fiscal_year,
+                fiscal_period
+            ),
+            FOREIGN KEY (company_id) REFERENCES companies(company_id) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_company_industry_label_snapshots_period
+        ON company_industry_label_snapshots (
+            company_id,
+            fiscal_year,
+            fiscal_period
+        )
+        """
+    )
+    connection.execute(
+        """
         CREATE TABLE IF NOT EXISTS xbrl_concept_mappings (
             mapping_id INTEGER PRIMARY KEY AUTOINCREMENT,
             taxonomy TEXT NOT NULL,

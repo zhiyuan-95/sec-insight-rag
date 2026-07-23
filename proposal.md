@@ -46,8 +46,8 @@ src/
 3. Company inspection and base metric mapping
 
    * Store local company metadata, filing metadata, and update-check state.
-   * Assign reusable hard industry labels from the latest 10-K Item 1 Business section with Gemini when configured, and reclassify when a newer 10-K changes the evidence.
-   * Select target XBRL concept sets from common base candidates plus the industry-specific candidates for the company's approved hard labels.
+   * Assign hard industry labels once for each original 10-K's primary fiscal period with Gemini when configured, and preserve each accession-period decision as immutable history.
+   * Select each period's target XBRL concept set from common base candidates plus the deduplicated industry-specific candidates for that period's approved hard labels.
    * Map selected raw XBRL facts into business-friendly base metrics grouped by financial statement type.
    * Run deterministic catalog mapping through catalog entries and approved global, industry, or company-scoped learned mappings.
    * Keep unresolved target coverage explicit instead of inferring a raw-concept mapping from similarity.
@@ -89,16 +89,22 @@ src/
 
 ## 3. LLM Usage and LlamaIndex Tooling Policy
 
-For the current system, all LLM-based tasks will use `gemini-2.5-flash`. This keeps model behavior consistent, easier to debug, and easier to evaluate.
+For the current system, general LLM reasoning and answer generation use
+`gemini-2.5-flash`. Industry classification is configured independently as
+`gemini-3.1-flash-lite` so changing that task does not change other model
+behavior.
 
-`gemini-2.5-flash` will be used for:
+`gemini-3.1-flash-lite` will be used for:
 
-1. Hard industry classification
+1. Fiscal-period hard industry classification
 
-   * Classify a company into the fixed hard industry label set from the latest active 10-K Item 1 Business section.
+   * Classify each original 10-K's Item 1 Business section into the fixed hard industry label set for that filing's primary fiscal period.
    * Return strict JSON with labels, confidence, reason, and evidence quotes.
-   * Reuse approved labels during the same annual filing cycle, and reclassify when a newer 10-K changes the source evidence.
+   * Store one immutable snapshot per original 10-K accession and fiscal period; never classify from a 10-K/A or rewrite an earlier period when the business later changes.
    * Fall back to common-base target concepts when classification is unavailable, malformed, or low confidence; keep only supported high-confidence Gemini labels and ignore low-confidence labels without a human approval queue.
+
+`gemini-2.5-flash` remains the default for:
+
 2. Query understanding
 
    * Convert user questions into retrieval intent.
@@ -135,6 +141,7 @@ For the MVP, the model-related configuration should be:
 ```env
 PRIMARY_CHAT_MODEL=gemini-2.5-flash
 ALLOWED_CHAT_MODELS=gemini-2.5-flash
+INDUSTRY_CLASSIFICATION_MODEL=gemini-3.1-flash-lite
 ```
 
 Current configured services include:
@@ -153,7 +160,7 @@ Use local storage for the MVP:
    * Company metadata
    * Filing metadata
    * Raw XBRL facts
-   * Reusable company hard industry labels and label evidence
+   * Immutable fiscal-period hard industry label snapshots and label evidence
    * Approved global, industry, and company-scoped XBRL concept mappings
    * Base financial metrics mapped from raw XBRL facts
    * Derived indicators
@@ -247,9 +254,9 @@ Example distinction:
    * Track latest ingested 10-K and 10-Q filing dates and next-check dates.
    * Keep `raw_xbrl_facts` as the source-of-truth table for normalized SEC/XBRL facts.
    * Supplement entity-wide companyfacts with issuer-extension and dimensional facts from active Inline XBRL filings.
-   * Persist reusable company hard industry labels and assignment evidence; use Gemini classification from latest 10-K Item 1 Business when configured.
-   * Reuse approved labels during the same annual filing cycle and reclassify when a newer 10-K changes the label evidence.
-   * Select the target XBRL concept set from common base candidates plus industry-specific candidates for every approved hard label.
+   * Persist one immutable hard-industry label snapshot for each original 10-K accession and primary fiscal period; use the dedicated Gemini classification model when configured.
+   * Never reclassify a historical period from a 10-K/A or from a later change in business mix.
+   * Select each period's target XBRL concept set from common base candidates plus the deduplicated union of every approved hard-label bundle; use common targets only when the snapshot has no assigned label.
    * Map selected raw XBRL facts into business-friendly base metrics by statement type through deterministic catalog entries and approved learned mappings.
    * Derive and reuse an approved company concept profile from approved global, industry, and company-scoped mappings.
    * Keep unresolved target XBRL concepts explicit after deterministic and approved learned mapping.
@@ -275,9 +282,9 @@ Example distinction:
    * Reuse unchanged retrieval generations and preserve the last complete generation when a rebuild fails.
 6. Gemini model integration
 
-   * Load `gemini-2.5-flash` from configuration.
-   * Use `gemini-2.5-flash` first for hard industry label classification from 10-K Item 1 Business during ingestion.
-   * Use the same configured model for later LLM reasoning, summarization, Q&A, and thesis generation tasks.
+   * Load `gemini-3.1-flash-lite` from the dedicated industry-classification setting.
+   * Use that dedicated model for original 10-K Item 1 Business classification without changing the general reasoning model.
+   * Continue to load `gemini-2.5-flash` independently for later LLM reasoning, summarization, Q&A, and thesis generation tasks.
    * Track model, provider, task type, latency, and token usage for each call.
 7. RAG analysis
 
@@ -306,8 +313,8 @@ Example distinction:
 * Arelle-backed Inline XBRL extension extraction
 * XBRL concept normalization
 * Gemini hard industry classification from 10-K Item 1 Business with strict label validation
-* Hard industry label reuse, annual reclassification on a newer 10-K, and common-base fallback when Gemini labels are unavailable, invalid, or low confidence
-* Target XBRL concept selection from common base plus approved hard industry labels
+* Immutable fiscal-period industry labels, amendment exclusion, later-period business changes, and common-base fallback when a period has no assigned label
+* Period target selection from common base plus the deduplicated union of all approved period labels
 * Approved company concept profile reuse and staleness triggers
 * Canonical missing-target detection through deterministic and approved learned mappings
 * Rejection of report-only formula and zero-target diagnostics as stored metric sources
@@ -368,15 +375,15 @@ The MVP is successful if it can:
 
 1. Ingest SEC filings and XBRL facts for one ticker.
 2. Store broad raw XBRL facts separately from mapped base financial metrics.
-3. Store company metadata, filing metadata, approved hard industry labels, and base financial metrics with source traceability.
-4. Select target XBRL concepts from common base plus approved hard industry labels.
+3. Store company metadata, filing metadata, immutable fiscal-period hard industry labels, and base financial metrics with source traceability.
+4. Select each period's target XBRL concepts from common base plus the deduplicated union of its approved hard industry labels.
 5. Reuse approved company concept profiles for normal refreshes and keep incomplete target coverage explicit.
 6. Keep LLM formula and zero-target diagnostics report-only and out of stored base metrics and approved mappings.
 7. Calculate and store useful financial indicators.
 8. Run deterministic financial data analysis over raw facts and derived indicators.
 9. Export raw facts and derived indicators as CSV.
 10. Retrieve relevant filing evidence for user questions.
-11. Use `gemini-2.5-flash` as the default LLM for hard industry classification, explanation, and analysis.
+11. Use `gemini-3.1-flash-lite` for hard industry classification while keeping `gemini-2.5-flash` as the default for explanation and analysis.
 12. Use built-in LlamaIndex tools for non-reasoning retrieval pipeline tasks when available.
 13. Produce answers that clearly distinguish fact, calculation, financial data analysis, semantic filing analysis, and interpretation.
 14. Avoid unsupported causal claims.

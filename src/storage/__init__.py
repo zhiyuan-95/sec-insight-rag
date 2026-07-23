@@ -18,7 +18,9 @@ from src.storage.facts_repository import (
 from src.storage.filings_repository import FilingRecord, FilingRepository
 from src.storage.industry_labels_repository import (
     CompanyIndustryLabelRepository,
+    IndustryLabelSnapshotConflictError,
     StoredCompanyIndustryLabel,
+    StoredFiscalPeriodIndustryLabelSnapshot,
 )
 from src.storage.indicators_repository import FinancialIndicatorRepository
 from src.storage.metrics_repository import FinancialMetric, FinancialMetricRepository
@@ -33,6 +35,7 @@ __all__ = [
     "CompanyRecord",
     "CompanyRepository",
     "CompanyIndustryLabelRepository",
+    "IndustryLabelSnapshotConflictError",
     "ConceptMappingRecord",
     "ConceptMappingRepository",
     "FilingRecord",
@@ -51,6 +54,7 @@ __all__ = [
     "RetrievalRepository",
     "StoredRawFact",
     "StoredCompanyIndustryLabel",
+    "StoredFiscalPeriodIndustryLabelSnapshot",
     "StoredFilingChunk",
     "connect_sqlite",
     "initialize_database",

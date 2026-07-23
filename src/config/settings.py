@@ -9,6 +9,8 @@ from typing import Any
 from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from src.model_defaults import DEFAULT_INDUSTRY_CLASSIFICATION_MODEL
+
 DEFAULT_CHAT_MODEL = "gemini-2.5-flash"
 SUPPORTED_CHAT_MODELS = {DEFAULT_CHAT_MODEL}
 DEFAULT_RETRIEVAL_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -73,6 +75,10 @@ class Settings(BaseSettings):
         default_factory=lambda: [DEFAULT_CHAT_MODEL],
         validation_alias="ALLOWED_CHAT_MODELS",
     )
+    industry_classification_model: str = Field(
+        default=DEFAULT_INDUSTRY_CLASSIFICATION_MODEL,
+        validation_alias="INDUSTRY_CLASSIFICATION_MODEL",
+    )
     gemini_formula_proposal_model: str = Field(
         default=DEFAULT_CHAT_MODEL,
         validation_alias="GEMINI_FORMULA_PROPOSAL_MODEL",
@@ -116,6 +122,8 @@ class Settings(BaseSettings):
             raise ValueError(f"Unsupported chat model configured: {names}")
         if self.primary_chat_model not in self.allowed_chat_models:
             raise ValueError("PRIMARY_CHAT_MODEL must be in ALLOWED_CHAT_MODELS")
+        if not self.industry_classification_model.strip():
+            raise ValueError("INDUSTRY_CLASSIFICATION_MODEL must not be empty")
         if not self.gemini_formula_proposal_model.strip():
             raise ValueError("GEMINI_FORMULA_PROPOSAL_MODEL must not be empty")
         if not self.gemini_flash_lite_formula_proposal_model.strip():

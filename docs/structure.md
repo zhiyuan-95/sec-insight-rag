@@ -54,7 +54,7 @@ src/ingestion/company.py
   +-- src/storage/company_repository.py
   |     -> persist company registry and refresh state
   +-- src/storage/industry_labels_repository.py
-  |     -> persist reusable company hard-industry labels and evidence
+  |     -> persist legacy company labels and immutable fiscal-period snapshots
   +-- src/storage/concept_mappings_repository.py
   |     -> persist approved learned mappings used by hard mapping
   +-- src/storage/filings_repository.py
@@ -77,6 +77,13 @@ src/ingestion/arelle_inventory.py
   +-- src/processing/arelle_evidence.py
         -> return an immutable, canonical JSON `complete` or `failed` result
 
+src/ingestion/industry_labels.py
+  |
+  +-- classify each original 10-K primary fiscal period once
+  +-- skip 10-K/A sources and reuse exact stored snapshots
+  +-- src/storage/industry_labels_repository.py
+        -> reject any attempt to rewrite an accession-period decision
+
 experiments/MS5/milestone5_retrieval_pipeline.py
   |
   v
@@ -97,6 +104,8 @@ stock_data.db                SQLite database
   raw_xbrl_facts             source-separated XBRL observations with compact duplicate evidence
   companies                  local company registry
   company_industry_labels    reusable hard-industry labels and assignment evidence
+  company_industry_label_snapshots
+                             immutable original-accession fiscal-period label decisions
   filings                    ingested filing inventory
   xbrl_concept_mappings      governed approved learned mappings
   financial_metrics          base metrics mapped from raw XBRL facts
@@ -297,14 +306,18 @@ Runtime configuration loading.
 
 Current files:
 
-- `settings.py`: Defines `Settings`, chat-model validation, local retrieval model/chunk settings, storage paths, and `load_settings`.
+- `settings.py`: Defines `Settings`, chat-model validation, the dedicated
+  `industry_classification_model` setting, local retrieval model/chunk settings,
+  storage paths, and `load_settings`.
 - `__init__.py`: Exports configuration helpers.
 
 Key responsibilities:
 
 - Load `config.env`.
 - Normalize local environment values.
-- Keep the default LLM model pinned to `gemini-2.5-flash`.
+- Keep the default reasoning model pinned to `gemini-2.5-flash` and the
+  independent industry-classification default pinned to
+  `gemini-3.1-flash-lite`.
 - Expose storage paths and SEC/Gemini configuration.
 
 ### `src/api/`
@@ -347,6 +360,11 @@ Current files:
 - `arelle_worker.py`: Plan 203 accession boundary that starts a fresh spawned
   child process, creates one Arelle Session, loads and validates one local entry
   point, closes the session, and returns only canonical project-owned JSON.
+- `industry_labels.py`: Plan 203 coordinator that classifies each unsnapshotted
+  original 10-K Item 1 Business source for its primary fiscal period, skips
+  amendments, and inserts an immutable period-label snapshot. The coordinator
+  preserves the existing source-controlled fallback when Gemini returns no
+  approved labels.
 - `filings.py`: Filing metadata listing, latest-form selection helpers, and filing document download.
 - `refresh_policy.py`: Next-check date heuristics for 10-K and 10-Q refresh checks, plus business-day helpers.
 - `company.py`: Refresh-aware `ingest_company` orchestration and `CompanyIngestionResult`.
@@ -371,13 +389,21 @@ Key responsibilities:
   Failed results with a verified entry-point hash remain visible and reusable
   only while the versioned local-input manifest is also unchanged, preventing
   automatic retry loops without hiding repaired dependencies.
+- Persist an original 10-K's assigned, fallback, or empty industry-label
+  decision once for its accession and fiscal period. Replays reuse the stored
+  snapshot, 10-K/A sources do not call the classifier, and later original
+  periods may have different labels without rewriting earlier periods.
+  Provider failures retain their exception type in the fallback snapshot
+  evidence. This Plan 203 seam is additive and is not yet connected to the
+  legacy active-window company workflow.
 - Backfill Inline XBRL enrichment once for previously ingested companies whose active local filing artifacts predate the adaptive mapping layer.
 - Check local company registry state before live SEC ingestion.
 - Reuse local company data when refresh is not due.
 - Check SEC submissions when refresh is due and preserve local data if the refresh fails.
 - Select active-window 10-K and 10-Q filings from the latest 5 annual and latest 12 quarterly fact periods.
 - Download missing active-window filing documents and reuse already downloaded filing documents.
-- Use Gemini with 10-K Item 1 Business to assign reusable hard-industry labels when a Gemini key is configured, keeping only supported high-confidence labels and falling back to existing or source-controlled labels when classification is unavailable, invalid, or low confidence.
+- Use the dedicated industry-classification setting when the legacy company
+  workflow invokes Gemini, keeping the primary chat-model setting independent.
 - Delete inactive downloaded filing evidence while preserving filing metadata and raw XBRL facts.
 - Coordinate current company ingestion by calling processing and storage modules.
 - Coordinate local company deletion by calling storage repositories and guarded filing cleanup.
@@ -493,7 +519,10 @@ Current files:
 - `facts_repository.py`: `RawFactRepository` for source-separated normalized
   raw XBRL observations, compact occurrence/conflict evidence, and raw-identity
   migration.
-- `industry_labels_repository.py`: `CompanyIndustryLabelRepository` for persisted company hard-industry labels and evidence.
+- `industry_labels_repository.py`: `CompanyIndustryLabelRepository` for the
+  legacy replaceable company-label records plus insert-only fiscal-period
+  snapshots. Exact snapshot replays are idempotent; a different payload for the
+  same company, original accession, fiscal year, and fiscal period is rejected.
 - `concept_mappings_repository.py`: `ConceptMappingRepository` for scoped approved learned raw-concept mappings used by hard mapping.
 - `company_repository.py`: `CompanyRepository` and `CompanyRecord` for company identity and refresh state.
 - `filings_repository.py`: `FilingRepository` and `FilingRecord` for ingested filing metadata and active-window state.
@@ -506,7 +535,9 @@ Key responsibilities:
 
 - Own local SQLite schema helpers.
 - Persist Company Facts and Arelle observations as separate raw rows for the same accession and semantic fact identity.
-- Persist reusable company industry labels and governed learned mapping decisions.
+- Persist legacy company labels, immutable original-accession fiscal-period
+  label snapshots (including empty-label decisions), and governed learned
+  mapping decisions.
 - Upsert facts using semantic identity plus accession and source; keep fiscal
   labels, form, and SEC frame as provenance rather than identity.
 - Collapse equivalent same-accession occurrences with compact references, and
@@ -579,14 +610,19 @@ LLM/RAG reasoning layer.
 
 Current files:
 
-- `industry_classification.py`: Gemini-backed hard-industry classifier for 10-K Item 1 Business, with strict label validation, high-confidence label keeping, and low-confidence label ignoring.
+- `industry_classification.py`: Gemini-backed hard-industry classifier for 10-K
+  Item 1 Business, with strict label validation, high-confidence label keeping,
+  low-confidence label ignoring, and a `gemini-3.1-flash-lite` default shared
+  with the dedicated runtime setting.
 - `xbrl_formula_proposals.py`: Provider orchestration for report-only missing-target formula proposals through the ordered OpenAI `gpt-5-mini`, Gemini `gemini-3.1-flash-lite`, and Gemini `gemini-2.5-flash` panel; it supports single-target calls and statement-scoped batch calls, and provider failures are reported rather than persisted.
 - `prompts.py`: Prompt templates, including the hard-industry classification prompt and statement-first single-target and statement-scoped batch XBRL formula proposal prompts.
 - `__init__.py`: Package marker.
 
 Current status:
 
-- Gemini hard-industry classification is implemented for ingestion label assignment.
+- Gemini hard-industry classification and immutable fiscal-period snapshot
+  orchestration are implemented. The Plan 203 coordinator is available for the
+  later end-to-end annual workflow integration.
 - Report-only XBRL formula proposal calls are implemented for the MS2.5 report.
   Formula proposal prompts use
   representative target-unit-compatible period contexts, statement-first
@@ -645,6 +681,13 @@ The project uses focused pytest coverage alongside milestone experiments:
   visible failed-result reuse, acquisition and dependency hash checks, corrupt
   cache regeneration, internal and caller-declared external dependency repair,
   interrupted cache publication, and processing-contract invalidation.
+- `tests/test_industry_label_snapshots.py` verifies empty and multi-label
+  snapshot round trips, exact idempotent replay, and conflicting rewrite
+  rejection.
+- `tests/test_period_industry_classification.py` verifies original-period
+  classification, amendment exclusion, immutable reuse, changing business mix,
+  empty-label persistence, source-controlled fallback, and the dedicated model
+  choice.
 - `tests/test_observation_reconciliation.py` uses typed source observations and
   Arelle result records to verify matches, numerical equivalence, conflicts,
   source-only supplements, ambiguity quarantine, blocked or unusable facts,

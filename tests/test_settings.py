@@ -3,7 +3,11 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from src.config.settings import DEFAULT_CHAT_MODEL, load_settings
+from src.config.settings import (
+    DEFAULT_CHAT_MODEL,
+    DEFAULT_INDUSTRY_CLASSIFICATION_MODEL,
+    load_settings,
+)
 
 
 def test_load_settings_trims_env_keys_and_values(tmp_path: Path) -> None:
@@ -45,6 +49,10 @@ def test_load_settings_defaults_missing_optional_values(tmp_path: Path) -> None:
     assert settings.openai_formula_proposal_model == "gpt-5-mini"
     assert settings.gemini_flash_lite_formula_proposal_model == "gemini-3.1-flash-lite"
     assert settings.gemini_formula_proposal_model == "gemini-2.5-flash"
+    assert (
+        settings.industry_classification_model
+        == DEFAULT_INDUSTRY_CLASSIFICATION_MODEL
+    )
 
 
 def test_load_settings_accepts_formula_model_overrides(tmp_path: Path) -> None:
@@ -65,6 +73,33 @@ def test_load_settings_accepts_formula_model_overrides(tmp_path: Path) -> None:
     assert settings.openai_formula_proposal_model == "openai-override"
     assert settings.gemini_flash_lite_formula_proposal_model == "flash-lite-override"
     assert settings.gemini_formula_proposal_model == "gemini-override"
+
+
+def test_load_settings_accepts_industry_classification_model_override(
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / "config.env"
+    env_file.write_text(
+        "INDUSTRY_CLASSIFICATION_MODEL=industry-override\n",
+        encoding="utf-8",
+    )
+
+    settings = load_settings(env_file)
+
+    assert settings.industry_classification_model == "industry-override"
+
+
+def test_load_settings_rejects_empty_industry_classification_model(
+    tmp_path: Path,
+) -> None:
+    env_file = tmp_path / "config.env"
+    env_file.write_text(
+        "INDUSTRY_CLASSIFICATION_MODEL=' '\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValidationError):
+        load_settings(env_file)
 
 
 def test_load_settings_accepts_comma_separated_allowed_models(tmp_path: Path) -> None:

@@ -13,6 +13,7 @@ from src.analyze.prompts import (
     INDUSTRY_CLASSIFICATION_PROMPT_VERSION,
     build_industry_classification_prompt,
 )
+from src.model_defaults import DEFAULT_INDUSTRY_CLASSIFICATION_MODEL
 from src.processing.company_industry_labels import (
     CompanyIndustryLabelAssignment,
     LABEL_STATUS_ASSIGNED,
@@ -22,7 +23,9 @@ from src.processing.company_industry_labels import (
 
 GEMINI_INDUSTRY_ASSIGNMENT_SOURCE = "gemini_item1_business_classification"
 GEMINI_INDUSTRY_CLASSIFIER_VERSION = "gemini_item1_business_v1"
-DEFAULT_GEMINI_INDUSTRY_CLASSIFICATION_MODEL = "gemini-2.5-flash"
+DEFAULT_GEMINI_INDUSTRY_CLASSIFICATION_MODEL = (
+    DEFAULT_INDUSTRY_CLASSIFICATION_MODEL
+)
 DEFAULT_MIN_INDUSTRY_CLASSIFICATION_CONFIDENCE = 0.70
 MAX_BUSINESS_SECTION_CHARACTERS = 60_000
 SOURCE_ACCESSION_EVIDENCE_PREFIX = "Source accession: "
