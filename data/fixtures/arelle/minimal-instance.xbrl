@@ -19,6 +19,8 @@
     <xbrli:measure>iso4217:USD</xbrli:measure>
   </xbrli:unit>
   <test:Revenue contextRef="duration-2025" unitRef="usd" decimals="0">100</test:Revenue>
-  <test:ProductRevenue contextRef="duration-2025" unitRef="usd" decimals="0">70</test:ProductRevenue>
-  <test:ServiceRevenue contextRef="duration-2025" unitRef="usd" decimals="0">30</test:ServiceRevenue>
+  <test:RevenueBreakdown>
+    <test:ProductRevenue contextRef="duration-2025" unitRef="usd" decimals="0">70</test:ProductRevenue>
+    <test:ServiceRevenue contextRef="duration-2025" unitRef="usd" decimals="0">30</test:ServiceRevenue>
+  </test:RevenueBreakdown>
 </xbrli:xbrl>

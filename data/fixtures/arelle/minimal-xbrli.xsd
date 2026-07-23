@@ -7,7 +7,13 @@
   <xs:attribute name="periodType" type="xs:string"/>
   <xs:attribute name="balance" type="xs:string"/>
   <xs:element name="item" abstract="true"/>
-  <xs:element name="tuple" abstract="true"/>
+  <xs:complexType name="tupleType">
+    <xs:sequence>
+      <xs:any namespace="##other" processContents="lax" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:anyAttribute processContents="lax"/>
+  </xs:complexType>
+  <xs:element name="tuple" type="xbrli:tupleType" abstract="true"/>
   <xs:simpleType name="monetaryItemType">
     <xs:restriction base="xs:decimal"/>
   </xs:simpleType>

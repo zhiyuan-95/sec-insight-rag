@@ -85,7 +85,7 @@ def _extract_facts(
     object_references: dict[str, tuple[str, str]],
 ) -> tuple[ArelleFactRecord, ...]:
     records: list[ArelleFactRecord] = []
-    for index, fact in enumerate(model_xbrl.facts):
+    for index, fact in enumerate(model_xbrl.factsInInstance):
         qname = _qname_text(getattr(fact, "qname", None))
         context_id = _optional_text(getattr(fact, "contextID", None))
         unit_id = _optional_text(getattr(fact, "unitID", None))

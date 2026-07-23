@@ -46,4 +46,9 @@
       substitutionGroup="xbrli:item"
       xbrli:periodType="duration"
       xbrli:balance="credit"/>
+  <xs:element
+      id="concept_RevenueBreakdown"
+      name="RevenueBreakdown"
+      type="xbrli:tupleType"
+      substitutionGroup="xbrli:tuple"/>
 </xs:schema>

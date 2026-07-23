@@ -107,7 +107,16 @@ def test_process_arelle_accession_returns_complete_project_owned_evidence() -> N
     assert result.status == ARELLE_RESULT_COMPLETE
     assert result.session_closed is True
     assert result.worker_pid != os.getpid()
-    assert {fact.display_value for fact in result.facts} == {"100", "70", "30"}
+    assert {
+        fact.display_value for fact in result.facts if fact.numeric_value is not None
+    } == {"100", "70", "30"}
+    assert len(result.facts) == 4
+    tuple_fact = next(
+        fact
+        for fact in result.facts
+        if fact.concept_id.endswith("}RevenueBreakdown")
+    )
+    assert tuple_fact.context_id is None
     revenue = next(concept for concept in result.concepts if concept.local_name == "Revenue")
     assert revenue.label == "Revenue"
     assert revenue.documentation == "Revenue from products and services."
@@ -154,7 +163,7 @@ def test_process_arelle_accession_returns_complete_project_owned_evidence() -> N
         "linkbase",
         "schema",
     }
-    assert result.record_counts.facts == 3
+    assert result.record_counts.facts == 4
     assert ArelleFilingResult.from_json(result.to_json()) == result
     assert result.worker_pid not in {
         child.pid for child in multiprocessing.active_children()
