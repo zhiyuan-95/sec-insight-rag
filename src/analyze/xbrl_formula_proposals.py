@@ -2,18 +2,23 @@
 
 from __future__ import annotations
 
-import json
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
 
 from pydantic import BaseModel
 
 from src.analyze.prompts import (
     build_xbrl_formula_proposal_batch_prompt,
     build_xbrl_formula_proposal_prompt,
+)
+from src.analyze.structured_json import (
+    generate_openai_json,
+    openai_temperature,
+)
+from src.model_defaults import (
+    DEFAULT_GEMINI_FLASH_LITE_JUDGE_MODEL,
+    DEFAULT_GEMINI_JUDGE_MODEL,
+    DEFAULT_OPENAI_JUDGE_MODEL,
 )
 from src.processing.formula_proposals import (
     FORMULA_PROPOSAL_BATCH_RESPONSE_JSON_SCHEMA,
@@ -29,11 +34,11 @@ from src.processing.formula_proposals import (
     provider_unavailable_result,
 )
 
-DEFAULT_GEMINI_FORMULA_PROPOSAL_MODEL = "gemini-2.5-flash"
-DEFAULT_GEMINI_FLASH_LITE_FORMULA_PROPOSAL_MODEL = "gemini-3.1-flash-lite"
-DEFAULT_OPENAI_FORMULA_PROPOSAL_MODEL = "gpt-5-mini"
-OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
-HTTP_TIMEOUT_SECONDS = 120
+DEFAULT_GEMINI_FORMULA_PROPOSAL_MODEL = DEFAULT_GEMINI_JUDGE_MODEL
+DEFAULT_GEMINI_FLASH_LITE_FORMULA_PROPOSAL_MODEL = (
+    DEFAULT_GEMINI_FLASH_LITE_JUDGE_MODEL
+)
+DEFAULT_OPENAI_FORMULA_PROPOSAL_MODEL = DEFAULT_OPENAI_JUDGE_MODEL
 
 FormulaJsonGenerator = Callable[[str, type[BaseModel], str], object]
 
@@ -113,14 +118,14 @@ def generate_formula_proposal(
                 api_key=provider.api_key,
             )
         elif provider.provider_name == "openai":
-            payload = _generate_openai_json(
+            payload = generate_openai_json(
                 prompt=prompt,
                 model=provider.model_name,
                 api_key=provider.api_key,
                 schema=FORMULA_PROPOSAL_RESPONSE_JSON_SCHEMA,
                 schema_name="xbrl_formula_proposal",
                 system_content="Return only valid JSON for the requested XBRL formula proposal schema.",
-                temperature=_openai_temperature(provider.model_name),
+                temperature=openai_temperature(provider.model_name),
             )
         else:
             return provider_unavailable_result(
@@ -189,14 +194,14 @@ def generate_formula_proposal_batch(
                 api_key=provider.api_key,
             )
         elif provider.provider_name == "openai":
-            payload = _generate_openai_json(
+            payload = generate_openai_json(
                 prompt=prompt,
                 model=provider.model_name,
                 api_key=provider.api_key,
                 schema=FORMULA_PROPOSAL_BATCH_RESPONSE_JSON_SCHEMA,
                 schema_name="xbrl_formula_proposal_batch",
                 system_content="Return only valid JSON for the requested XBRL formula proposal batch schema.",
-                temperature=_openai_temperature(provider.model_name),
+                temperature=openai_temperature(provider.model_name),
             )
         else:
             return tuple(
@@ -267,92 +272,6 @@ def _generate_gemini_batch_json(*, prompt: str, model: str, api_key: str) -> obj
     if parsed is not None:
         return parsed
     return getattr(response, "text", "")
-
-
-def _generate_openai_json(
-    *,
-    prompt: str,
-    model: str,
-    api_key: str,
-    schema: dict[str, object],
-    schema_name: str,
-    system_content: str,
-    temperature: float | None = 0,
-) -> object:
-    payload = {
-        "model": model,
-        "input": [
-            {
-                "role": "system",
-                "content": system_content,
-            },
-            {"role": "user", "content": prompt},
-        ],
-        "text": {
-            "format": {
-                "type": "json_schema",
-                "name": schema_name,
-                "strict": True,
-                "schema": schema,
-            }
-        },
-    }
-    if temperature is not None:
-        payload["temperature"] = temperature
-    data = _post_json(
-        OPENAI_RESPONSES_URL,
-        payload,
-        headers={"Authorization": f"Bearer {api_key}"},
-    )
-    return _extract_openai_response_text(data)
-
-
-def _openai_temperature(model: str) -> float | None:
-    """Return the compatibility-proven temperature option for an OpenAI model."""
-    if str(model or "").strip().lower() == DEFAULT_OPENAI_FORMULA_PROPOSAL_MODEL:
-        return None
-    return 0
-
-
-def _post_json(url: str, payload: dict[str, object], *, headers: dict[str, str]) -> Any:
-    body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            **headers,
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=HTTP_TIMEOUT_SECONDS) as response:
-            raw = response.read().decode("utf-8")
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"HTTP {exc.code} from provider: {detail[:500]}") from exc
-    return json.loads(raw)
-
-
-def _extract_openai_response_text(data: dict[str, Any]) -> str:
-    output_text = data.get("output_text")
-    if isinstance(output_text, str) and output_text.strip():
-        return output_text
-    output = data.get("output")
-    if isinstance(output, list):
-        for item in output:
-            if not isinstance(item, dict):
-                continue
-            content = item.get("content")
-            if not isinstance(content, list):
-                continue
-            for part in content:
-                if not isinstance(part, dict):
-                    continue
-                text = part.get("text")
-                if isinstance(text, str) and text.strip():
-                    return text
-    raise RuntimeError("OpenAI response did not include output text")
 
 
 def _target_prompt_payload(target: FormulaProposalTarget) -> dict[str, object]:

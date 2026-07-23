@@ -34,6 +34,10 @@ from src.storage.retrieval_repository import (
     RetrievalRepository,
     StoredFilingChunk,
 )
+from src.storage.semantic_recommendations_repository import (
+    SemanticRecommendationConflictError,
+    SemanticRecommendationRepository,
+)
 
 __all__ = [
     "CompanyRecord",
@@ -57,6 +61,8 @@ __all__ = [
     "RawFactConflictEvidence",
     "RetrievalIndexState",
     "RetrievalRepository",
+    "SemanticRecommendationConflictError",
+    "SemanticRecommendationRepository",
     "StoredRawFact",
     "StoredCompanyIndustryLabel",
     "StoredFiscalPeriodIndustryLabelSnapshot",

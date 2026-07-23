@@ -272,6 +272,27 @@ def initialize_database(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         """
+        CREATE TABLE IF NOT EXISTS semantic_recommendation_records (
+            recommendation_request_id TEXT NOT NULL,
+            attempt_number INTEGER NOT NULL,
+            company_id TEXT NOT NULL,
+            packet_content_sha256 TEXT NOT NULL,
+            outcome TEXT NOT NULL,
+            record_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            CHECK (attempt_number >= 1),
+            PRIMARY KEY (recommendation_request_id, attempt_number)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_semantic_recommendations_company
+        ON semantic_recommendation_records (company_id)
+        """
+    )
+    connection.execute(
+        """
         CREATE TABLE IF NOT EXISTS filings (
             filing_id INTEGER PRIMARY KEY AUTOINCREMENT,
             company_id INTEGER NOT NULL,

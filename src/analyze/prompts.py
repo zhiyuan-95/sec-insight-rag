@@ -6,6 +6,7 @@ from src.processing.company_industry_labels import HARD_INDUSTRY_LABELS
 
 INDUSTRY_CLASSIFICATION_PROMPT_VERSION = "industry_classification_v1"
 XBRL_FORMULA_PROPOSAL_PROMPT_VERSION = "xbrl_formula_proposal_v4"
+SEMANTIC_RECOMMENDATION_PROMPT_VERSION = "semantic_recommendation_v1"
 
 
 def build_industry_classification_prompt(
@@ -219,6 +220,65 @@ Formula proposal context:
 
 Eligible same-period raw SEC/XBRL fact pool:
 {facts_json}
+"""
+
+
+def build_semantic_recommendation_prompt(
+    *,
+    company_id: str,
+    recommendation_request_id: str,
+    packet_json: str,
+) -> str:
+    """Build the centralized blind-judge prompt for one semantic group."""
+    return f"""You are one of three independent accounting judges recommending recovery decisions only for system targets that remain missing after direct XBRL mapping.
+
+Prompt version: {SEMANTIC_RECOMMENDATION_PROMPT_VERSION}
+Company identifier: {company_id}
+Recommendation request: {recommendation_request_id}
+
+You receive the same versioned semantic evidence packet as the other judges.
+You do not receive, infer, or respond to any other judge's answer.
+
+For every target in the packet, return exactly one decision:
+- formula: the target is represented by an exact sum/difference of eligible concepts.
+- zero: affirmative supplied evidence supports zero for the target.
+- no_formula: the supplied semantic and accounting evidence supports neither formula nor zero.
+
+Rules:
+- Decide only targets listed in packet.targets. Do not recommend already mapped metrics.
+- Formula components may use only packet concepts with component_eligible=true.
+- Use only the operators "+" and "-".
+- Identify each component with its exact taxonomy and concept fields.
+- Cite only evidence identifiers present in the packet.
+- A missing fact alone never supports zero.
+- Treat unusable relationships as visible cautionary evidence, not executable support.
+- Base the decision on concept meaning, labels, documentation, statement relationships, formula assertions, validations, and accounting sense.
+- Do not use numeric values, raw fact IDs, periods, accessions, or another model's output.
+- Return JSON only, with one recommendation for every supplied target.
+
+Return JSON matching this shape:
+{{
+  "recommendations": [
+    {{
+      "target_metric_name": "exact packet target metric_name",
+      "statement_type": "exact packet target statement_type",
+      "decision": "formula | zero | no_formula",
+      "components": [
+        {{
+          "taxonomy": "exact packet concept taxonomy",
+          "concept": "exact packet concept name",
+          "operator": "+ | -",
+          "evidence_refs": ["packet evidence identifier"]
+        }}
+      ],
+      "evidence_refs": ["packet evidence identifier"],
+      "rationale": "short semantic and accounting explanation"
+    }}
+  ]
+}}
+
+Versioned semantic evidence packet:
+{packet_json}
 """
 
 

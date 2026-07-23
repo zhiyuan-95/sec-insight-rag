@@ -100,6 +100,17 @@ src/processing/semantic_evidence.py
   +-- retain focused Arelle context, relationships, assertions, and validations
   +-- group company periods with identical packets and three-model lineups
 
+src/workflows/semantic_recommendations.py
+  |
+  +-- reuse an immutable recommendation record for an exact evidence group
+  +-- send one centralized prompt concurrently to three blind judge models
+  +-- src/processing/semantic_recommendations.py
+  |     -> validate structured decisions and compare canonical responses exactly
+  +-- src/analyze/semantic_judges.py
+  |     -> call the configured OpenAI and Gemini judge providers
+  +-- src/storage/semantic_recommendations_repository.py
+        -> retain packet, lineup, responses, comparison, outcome, and timestamps
+
 experiments/MS5/milestone5_retrieval_pipeline.py
   |
   v
@@ -125,6 +136,8 @@ stock_data.db                SQLite database
   filings                    ingested filing inventory
   xbrl_concept_mappings      governed approved learned mappings
   mapping_shadow_candidates  non-authoritative period mapping suggestions
+  semantic_recommendation_records
+                             immutable three-judge group attempt history
   financial_metrics          base metrics mapped from raw XBRL facts
   financial_indicators       derived indicators with formulas and traceability
   filing_chunks              canonical section-aware filing text chunks
@@ -143,7 +156,7 @@ User entrypoints
 Application workflow
   |
   +-- current: src/ingestion/company.py
-  +-- planned: src/workflows/
+  +-- current: src/workflows/semantic_recommendations.py
   |
   v
 Data and analysis layers
@@ -307,6 +320,7 @@ their proposal when implemented.
 ```text
 src/
   __init__.py
+  model_defaults.py
   analyze/
   api/
   config/
@@ -315,7 +329,11 @@ src/
   processing/
   retrieval/
   storage/
+  workflows/
 ```
+
+- `model_defaults.py`: Shared default model names for independent classifier,
+  report-only proposal, and production judge tasks.
 
 ### `src/config/`
 
@@ -431,7 +449,9 @@ Boundary rule:
 - SEC request logic belongs here.
 - XBRL normalization logic belongs in `src/processing/`.
 - SQLite persistence logic belongs in `src/storage/`.
-- Long-term user-facing orchestration may move to `src/workflows/` when that module exists.
+- New thin application orchestration belongs in `src/workflows/`; the legacy
+  company ingestion coordinator remains here until its planned replacement is
+  implemented.
 
 ### `src/processing/`
 
@@ -477,7 +497,7 @@ Current files:
   non-authoritative lexical shadow suggestions from precedence-selected Arelle
   concept metadata; and returns the exact canonical targets still missing.
   Shadow suggestions never create metrics and remain separate from the missing
-  targets that the later judge-packet increment will consume.
+  targets consumed by the semantic evidence packet.
 - `semantic_evidence.py`: Builds deterministic, versioned evidence packets from
   the exact direct-mapping missing-target set, the precedence-selected usable
   period concepts, and cached Arelle structural results. Packets contain target
@@ -490,6 +510,12 @@ Current files:
   unscoped relationship graph. The module also groups
   periods only when company, packet content, and the normalized three-model
   lineup match; it does not call judges or persist recommendations.
+- `semantic_recommendations.py`: Defines the structured formula, zero, and
+  no-formula response schema; validates exact targets, eligible components, and
+  packet evidence references; canonicalizes harmless component ordering while
+  retaining exact concepts, operators, and evidence; compares all three judge
+  responses; and defines the immutable historical record types. It does not
+  call providers, persist records, or calculate financial values.
 - `formula_proposals.py`: Builds target-unit-compatible, statement-bucketed raw fact contexts for report-only LLM formula proposals, keeps only the primary monetary unit per filing period for monetary targets while preserving all raw units in storage/export evidence, collapses identical period raw-concept pools into one provider context with period coverage, computes exact reusable formula context fingerprints and statement-scoped batch keys, normalizes single-target and batch provider responses, caches successful structured formula, zero-target, or no-formula decisions per target/context/provider, and deterministically validates formula components or cited zero-evidence facts against representative raw XBRL facts. Formula validation distinguishes actual fact dates inside comparative filings, prefers an undimensioned fact when dimensional variants coexist for the same concept/date, and still rejects truly ambiguous same-date duplicates.
 - `metric_coverage.py`: Collapses tag-level target coverage and formula/zero diagnostics into one metric-level review surface. It does not approve mappings, persist recovered values, or feed indicators.
 - `active_window.py`: Selects the active analysis window: latest 5 fiscal years of 10-K data and latest 12 quarters of 10-Q data.
@@ -539,9 +565,13 @@ Key responsibilities:
   period has a usable precedence-selected fact. Keep relationship-connected
   concepts without such a fact as context-only, including validation-blocked
   relationship evidence for the judges to assess.
-- Reuse one future recommendation request only for the same company, identical
+- Reuse one recommendation request only for the same company, identical
   packet content and exact same set of three judge models. Period IDs remain
   application membership and never affect semantic grouping.
+- Treat only three exact canonical formula or zero decisions as an automatic
+  recommendation pass. Preserve three no-formula decisions as abstention,
+  disagreement as needs-review, and missing or invalid judge output as a
+  technical failure.
 - Resolve coverage at the internal-metric level before human or LLM review:
   mapped metrics need no action, approved alternate concepts count as covered,
   and unresolved metrics expose formula-from-raw-concepts, zero-target, or
@@ -590,6 +620,11 @@ Current files:
   suggestions and their evidence. Its period adapter accepts the shadow output
   of `direct_metric_mapping.py` directly. These rows are non-authoritative and
   are stored separately from governed concept mappings and financial metrics.
+- `semantic_recommendations_repository.py`:
+  `SemanticRecommendationRepository` for immutable group-attempt packet,
+  three-judge response, canonical-comparison, and outcome history. Exact
+  attempt replays are idempotent, conflicting rewrites are rejected, and an
+  explicit retry can append another attempt after technical failure.
 - `company_repository.py`: `CompanyRepository` and `CompanyRecord` for company identity and refresh state.
 - `filings_repository.py`: `FilingRepository` and `FilingRecord` for ingested filing metadata and active-window state.
 - `metrics_repository.py`: `FinancialMetricRepository` and `FinancialMetric` for mapped base financial metrics.
@@ -607,6 +642,8 @@ Key responsibilities:
 - Persist inspectable shadow mapping candidates with company, raw-fact, target,
   period, score, method, and evidence lineage without creating a
   `financial_metrics` row.
+- Persist one immutable semantic recommendation record per exact evidence-group
+  attempt without creating period values or financial metrics.
 - Upsert facts using semantic identity plus accession and source; keep fiscal
   labels, form, and SEC frame as provenance rather than identity.
 - Collapse equivalent same-accession occurrences with compact references, and
@@ -684,7 +721,14 @@ Current files:
   low-confidence label ignoring, and a `gemini-3.1-flash-lite` default shared
   with the dedicated runtime setting.
 - `xbrl_formula_proposals.py`: Provider orchestration for report-only missing-target formula proposals through the ordered OpenAI `gpt-5-mini`, Gemini `gemini-3.1-flash-lite`, and Gemini `gemini-2.5-flash` panel; it supports single-target calls and statement-scoped batch calls, and provider failures are reported rather than persisted.
-- `prompts.py`: Prompt templates, including the hard-industry classification prompt and statement-first single-target and statement-scoped batch XBRL formula proposal prompts.
+- `semantic_judges.py`: Provider adapter for the production Plan 203 blind
+  semantic recommendation panel. It returns structured responses to the thin
+  workflow and does not compare decisions or write storage.
+- `structured_json.py`: Neutral OpenAI structured-JSON transport shared by the
+  report-only formula provider and production semantic judge adapter.
+- `prompts.py`: Prompt templates, including hard-industry classification,
+  report-only XBRL formula proposals, and the centralized versioned Plan 203
+  semantic recommendation prompt.
 - `__init__.py`: Package marker.
 
 Current status:
@@ -699,6 +743,9 @@ Current status:
   exact context cache reuse for successful structured decisions. Batch prompts
   may ask for multiple missing targets together only when they share the same
   target statement group and compatible raw-concept context.
+- Production Plan 203 semantic judge calls are implemented separately from the
+  MS2.5 report-only flow. They receive one identical nonnumeric evidence packet
+  and return formula, zero, or no-formula decisions for exact missing targets.
 - Gemini/RAG answer synthesis is not implemented yet.
 
 Planned responsibilities:
@@ -708,12 +755,32 @@ Planned responsibilities:
 - Keep Gemini classification separate from deterministic XBRL concept mapping; classification assigns company labels only.
 - Combine reported facts, derived indicators, analytics results, and retrieval evidence into grounded explanations.
 
+### `src/workflows/`
+
+Thin application workflow orchestration.
+
+Current files:
+
+- `semantic_recommendations.py`: Reuses an exact stored group or calls the
+  three configured judges concurrently, records individual structured
+  responses or failures, compares target decisions canonically, and persists
+  an immutable historical attempt. Technical failures are retried only when
+  explicitly requested and prior attempts remain stored. If concurrent
+  workflows race to store the same attempt, both return the persisted winner.
+  It does not resolve period facts, calculate recovered values, or create
+  financial metrics.
+- `__init__.py`: Public workflow exports.
+
+Boundary rule:
+
+- Workflows coordinate processing, analysis, and storage modules without
+  duplicating their logic.
+
 ## Planned But Not Currently Present
 
 ```text
 src/analytics/
 src/evaluation/
-src/workflows/
 ```
 
 `src/analytics/` is described in `proposal.md`, but it is not currently present
@@ -725,10 +792,6 @@ without using the LLM.
 present in the repository. When added, it should own analysis-quality checks,
 evidence-reference validation, and future manual evaluation of generated
 analysis quality.
-
-`src/workflows/` is described in `proposal.md`, but it is not currently present in the repository.
-
-When added, it should own thin application workflow orchestration. For example, `src/workflows/company_ingestion.py` can call ingestion, processing, storage, retrieval, analytics, or analysis modules without duplicating their internal logic.
 
 ## Verification
 
@@ -775,6 +838,16 @@ The project uses focused pytest coverage alongside milestone experiments:
   filing-field exclusions, executable-versus-context-only concepts, retained
   blocked relationships, exact grouping reuse, grouping boundaries, and the
   required three-distinct-model lineup.
+- `tests/test_semantic_judges.py` verifies the configured three-model lineup,
+  structured provider schema handoff, and explicit missing-credential failure.
+- `tests/test_semantic_recommendation_workflow.py` verifies three-call
+  concurrency, identical blind prompts, canonical formula and operator
+  comparison, zero, abstention, disagreement, technical failure, exact reuse,
+  explicit technical-failure retry, retained attempt history, empty-target
+  rejection, concurrent-insert race handling, and no financial-metric creation.
+- `tests/test_semantic_recommendations_repository.py` verifies exact immutable
+  group-record round trips, idempotent replay, and conflicting rewrite
+  rejection.
 - Extend automated coverage when changing deterministic logic, repositories,
   public interfaces, regressions, or important failure paths.
 

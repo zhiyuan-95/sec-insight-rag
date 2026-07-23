@@ -233,6 +233,9 @@ fact remain visible as context but cannot be selected as components. Arelle
 relationship validation does not silently remove evidence from the packet:
 blocked relationships remain visible with an explicit unusable marker so the
 judges can assess the available accounting context.
+An unusable relationship may be cited only as visible cautionary context; it
+never makes a concept component-eligible and cannot replace the later
+deterministic period validation.
 
 The packet explicitly marks Arelle semantic evidence as available or
 unavailable. When cached Arelle concept IDs are unavailable, the judges still
@@ -250,6 +253,31 @@ different model, target, concept, relationship, assertion, validation, or
 company creates a different group. This grouping seam does not call models,
 record judge responses, create financial metrics, or change approved mappings.
 
+For each new group, the semantic recommendation workflow builds one centralized
+versioned prompt and sends that exact prompt concurrently to the configured
+`gpt-5-mini`, `gemini-3.1-flash-lite`, and `gemini-2.5-flash` judges. The judges
+are blind to one another. Each must return one structured `formula`, `zero`, or
+`no_formula` decision per missing target, with exact `+`/`-` components,
+packet evidence identifiers, and a rationale.
+
+Canonical comparison ignores rationale wording and harmless formula-component
+ordering, but it does not ignore a different decision, concept, operator, or
+evidence reference. A formula or zero recommendation passes automatically only
+when all three canonical decisions for that target are identical. Three
+`no_formula` decisions are an explicit unanimous abstention. Any disagreement
+is `needs_review`; an unavailable, malformed, or failed judge response is a
+distinct `technical_failure`.
+
+The complete packet, model lineup, individual structured responses, canonical
+comparison, outcomes, and timestamps are retained once in the immutable
+`semantic_recommendation_records` group history. An exact later group reuses
+the latest record without new model calls. A technical failure is also reused
+unless a caller explicitly requests a retry; that retry appends a new immutable
+attempt without deleting the failed attempt. This recommendation stage does not
+select period facts, calculate values, populate `financial_metrics`, or change
+approved mappings. Deterministic period application and recovered metric
+lineage belong to the later application stage.
+
 Unresolved coverage should be reviewed at the internal-metric level. The metric
 coverage resolver groups all target tags for one metric and presents one review
 surface with:
@@ -260,18 +288,22 @@ surface with:
 4. zero-target diagnostics with affirmative same-period evidence
 5. no-evidence cases
 
-The LLM or reviewer may recommend one unresolved path, but only a reviewed
-mapping can populate `financial_metrics`. Formula and zero-target choices are
-review evidence unless a separate reviewed decision type is explicitly added.
+This metric-coverage resolver and the MS2.5 report remain a legacy review-only
+path: only a reviewed mapping can populate `financial_metrics` there. The Plan
+203 three-judge historical record is the separate production recommendation
+type. Its unanimous formula or zero decision may proceed only to the later
+deterministic period-application gate; it never creates a value directly.
 Formula-from-raw-concepts evidence should be generated once per unresolved
 metric and distinct active-window raw concept pool. If multiple 10-K or 10-Q
-periods expose the same pool, the same model recommendation should be shown with
-period coverage instead of triggering another provider request for each period.
+periods expose the same pool, the same model recommendation should be shown
+with period coverage instead of triggering another provider request for each
+period.
 
 The governing rule is:
 
 ```text
-hard mappings populate metrics; formula/zero recommendations remain report evidence
+legacy MS2.5 formula/zero proposals remain report evidence
+Plan 203 unanimous recommendations require deterministic period application
 ```
 
 ## Approved Company Concept Profile

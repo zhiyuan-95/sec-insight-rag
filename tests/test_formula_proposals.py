@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from src.analyze import xbrl_formula_proposals as formula_provider
+from src.analyze import structured_json as structured_provider
 from src.analyze.xbrl_formula_proposals import (
     FormulaProposalProviderConfig,
     default_formula_proposal_provider_configs,
@@ -131,7 +131,7 @@ def test_gpt5_mini_openai_requests_omit_temperature(monkeypatch) -> None:
         )
         return {"output_text": json.dumps(response)}
 
-    monkeypatch.setattr(formula_provider, "_post_json", fake_post_json)
+    monkeypatch.setattr(structured_provider, "_post_json", fake_post_json)
     provider = FormulaProposalProviderConfig("openai", "gpt-5-mini", "test-key")
 
     generate_formula_proposal(
