@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from arelle import ModelDocument, XbrlConst
+from arelle.ModelDtsObject import ModelConcept
 
 from src.processing.arelle_evidence import (
     ArelleConceptRecord,
@@ -245,7 +246,7 @@ def _extract_relationships(
     object_references: dict[str, tuple[str, str]],
 ) -> tuple[ArelleRelationshipRecord, ...]:
     records: list[ArelleRelationshipRecord] = []
-    seen: set[tuple[str, ...]] = set()
+    evidence_ids_by_signature: dict[tuple[str, ...], str] = {}
     base_set_keys = sorted(
         model_xbrl.baseSets,
         key=lambda key: tuple(str(value or "") for value in key),
@@ -276,10 +277,17 @@ def _extract_relationships(
                 preferred_label or "",
                 target_role or "",
             )
-            if signature in seen:
+            existing_evidence_id = evidence_ids_by_signature.get(signature)
+            if existing_evidence_id is not None:
+                _register_object_reference(
+                    relationship,
+                    "relationship",
+                    existing_evidence_id,
+                    object_references,
+                )
                 continue
-            seen.add(signature)
             evidence_id = _evidence_id("relationship", *signature)
+            evidence_ids_by_signature[signature] = evidence_id
             records.append(
                 ArelleRelationshipRecord(
                     evidence_id=evidence_id,
@@ -418,7 +426,7 @@ def _network_kind(arcrole: str) -> str:
         return "label"
     if arcrole == XbrlConst.conceptReference:
         return "reference"
-    if "formula" in arcrole or arcrole.startswith("http://xbrl.org/arcrole/20"):
+    if XbrlConst.isFormulaArcrole(arcrole):
         return "formula"
     if "xbrl.org/int/dim/arcrole" in arcrole or arcrole in {
         XbrlConst.generalSpecial,
@@ -432,12 +440,27 @@ def _network_kind(arcrole: str) -> str:
 
 def _endpoint_id(model_object: Any) -> str:
     qname = getattr(model_object, "qname", None)
-    if qname is not None:
+    if isinstance(model_object, ModelConcept):
         return _concept_id(qname)
+    model_document = getattr(model_object, "modelDocument", None)
+    document_uri = _optional_text(getattr(model_document, "uri", None)) or ""
     role = _optional_text(getattr(model_object, "role", None)) or ""
     identifier = _optional_text(getattr(model_object, "id", None)) or ""
+    xlink_label = _optional_text(getattr(model_object, "xlinkLabel", None)) or ""
+    xml_lang = _optional_text(getattr(model_object, "xmlLang", None)) or ""
+    source_line = _optional_text(getattr(model_object, "sourceline", None)) or ""
     text = _resource_text(model_object) or ""
-    return _evidence_id(model_object.__class__.__name__.lower(), role, identifier, text)
+    return _evidence_id(
+        model_object.__class__.__name__.lower(),
+        _qname_text(qname),
+        document_uri,
+        source_line,
+        role,
+        identifier,
+        xlink_label,
+        xml_lang,
+        text,
+    )
 
 
 def _concept_id(qname: Any) -> str:

@@ -45,6 +45,51 @@ def test_process_arelle_accession_returns_serializable_failure_and_stops_worker(
     }
 
 
+def test_process_arelle_accession_stops_worker_after_timeout() -> None:
+    entry_point = (ARELLE_FIXTURE_DIR / "minimal-instance.xbrl").resolve()
+    request = ArelleFilingRequest(
+        cik="0000320193",
+        accession_number="0000320193-25-000079",
+        form="10-K",
+        filing_date="2025-10-31",
+        entry_point_path=str(entry_point),
+        source_url="https://www.sec.gov/example/minimal-instance.xbrl",
+        content_sha256=None,
+    )
+
+    result = process_arelle_accession(request, timeout_seconds=0.001)
+
+    assert result.status == ARELLE_RESULT_FAILED
+    assert {diagnostic.code for diagnostic in result.diagnostics} == {
+        "arelle_worker_timeout"
+    }
+    assert result.worker_pid not in {
+        child.pid for child in multiprocessing.active_children()
+    }
+
+
+def test_process_arelle_accession_rejects_mismatched_content_hash() -> None:
+    entry_point = (ARELLE_FIXTURE_DIR / "minimal-instance.xbrl").resolve()
+    request = ArelleFilingRequest(
+        cik="0000320193",
+        accession_number="0000320193-25-000079",
+        form="10-K",
+        filing_date="2025-10-31",
+        entry_point_path=str(entry_point),
+        source_url="https://www.sec.gov/example/minimal-instance.xbrl",
+        content_sha256="0" * 64,
+    )
+
+    result = process_arelle_accession(request, timeout_seconds=30.0)
+
+    assert result.status == ARELLE_RESULT_FAILED
+    assert result.diagnostics[0].code == "arelle_worker_failure"
+    assert "content hash" in result.diagnostics[0].message
+    assert result.worker_pid not in {
+        child.pid for child in multiprocessing.active_children()
+    }
+
+
 def test_process_arelle_accession_returns_complete_project_owned_evidence() -> None:
     entry_point = (ARELLE_FIXTURE_DIR / "minimal-instance.xbrl").resolve()
     request = ArelleFilingRequest(
@@ -77,6 +122,13 @@ def test_process_arelle_accession_returns_complete_project_owned_evidence() -> N
         "label",
         "presentation",
     }
+    label_relationships = [
+        relationship
+        for relationship in result.relationships
+        if relationship.network_kind == "label"
+    ]
+    assert len(label_relationships) == 2
+    assert len({relationship.to_id for relationship in label_relationships}) == 2
     assert result.formula_assertions == ()
     assert result.diagnostics
     calculation_diagnostic = next(
