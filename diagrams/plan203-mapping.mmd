@@ -1,0 +1,35 @@
+graph LR
+  A["Fiscal-period industry snapshot<br/>common plus assigned-label targets"]
+  B["Approved direct mapping<br/>revalidate fact compatibility"]
+  C["Exact missing targets<br/>shared nonnumeric semantic packet"]
+  D["Three blind judges<br/>same packet; concurrent and independent"]
+  E{"All three canonical<br/>decisions match?"}
+  F["Per-period formula or zero application<br/>resolve facts; validate context; calculate"]
+  G["No current metric<br/>invalid proposal"]
+  H["No current metric<br/>abstain, needs review, or technical failure"]
+  I["Shadow inference<br/>audit-only; never judges or metrics"]
+  J["One atomic SQLite snapshot<br/>direct and recovered financial_metrics<br/>plus provenance and outcome history"]
+
+  A --> B
+  B -->|"exact unresolved targets only"| C
+  B -->|"stage direct metrics; never send them to judges"| J
+  B -.->|"record separately"| I
+  C -->|"reuse once when company, evidence, missing set, and lineup match"| D
+  D --> E
+  E -->|"unanimous formula or evidence-backed zero"| F
+  E -->|"no_formula, disagreement, or request failure"| H
+  F -->|"valid for this period"| J
+  F -->|"deterministic validation fails"| G
+  G -->|"persist explicit outcome"| J
+  H -->|"persist explicit outcome"| J
+  I -.->|"persist candidate evidence"| J
+
+  classDef mapping fill:#FFF4CC,stroke:#9A6B00,color:#3D2C00,stroke-width:2px
+  classDef decision fill:#FDE2E2,stroke:#A61B1B,color:#4A1010,stroke-width:2px
+  classDef audit fill:#F1F3F5,stroke:#59636E,color:#26313B,stroke-width:2px
+  classDef publish fill:#E2F4E8,stroke:#287A3D,color:#123B20,stroke-width:2px
+
+  class A,B,C,D,F mapping
+  class E,G,H decision
+  class I audit
+  class J publish

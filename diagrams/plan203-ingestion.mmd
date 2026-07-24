@@ -1,0 +1,28 @@
+graph LR
+  A["SEC submissions<br/>all 10-K and 10-K/A history"]
+  B["Select Inline XBRL<br/>and deduplicate accessions"]
+  C["Acquire filing and DTS<br/>or verify exact result cache"]
+  D["Fresh child process<br/>one Arelle Session per accession"]
+  E["Serializable Arelle result<br/>facts, relationships, formulas, validation"]
+  F["SEC Company Facts<br/>same selected annual accessions"]
+  G["Separate raw observations<br/>then reconcile both sources"]
+  H["Latest-valid precedence<br/>facts, statement networks, metadata"]
+  I["Frozen company evidence snapshot<br/>ready for period metric mapping"]
+
+  A --> B
+  B -->|"isInlineXBRL = true only"| C
+  C -->|"cache miss or invalidated contract"| D
+  C -->|"exact complete cache hit"| E
+  D -->|"complete or failed; no live Arelle objects escape"| E
+  E --> G
+  F -->|"supplement or replace blocked/missing Arelle facts"| G
+  G -->|"preserve source rows and diagnostics"| H
+  H -->|"later omission never erases an earlier valid record"| I
+
+  classDef sec fill:#E8F1FF,stroke:#2457A6,color:#102A43,stroke-width:2px
+  classDef process fill:#FFF4CC,stroke:#9A6B00,color:#3D2C00,stroke-width:2px
+  classDef ready fill:#E2F4E8,stroke:#287A3D,color:#123B20,stroke-width:2px
+
+  class A,B,C,D,E,F sec
+  class G,H process
+  class I ready

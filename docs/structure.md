@@ -21,6 +21,15 @@ Use Git history for past reasoning, not as current structure truth.
 
 ## Visual Overview
 
+Plan-design diagram artifacts:
+
+- `diagrams/plan203-ingestion.*`: editable Mermaid and Excalidraw sources plus
+  rendered SVG/PNG for annual Inline XBRL discovery, Arelle processing,
+  Company Facts reconciliation, and latest-valid precedence.
+- `diagrams/plan203-mapping.*`: editable Mermaid and Excalidraw sources plus
+  rendered SVG/PNG for direct mapping, shared three-judge recommendations,
+  period application, and atomic metric publication.
+
 ### Current Implemented Flow
 
 ```text
