@@ -19,7 +19,7 @@ of truth for currently implemented runtime behavior.
 | --- | --- | --- | --- | --- | --- |
 | MS1 | Foundation and configuration | completed | — | [MS1](MS1-foundation.md) | Preserve scaffold and health/configuration checks |
 | MS2 | Annual Inline XBRL ingestion and evidence | active | MS1 | [MS2](MS2-annual-xbrl-ingestion.md) | Wire the implemented seams into the annual company workflow and run the complete-history proof |
-| MS3 | Base metric mapping and recovery | active | MS2 | [MS3](MS3-base-metric-mapping.md) | Period application, recovered-metric persistence, atomic publication, and the complete proof report |
+| MS3 | Base metric mapping and recovery | active | MS2 | [MS3](MS3-base-metric-mapping.md) | Incremental annual workflow integration, current experiment alignment, and the complete proof report |
 | MS4 | Derived financial indicators | active | MS3 | [MS4](MS4-indicators.md) | Validate the existing plan's complete annual and quarterly report contract |
 | MS5 | Deterministic financial analysis | draft | MS4 | — | Design through a future grilling session |
 | MS6 | Filing-text ingestion and retrieval | active | MS2 | [MS6](MS6-filing-retrieval.md) | Re-evaluate completion evidence after renumbering |

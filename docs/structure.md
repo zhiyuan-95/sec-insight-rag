@@ -47,11 +47,12 @@ complete annual submissions discovery
   -> three blind judge calls and immutable recommendation history
   -> period-specific formula/zero application
   -> immutable recovery applications and recovered financial metrics
+  -> atomic versioned company metric snapshot publication
 ```
 
 These seams are additive and tested, but the complete annual workflow is not yet
-wired into `ingest_company()`. Atomic annual publication and the combined
-real-company acceptance proof are not implemented.
+wired into `ingest_company()`. Incremental annual refresh integration and the
+combined real-company acceptance proof are not implemented.
 
 ### Retrieval flow
 
@@ -209,6 +210,8 @@ rebuildable artifacts.
 - shadow mapping candidates
 - semantic recommendation history
 - period-specific recovery application history
+- immutable company metric snapshots, current snapshot pointers, and
+  invalidated-metric audit records
 - filing chunks and retrieval generation state
 
 Important tables include:
@@ -223,6 +226,9 @@ mapping_shadow_candidates
 semantic_recommendation_records
 recovery_application_records
 financial_metrics
+company_metric_snapshots
+company_current_metric_snapshots
+company_metric_snapshot_audit_records
 financial_indicators
 filing_chunks
 retrieval_index_state
@@ -245,7 +251,13 @@ Recovered metrics carry an explicit origin and point to their application;
 direct metrics must retain raw-observation lineage. The workflow verifies the
 storage company against the recovery application's CIK and assigns recovered
 accession lineage from the source with the latest filing date. Company-wide
-atomic publication remains a later MS3 seam.
+publication is coordinated by
+`src/workflows/company_metric_snapshots.py`. It validates staged raw and
+recovery-application provenance, requires explicit target status and component
+versions, replaces the current metric projection, archives invalidated metrics,
+and advances one immutable current snapshot pointer in a single SQLite
+transaction. The existing public `ingest_company()` wrapper is unchanged; the
+annual integration remains a later MS3 seam.
 
 Keep future workflow modules thin.
 
@@ -303,6 +315,7 @@ uv run python -m pytest -q tests/test_observation_reconciliation.py tests/test_a
 uv run python -m pytest -q tests/test_direct_metric_mapping.py tests/test_semantic_evidence.py
 uv run python -m pytest -q tests/test_semantic_recommendation_workflow.py
 uv run python -m pytest -q tests/test_recovery_applications.py tests/test_recovery_application_persistence.py
+uv run python -m pytest -q tests/test_company_snapshot_publication.py
 uv run python -m pytest -q tests/test_indicators.py tests/test_retrieval.py
 ```
 

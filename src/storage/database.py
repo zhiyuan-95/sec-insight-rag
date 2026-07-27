@@ -441,6 +441,80 @@ def initialize_database(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         """
+        CREATE TABLE IF NOT EXISTS company_metric_snapshots (
+            company_metric_snapshot_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            snapshot_version INTEGER NOT NULL,
+            status TEXT NOT NULL,
+            completed_at TEXT NOT NULL,
+            published_at TEXT NOT NULL,
+            raw_fact_ids_json TEXT NOT NULL,
+            metric_records_json TEXT NOT NULL,
+            target_statuses_json TEXT NOT NULL,
+            component_versions_json TEXT NOT NULL,
+            UNIQUE (company_id, snapshot_version),
+            FOREIGN KEY (company_id)
+                REFERENCES companies(company_id) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_company_metric_snapshots_history
+        ON company_metric_snapshots (company_id, snapshot_version)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS company_current_metric_snapshots (
+            company_id INTEGER PRIMARY KEY,
+            company_metric_snapshot_id INTEGER NOT NULL UNIQUE,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (company_id)
+                REFERENCES companies(company_id) ON DELETE CASCADE,
+            FOREIGN KEY (company_metric_snapshot_id)
+                REFERENCES company_metric_snapshots(
+                    company_metric_snapshot_id
+                )
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS company_metric_snapshot_audit_records (
+            company_metric_snapshot_audit_id
+                INTEGER PRIMARY KEY AUTOINCREMENT,
+            company_id INTEGER NOT NULL,
+            invalidated_by_company_metric_snapshot_id INTEGER NOT NULL,
+            source_metric_id INTEGER NOT NULL,
+            metric_record_json TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            archived_at TEXT NOT NULL,
+            UNIQUE (
+                invalidated_by_company_metric_snapshot_id,
+                source_metric_id
+            ),
+            FOREIGN KEY (company_id)
+                REFERENCES companies(company_id) ON DELETE CASCADE,
+            FOREIGN KEY (
+                invalidated_by_company_metric_snapshot_id
+            ) REFERENCES company_metric_snapshots(
+                company_metric_snapshot_id
+            ) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_company_metric_snapshot_audit
+        ON company_metric_snapshot_audit_records (
+            company_id,
+            invalidated_by_company_metric_snapshot_id
+        )
+        """
+    )
+    connection.execute(
+        """
         CREATE TABLE IF NOT EXISTS financial_indicators (
             indicator_id INTEGER PRIMARY KEY AUTOINCREMENT,
             company_id INTEGER NOT NULL,

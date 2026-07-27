@@ -1,6 +1,15 @@
 """Local persistence package."""
 
 from src.storage.company_repository import CompanyRecord, CompanyRepository
+from src.storage.company_metric_snapshots_repository import (
+    ArchivedFinancialMetric,
+    CompanyMetricSnapshotRepository,
+    MetricInvalidation,
+    PublishedCompanyMetricSnapshot,
+    SnapshotComponentVersion,
+    SnapshotTargetKey,
+    SnapshotTargetStatus,
+)
 from src.storage.concept_mappings_repository import (
     MAPPING_SCOPE_COMPANY,
     MAPPING_SCOPE_GLOBAL,
@@ -47,6 +56,9 @@ from src.storage.semantic_recommendations_repository import (
 __all__ = [
     "CompanyRecord",
     "CompanyRepository",
+    "ArchivedFinancialMetric",
+    "CompanyMetricSnapshotRepository",
+    "MetricInvalidation",
     "CompanyIndustryLabelRepository",
     "IndustryLabelSnapshotConflictError",
     "ConceptMappingRecord",
@@ -76,6 +88,10 @@ __all__ = [
     "StoredFilingChunk",
     "StoredRecoveryApplication",
     "StoredMappingShadowCandidate",
+    "PublishedCompanyMetricSnapshot",
+    "SnapshotComponentVersion",
+    "SnapshotTargetKey",
+    "SnapshotTargetStatus",
     "connect_sqlite",
     "initialize_database",
 ]

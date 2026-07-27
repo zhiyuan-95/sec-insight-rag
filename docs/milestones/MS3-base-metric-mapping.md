@@ -17,9 +17,10 @@ evidence-group reuse, three blind judge adapters, canonical unanimity, and
 immutable group recommendation history. Period-specific deterministic
 formula/zero application, immutable recovery-application persistence, and
 recovered `financial_metrics` with explicit origin/provenance are also
-implemented. Atomic annual publication, workflow integration, and the complete
-real-company proof remain unfinished. `docs/structure.md` is authoritative for
-current behavior.
+implemented. The atomic versioned company metric publication seam, stale-value
+audit history, target isolation, and rollback behavior are implemented.
+Incremental annual workflow integration and the complete real-company proof
+remain unfinished. `docs/structure.md` is authoritative for current behavior.
 
 ## Purpose and Deliverable
 

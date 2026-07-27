@@ -258,13 +258,19 @@ class FinancialMetricRepository:
         rows = self.connection.execute(query, params).fetchall()
         return [_row_to_metric(row) for row in rows]
 
-    def delete_by_company_id(self, company_id: int) -> int:
+    def delete_by_company_id(
+        self,
+        company_id: int,
+        *,
+        commit: bool = True,
+    ) -> int:
         """Delete base financial metrics for one company and return deleted row count."""
         cursor = self.connection.execute(
             "DELETE FROM financial_metrics WHERE company_id = ?",
             [company_id],
         )
-        self.connection.commit()
+        if commit:
+            self.connection.commit()
         return cursor.rowcount
 
 

@@ -169,6 +169,21 @@ class RecoveryApplicationRepository:
         ).fetchone()
         return _row_to_stored_application(row) if row is not None else None
 
+    def get_by_id(
+        self,
+        recovery_application_id: int,
+    ) -> StoredRecoveryApplication | None:
+        """Return one immutable application by storage identifier."""
+        row = self.connection.execute(
+            """
+            SELECT recovery_application_id, record_json, created_at
+            FROM recovery_application_records
+            WHERE recovery_application_id = ?
+            """,
+            [recovery_application_id],
+        ).fetchone()
+        return _row_to_stored_application(row) if row is not None else None
+
     def list_for_recommendation(
         self,
         recommendation_request_id: str,
