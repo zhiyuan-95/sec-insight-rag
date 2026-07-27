@@ -57,7 +57,8 @@ implemented.
 
 ```powershell
 # MS2 deterministic SEC/XBRL ingestion showcase
-uv run python experiments/MS2/ingestion_showcase.py --ticker AAPL --mode fixture
+# Fixture mode and a saved UTF-8 report are the defaults.
+uv run python experiments/MS2/ingestion_showcase.py --ticker AAPL
 
 # MS3 mapping inspection over local/live evidence
 uv run python experiments/MS3/mapping_inspection.py --ticker AAPL
@@ -93,6 +94,7 @@ Typical local-only artifacts include:
 
 - `experiments/storage/experiment.db`
 - `experiments/storage/filings/`
+- `experiments/MS2/ingestion_report_<TICKER>.txt`
 - `experiments/MS3/mapping_report_*.md`
 - `experiments/MS4/indicator_report_*.txt`
 - `experiments/MS6/experiment_report_*.txt`

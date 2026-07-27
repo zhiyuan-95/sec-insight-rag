@@ -17,15 +17,20 @@ def _load_experiment_module() -> ModuleType:
     return module
 
 
-def test_milestone2_fixture_mode_prints_showcase(tmp_path: Path, capsys) -> None:
+def test_milestone2_defaults_to_fixture_mode_and_writes_report(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
     experiment = _load_experiment_module()
+    monkeypatch.setattr(experiment, "DEFAULT_REPORT_DIR", tmp_path)
+    report_path = tmp_path / "ingestion_report_AAPL.txt"
+    report_path.write_text("stale report", encoding="utf-8")
 
     exit_code = experiment.main(
         [
             "--ticker",
             "AAPL",
-            "--mode",
-            "fixture",
             "--db-path",
             str(tmp_path / "fixture.db"),
             "--filings-dir",
@@ -33,8 +38,14 @@ def test_milestone2_fixture_mode_prints_showcase(tmp_path: Path, capsys) -> None
         ]
     )
     output = capsys.readouterr().out
+    saved_report = report_path.read_text(encoding="utf-8")
 
     assert exit_code == 0
+    assert "stale report" not in saved_report
+    assert saved_report.endswith("\n")
+    assert saved_report.rstrip("\n") in output
+    assert f"Report saved: {report_path}" in output
+    assert "Report saved:" not in saved_report
     assert "Milestone 2 Experiment: SEC/XBRL Ingestion And Normalization" in output
     assert "mode: fixture" in output
     assert "Company Resolution:" in output
@@ -60,17 +71,24 @@ def test_milestone2_fixture_mode_prints_showcase(tmp_path: Path, capsys) -> None
     assert "Result:" not in output
 
 
-def test_milestone2_fixture_mode_rejects_unsupported_ticker(capsys) -> None:
+def test_milestone2_fixture_mode_rejects_unsupported_ticker(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
     experiment = _load_experiment_module()
+    monkeypatch.setattr(experiment, "DEFAULT_REPORT_DIR", tmp_path)
 
-    exit_code = experiment.main(["--ticker", "MSFT", "--mode", "fixture"])
+    exit_code = experiment.main(["--ticker", "BAD/TICKER"])
     output = capsys.readouterr().out
+    saved_report = (tmp_path / "ingestion_report_BAD_TICKER.txt").read_text(encoding="utf-8")
 
     assert exit_code == 1
     assert "Unsupported Fixture Ticker:" in output
     assert "supports only AAPL" in output
     assert "no live SEC call was made" in output
     assert "Result:" not in output
+    assert saved_report.rstrip("\n") in output
 
 
 def test_milestone2_live_mode_rejects_missing_sec_user_agent(
@@ -80,6 +98,7 @@ def test_milestone2_live_mode_rejects_missing_sec_user_agent(
 ) -> None:
     monkeypatch.delenv("SEC_USER_AGENT", raising=False)
     experiment = _load_experiment_module()
+    monkeypatch.setattr(experiment, "DEFAULT_REPORT_DIR", tmp_path)
     env_file = tmp_path / "config.env"
     env_file.write_text(
         "\n".join(
@@ -102,11 +121,13 @@ def test_milestone2_live_mode_rejects_missing_sec_user_agent(
         ]
     )
     output = capsys.readouterr().out
+    saved_report = (tmp_path / "ingestion_report_AAPL.txt").read_text(encoding="utf-8")
 
     assert exit_code == 1
     assert "SEC_USER_AGENT is required for SEC ingestion" in output
     assert "Execution Error:" in output
     assert "Result:" not in output
+    assert saved_report.rstrip("\n") in output
 
 
 def test_milestone2_report_uses_selected_filing_scope_for_human_sections() -> None:

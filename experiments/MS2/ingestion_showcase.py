@@ -27,6 +27,7 @@ from main import FINANCIAL_STATEMENT_BY_CONCEPT, FINANCIAL_STATEMENT_ORDER
 
 FIXTURE_DIR = PROJECT_ROOT / "data" / "fixtures"
 DEFAULT_FIXTURE_WORK_DIR = PROJECT_ROOT / "data" / "exports" / "experiments" / "MS2"
+DEFAULT_REPORT_DIR = Path(__file__).resolve().parent
 SUPPORTED_FIXTURE_TICKERS = ("AAPL",)
 FORM_ORDER = {"10-K": 0, "10-Q": 1}
 PERIOD_ORDER = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "FY": 5}
@@ -89,14 +90,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         else:
             result = _run_live_mode(ticker, args)
     except _UnsupportedFixtureTicker as exc:
-        print(_format_unsupported_fixture_report(ticker, exc))
+        _publish_report(_format_unsupported_fixture_report(ticker, exc), ticker)
         return 1
     except (SecConfigurationError, SecIngestionError, TickerNotFoundError, FilingNotFoundError) as exc:
-        print(_format_execution_error_report(ticker, args.mode, exc, args))
+        _publish_report(_format_execution_error_report(ticker, args.mode, exc, args), ticker)
         return 1
 
-    print(format_report(result))
+    _publish_report(format_report(result), ticker)
     return 0
+
+
+def _publish_report(report: str, ticker: str) -> Path:
+    report_path = DEFAULT_REPORT_DIR / f"ingestion_report_{_safe_ticker_slug(ticker)}.txt"
+    report_path.write_text(f"{report}\n", encoding="utf-8")
+    print(report)
+    print(f"\nReport saved: {report_path}")
+    return report_path
+
+
+def _safe_ticker_slug(ticker: str) -> str:
+    safe_chars = [
+        char if char.isalnum() or char in {"-", "_", "."} else "_"
+        for char in ticker.strip().upper()
+    ]
+    return "".join(safe_chars).strip("-_.") or "UNKNOWN"
 
 
 def format_report(result: ExperimentResult) -> str:

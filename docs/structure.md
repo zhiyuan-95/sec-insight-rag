@@ -266,7 +266,9 @@ Keep future workflow modules thin.
 ```text
 experiments/
   storage/                 generated shared database and filings
-  MS2/ingestion_showcase.py
+  MS2/
+    ingestion_showcase.py
+    ingestion_report_<TICKER>.txt  generated human-inspection report
   MS3/mapping_inspection.py
   MS4/indicator_engine.py
   MS6/retrieval_pipeline.py
@@ -283,6 +285,8 @@ execution and report conventions live in `docs/experiments.md`.
 - `data_store/knowledge/`: generated Arelle, proposal, vector, and keyword
   cache/index artifacts.
 - `experiments/storage/`: generated shared experiment database and filings.
+- `experiments/MS2/ingestion_report_<TICKER>.txt`: generated MS2 ingestion
+  report; fixture mode is the script default.
 
 Local/generated files are not source architecture:
 
@@ -291,6 +295,7 @@ Local/generated files are not source architecture:
 - `stock_data.db` and experiment databases
 - downloaded filings and knowledge caches
 - generated CSVs
+- MS2 ingestion reports
 - MS3 mapping reports
 - MS4 indicator reports
 - MS6 retrieval reports
