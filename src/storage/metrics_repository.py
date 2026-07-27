@@ -9,7 +9,21 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+from src.processing.company_identity import same_cik
+from src.processing.recovery_applications import (
+    RECOVERY_APPLICATION_SUCCEEDED,
+    recovery_application_from_json,
+    recovery_metric_source_accession,
+)
 from src.storage.database import initialize_database
+
+METRIC_ORIGIN_REPORTED_MAPPING = "reported_mapping"
+METRIC_ORIGIN_FORMULA_RECOVERY = "formula_recovery"
+METRIC_ORIGIN_AFFIRMATIVE_ZERO_RECOVERY = "affirmative_zero_recovery"
+_RECOVERY_ORIGINS = {
+    METRIC_ORIGIN_FORMULA_RECOVERY,
+    METRIC_ORIGIN_AFFIRMATIVE_ZERO_RECOVERY,
+}
 
 
 @dataclass(frozen=True)
@@ -25,6 +39,8 @@ class FinancialMetric:
     metric_id: int | None = None
     filing_id: int | None = None
     raw_fact_id: int | None = None
+    origin: str = METRIC_ORIGIN_REPORTED_MAPPING
+    recovery_application_id: int | None = None
     value_numeric: Decimal | None = None
     value_raw: object = None
     fiscal_year: int | None = None
@@ -46,77 +62,169 @@ class FinancialMetricRepository:
         """Create required database tables."""
         initialize_database(self.connection)
 
-    def upsert_metrics(self, metrics: list[FinancialMetric]) -> int:
+    def upsert_metrics(
+        self,
+        metrics: list[FinancialMetric],
+        *,
+        commit: bool = True,
+    ) -> int:
         """Insert or update base metrics by source fact identity."""
         if not metrics:
             return 0
+        for metric in metrics:
+            _validate_metric_provenance(metric, self.connection)
         now = datetime.now(timezone.utc).isoformat()
-        rows = [_metric_to_row(metric, now) for metric in metrics]
-        self.connection.executemany(
-            """
-            INSERT INTO financial_metrics (
-                company_id,
-                filing_id,
-                accession_number,
-                raw_fact_id,
-                statement_type,
-                metric_name,
-                value_numeric,
-                value_raw,
-                unit,
-                period_type,
-                fiscal_year,
-                fiscal_period,
-                start_date,
-                end_date,
-                filing_date,
-                is_active_window,
-                created_at
+        direct_rows = [
+            _metric_to_row(metric, now)
+            for metric in metrics
+            if metric.origin not in _RECOVERY_ORIGINS
+        ]
+        recovered_rows = [
+            _metric_to_row(metric, now)
+            for metric in metrics
+            if metric.origin in _RECOVERY_ORIGINS
+        ]
+        if direct_rows:
+            self.connection.executemany(
+                """
+                INSERT INTO financial_metrics (
+                    company_id,
+                    filing_id,
+                    accession_number,
+                    raw_fact_id,
+                    origin,
+                    recovery_application_id,
+                    statement_type,
+                    metric_name,
+                    value_numeric,
+                    value_raw,
+                    unit,
+                    period_type,
+                    fiscal_year,
+                    fiscal_period,
+                    start_date,
+                    end_date,
+                    filing_date,
+                    is_active_window,
+                    created_at
+                )
+                VALUES (
+                    :company_id,
+                    :filing_id,
+                    :accession_number,
+                    :raw_fact_id,
+                    :origin,
+                    :recovery_application_id,
+                    :statement_type,
+                    :metric_name,
+                    :value_numeric,
+                    :value_raw,
+                    :unit,
+                    :period_type,
+                    :fiscal_year,
+                    :fiscal_period,
+                    :start_date,
+                    :end_date,
+                    :filing_date,
+                    :is_active_window,
+                    :created_at
+                )
+                ON CONFLICT(
+                    company_id,
+                    metric_name,
+                    period_type,
+                    fiscal_year,
+                    fiscal_period,
+                    accession_number,
+                    raw_fact_id
+                )
+                DO UPDATE SET
+                    filing_id = excluded.filing_id,
+                    statement_type = excluded.statement_type,
+                    value_numeric = excluded.value_numeric,
+                    value_raw = excluded.value_raw,
+                    unit = excluded.unit,
+                    start_date = excluded.start_date,
+                    end_date = excluded.end_date,
+                    filing_date = excluded.filing_date,
+                    is_active_window = excluded.is_active_window,
+                    origin = excluded.origin,
+                    recovery_application_id = excluded.recovery_application_id,
+                    created_at = excluded.created_at
+                """,
+                direct_rows,
             )
-            VALUES (
-                :company_id,
-                :filing_id,
-                :accession_number,
-                :raw_fact_id,
-                :statement_type,
-                :metric_name,
-                :value_numeric,
-                :value_raw,
-                :unit,
-                :period_type,
-                :fiscal_year,
-                :fiscal_period,
-                :start_date,
-                :end_date,
-                :filing_date,
-                :is_active_window,
-                :created_at
+        if recovered_rows:
+            self.connection.executemany(
+                """
+                INSERT INTO financial_metrics (
+                    company_id,
+                    filing_id,
+                    accession_number,
+                    raw_fact_id,
+                    origin,
+                    recovery_application_id,
+                    statement_type,
+                    metric_name,
+                    value_numeric,
+                    value_raw,
+                    unit,
+                    period_type,
+                    fiscal_year,
+                    fiscal_period,
+                    start_date,
+                    end_date,
+                    filing_date,
+                    is_active_window,
+                    created_at
+                )
+                VALUES (
+                    :company_id,
+                    :filing_id,
+                    :accession_number,
+                    :raw_fact_id,
+                    :origin,
+                    :recovery_application_id,
+                    :statement_type,
+                    :metric_name,
+                    :value_numeric,
+                    :value_raw,
+                    :unit,
+                    :period_type,
+                    :fiscal_year,
+                    :fiscal_period,
+                    :start_date,
+                    :end_date,
+                    :filing_date,
+                    :is_active_window,
+                    :created_at
+                )
+                ON CONFLICT(recovery_application_id)
+                DO UPDATE SET
+                    company_id = excluded.company_id,
+                    filing_id = excluded.filing_id,
+                    accession_number = excluded.accession_number,
+                    raw_fact_id = excluded.raw_fact_id,
+                    origin = excluded.origin,
+                    statement_type = excluded.statement_type,
+                    metric_name = excluded.metric_name,
+                    value_numeric = excluded.value_numeric,
+                    value_raw = excluded.value_raw,
+                    unit = excluded.unit,
+                    period_type = excluded.period_type,
+                    fiscal_year = excluded.fiscal_year,
+                    fiscal_period = excluded.fiscal_period,
+                    start_date = excluded.start_date,
+                    end_date = excluded.end_date,
+                    filing_date = excluded.filing_date,
+                    is_active_window = excluded.is_active_window,
+                    created_at = excluded.created_at
+                """,
+                recovered_rows,
             )
-            ON CONFLICT(
-                company_id,
-                metric_name,
-                period_type,
-                fiscal_year,
-                fiscal_period,
-                accession_number,
-                raw_fact_id
-            )
-            DO UPDATE SET
-                filing_id = excluded.filing_id,
-                statement_type = excluded.statement_type,
-                value_numeric = excluded.value_numeric,
-                value_raw = excluded.value_raw,
-                unit = excluded.unit,
-                start_date = excluded.start_date,
-                end_date = excluded.end_date,
-                filing_date = excluded.filing_date,
-                is_active_window = excluded.is_active_window,
-                created_at = excluded.created_at
-            """,
-            rows,
-        )
-        self.connection.commit()
-        return len(rows)
+        if commit:
+            self.connection.commit()
+        return len(metrics)
 
     def list_metrics(
         self,
@@ -152,7 +260,10 @@ class FinancialMetricRepository:
 
     def delete_by_company_id(self, company_id: int) -> int:
         """Delete base financial metrics for one company and return deleted row count."""
-        cursor = self.connection.execute("DELETE FROM financial_metrics WHERE company_id = ?", [company_id])
+        cursor = self.connection.execute(
+            "DELETE FROM financial_metrics WHERE company_id = ?",
+            [company_id],
+        )
         self.connection.commit()
         return cursor.rowcount
 
@@ -163,6 +274,8 @@ def _metric_to_row(metric: FinancialMetric, now: str) -> dict[str, Any]:
         "filing_id": metric.filing_id,
         "accession_number": metric.accession_number,
         "raw_fact_id": metric.raw_fact_id,
+        "origin": metric.origin,
+        "recovery_application_id": metric.recovery_application_id,
         "statement_type": metric.statement_type,
         "metric_name": metric.metric_name,
         "value_numeric": str(metric.value_numeric) if metric.value_numeric is not None else None,
@@ -187,6 +300,8 @@ def _row_to_metric(row: sqlite3.Row) -> FinancialMetric:
         filing_id=row["filing_id"],
         accession_number=row["accession_number"],
         raw_fact_id=row["raw_fact_id"],
+        origin=row["origin"],
+        recovery_application_id=row["recovery_application_id"],
         statement_type=row["statement_type"],
         metric_name=row["metric_name"],
         value_numeric=Decimal(value_numeric) if value_numeric is not None else None,
@@ -209,3 +324,72 @@ def _date_to_text(value: date | None) -> str | None:
 
 def _text_to_date(value: str | None) -> date | None:
     return date.fromisoformat(value) if value else None
+
+
+def _validate_metric_provenance(
+    metric: FinancialMetric,
+    connection: sqlite3.Connection,
+) -> None:
+    if metric.origin in _RECOVERY_ORIGINS:
+        if metric.recovery_application_id is None:
+            raise ValueError(
+                "recovered metric requires recovery_application_id"
+            )
+        if metric.raw_fact_id is not None:
+            raise ValueError(
+                "recovered metric cannot point to one reported raw fact"
+            )
+        application_row = connection.execute(
+            """
+            SELECT
+                recovery_application_records.record_json,
+                companies.cik
+            FROM recovery_application_records
+            JOIN companies ON companies.company_id = ?
+            WHERE recovery_application_records.recovery_application_id = ?
+            """,
+            [metric.company_id, metric.recovery_application_id],
+        ).fetchone()
+        if application_row is None:
+            raise ValueError(
+                "recovered metric requires an existing recovery application"
+            )
+        application = recovery_application_from_json(
+            application_row["record_json"]
+        )
+        expected_origin = (
+            METRIC_ORIGIN_FORMULA_RECOVERY
+            if application.decision == "formula"
+            else METRIC_ORIGIN_AFFIRMATIVE_ZERO_RECOVERY
+            if application.decision == "zero"
+            else None
+        )
+        if (
+            application.status != RECOVERY_APPLICATION_SUCCEEDED
+            or not same_cik(application.company_id, application_row["cik"])
+            or metric.origin != expected_origin
+            or metric.statement_type != application.statement_type
+            or metric.metric_name != application.target_metric_name
+            or metric.value_numeric != application.value_numeric
+            or metric.unit != application.unit
+            or metric.period_type != application.period_type
+            or metric.fiscal_year != application.fiscal_year
+            or metric.fiscal_period != application.fiscal_period
+            or metric.start_date != application.start_date
+            or metric.end_date != application.end_date
+            or metric.filing_date != application.filing_date
+            or metric.accession_number
+            != recovery_metric_source_accession(application)
+        ):
+            raise ValueError(
+                "recovered metric does not match recovery application"
+            )
+        return
+    if metric.origin != METRIC_ORIGIN_REPORTED_MAPPING:
+        raise ValueError(f"unsupported metric origin: {metric.origin}")
+    if metric.recovery_application_id is not None:
+        raise ValueError(
+            "reported metric cannot point to a recovery application"
+        )
+    if metric.raw_fact_id is None:
+        raise ValueError("reported metric requires raw_fact_id")

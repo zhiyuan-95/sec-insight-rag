@@ -844,9 +844,11 @@ def test_milestone25_experiment_presents_first_time_ingestion(
 
 def test_milestone25_experiment_reports_missing_sec_user_agent(
     tmp_path: Path,
+    monkeypatch,
     capsys,
 ) -> None:
     experiment = _load_experiment_module()
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
     env_file = tmp_path / "config.env"
     env_file.write_text("", encoding="utf-8")
 
@@ -883,6 +885,7 @@ def test_milestone25_uses_ticker_specific_default_report_path(
 ) -> None:
     experiment = _load_experiment_module()
     monkeypatch.setattr(experiment, "EXPERIMENT_DIR", tmp_path)
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
     env_file = tmp_path / "config.env"
     env_file.write_text("", encoding="utf-8")
 

@@ -44,6 +44,14 @@ class CompanyRepository:
         row = self.connection.execute("SELECT * FROM companies WHERE cik = ?", [cik]).fetchone()
         return _row_to_company(row) if row is not None else None
 
+    def get_by_id(self, company_id: int) -> CompanyRecord | None:
+        """Return one company by storage identifier, if present."""
+        row = self.connection.execute(
+            "SELECT * FROM companies WHERE company_id = ?",
+            [company_id],
+        ).fetchone()
+        return _row_to_company(row) if row is not None else None
+
     def get_by_ticker(self, ticker: str) -> CompanyRecord | None:
         """Return one company by ticker, if present."""
         row = self.connection.execute(

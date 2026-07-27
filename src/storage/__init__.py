@@ -34,6 +34,11 @@ from src.storage.retrieval_repository import (
     RetrievalRepository,
     StoredFilingChunk,
 )
+from src.storage.recovery_applications_repository import (
+    RecoveryApplicationConflictError,
+    RecoveryApplicationRepository,
+    StoredRecoveryApplication,
+)
 from src.storage.semantic_recommendations_repository import (
     SemanticRecommendationConflictError,
     SemanticRecommendationRepository,
@@ -61,12 +66,15 @@ __all__ = [
     "RawFactConflictEvidence",
     "RetrievalIndexState",
     "RetrievalRepository",
+    "RecoveryApplicationConflictError",
+    "RecoveryApplicationRepository",
     "SemanticRecommendationConflictError",
     "SemanticRecommendationRepository",
     "StoredRawFact",
     "StoredCompanyIndustryLabel",
     "StoredFiscalPeriodIndustryLabelSnapshot",
     "StoredFilingChunk",
+    "StoredRecoveryApplication",
     "StoredMappingShadowCandidate",
     "connect_sqlite",
     "initialize_database",

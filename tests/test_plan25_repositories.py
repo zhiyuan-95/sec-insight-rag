@@ -189,8 +189,23 @@ def test_financial_metric_repository_round_trips_traceable_decimal_metrics(tmp_p
     company = company_repository.upsert_company(CompanyRecord(cik="0000320193", name="Apple Inc.", ticker="AAPL"))
     assert company.company_id is not None
 
-    raw_fact_repository.upsert_facts([_fact(concept="Revenues", accession_number="0000320193-25-000079")])
-    raw_fact = raw_fact_repository.list_fact_records("0000320193")[0]
+    raw_fact_repository.upsert_facts(
+        [
+            _fact(
+                concept="Revenues",
+                accession_number="0000320193-25-000079",
+            ),
+            _fact(
+                concept="Revenues",
+                accession_number="0000320193-21-000070",
+            ),
+        ]
+    )
+    raw_facts = {
+        fact.fact.accession_number: fact
+        for fact in raw_fact_repository.list_fact_records("0000320193")
+    }
+    raw_fact = raw_facts["0000320193-25-000079"]
     filing_repository.upsert_filings(
         company.company_id,
         [
@@ -225,6 +240,9 @@ def test_financial_metric_repository_round_trips_traceable_decimal_metrics(tmp_p
             FinancialMetric(
                 company_id=company.company_id,
                 accession_number="0000320193-21-000070",
+                raw_fact_id=raw_facts[
+                    "0000320193-21-000070"
+                ].raw_fact_id,
                 statement_type="income_statement",
                 metric_name="revenue",
                 value_numeric=Decimal("365817000000"),

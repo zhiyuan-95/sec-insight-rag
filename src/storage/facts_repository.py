@@ -55,6 +55,26 @@ class RawFactRepository:
         initialize_database(self.connection)
         self._migrate_raw_observation_identity()
 
+    def get_by_ids(
+        self,
+        raw_fact_ids: tuple[int, ...],
+    ) -> tuple[StoredRawFact, ...]:
+        """Return raw observations for exact storage identifiers."""
+        clean_ids = tuple(sorted(set(raw_fact_ids)))
+        if not clean_ids:
+            return ()
+        placeholders = ", ".join("?" for _ in clean_ids)
+        rows = self.connection.execute(
+            f"""
+            SELECT *
+            FROM raw_xbrl_facts
+            WHERE id IN ({placeholders})
+            ORDER BY id
+            """,
+            clean_ids,
+        ).fetchall()
+        return tuple(_row_to_stored_raw_fact(row) for row in rows)
+
     def _migrate_raw_observation_identity(self) -> None:
         rows = self.connection.execute(
             "SELECT * FROM raw_xbrl_facts ORDER BY id"

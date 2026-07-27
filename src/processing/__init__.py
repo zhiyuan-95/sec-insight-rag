@@ -145,6 +145,18 @@ from src.processing.semantic_recommendations import (
     compare_semantic_judge_responses,
     normalize_semantic_judge_response,
 )
+from src.processing.company_identity import same_cik
+from src.processing.recovery_applications import (
+    RECOVERY_APPLICATION_INVALID,
+    RECOVERY_APPLICATION_SUCCEEDED,
+    AffirmativeZeroEvidence,
+    RecoveryApplication,
+    RecoveryComponentApplication,
+    RecoveryComponentDiagnostic,
+    apply_semantic_recommendation_to_period,
+    recovery_metric_source_accession,
+    validate_recovery_application,
+)
 from src.processing.periods import classify_period, parse_sec_date, validate_period
 from src.processing.xbrl_normalizer import NormalizedFact, find_duplicate_facts, normalize_companyfacts, normalize_fact_entry
 
@@ -226,6 +238,12 @@ __all__ = [
     "RECOMMENDATION_UNANIMOUS_FORMULA",
     "RECOMMENDATION_UNANIMOUS_MIXED",
     "RECOMMENDATION_UNANIMOUS_ZERO",
+    "RECOVERY_APPLICATION_INVALID",
+    "RECOVERY_APPLICATION_SUCCEEDED",
+    "AffirmativeZeroEvidence",
+    "RecoveryApplication",
+    "RecoveryComponentApplication",
+    "RecoveryComponentDiagnostic",
     "StatementNetworkIdentity",
     "MetricCoverageResolution",
     "TargetConceptCandidate",
@@ -252,6 +270,10 @@ __all__ = [
     "active_period_keys",
     "active_period_keys_from_periods",
     "all_canonical_metric_targets",
+    "apply_semantic_recommendation_to_period",
+    "recovery_metric_source_accession",
+    "same_cik",
+    "validate_recovery_application",
     "canonical_metric_targets",
     "build_semantic_evidence_packet",
     "compare_semantic_judge_responses",

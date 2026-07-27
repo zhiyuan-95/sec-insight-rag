@@ -293,6 +293,55 @@ def initialize_database(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         """
+        CREATE TABLE IF NOT EXISTS recovery_application_records (
+            recovery_application_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            recommendation_request_id TEXT NOT NULL,
+            recommendation_attempt_number INTEGER NOT NULL,
+            company_id TEXT NOT NULL,
+            period_id TEXT NOT NULL,
+            target_metric_name TEXT NOT NULL,
+            statement_type TEXT NOT NULL,
+            status TEXT NOT NULL,
+            record_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE (
+                recommendation_request_id,
+                recommendation_attempt_number,
+                period_id,
+                target_metric_name,
+                statement_type
+            ),
+            FOREIGN KEY (
+                recommendation_request_id,
+                recommendation_attempt_number
+            ) REFERENCES semantic_recommendation_records (
+                recommendation_request_id,
+                attempt_number
+            )
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_recovery_applications_recommendation
+        ON recovery_application_records (
+            recommendation_request_id,
+            recommendation_attempt_number
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_recovery_applications_company_period
+        ON recovery_application_records (
+            company_id,
+            period_id,
+            target_metric_name
+        )
+        """
+    )
+    connection.execute(
+        """
         CREATE TABLE IF NOT EXISTS filings (
             filing_id INTEGER PRIMARY KEY AUTOINCREMENT,
             company_id INTEGER NOT NULL,
@@ -334,6 +383,8 @@ def initialize_database(connection: sqlite3.Connection) -> None:
             end_date TEXT,
             filing_date TEXT,
             is_active_window INTEGER NOT NULL DEFAULT 1,
+            origin TEXT NOT NULL DEFAULT 'reported_mapping',
+            recovery_application_id INTEGER UNIQUE,
             created_at TEXT NOT NULL,
             UNIQUE (
                 company_id,
@@ -346,9 +397,23 @@ def initialize_database(connection: sqlite3.Connection) -> None:
             ),
             FOREIGN KEY (company_id) REFERENCES companies(company_id),
             FOREIGN KEY (filing_id) REFERENCES filings(filing_id),
-            FOREIGN KEY (raw_fact_id) REFERENCES raw_xbrl_facts(id)
+            FOREIGN KEY (raw_fact_id) REFERENCES raw_xbrl_facts(id),
+            FOREIGN KEY (recovery_application_id)
+                REFERENCES recovery_application_records(recovery_application_id)
         )
         """
+    )
+    _ensure_column(
+        connection,
+        "financial_metrics",
+        "origin",
+        "TEXT NOT NULL DEFAULT 'reported_mapping'",
+    )
+    _ensure_column(
+        connection,
+        "financial_metrics",
+        "recovery_application_id",
+        "INTEGER",
     )
     connection.execute(
         """
@@ -366,6 +431,12 @@ def initialize_database(connection: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_financial_metrics_raw_fact
         ON financial_metrics (raw_fact_id)
+        """
+    )
+    connection.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_financial_metrics_recovery
+        ON financial_metrics (recovery_application_id)
         """
     )
     connection.execute(

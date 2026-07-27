@@ -45,11 +45,13 @@ complete annual submissions discovery
   -> shadow mapping candidates
   -> nonnumeric semantic evidence groups
   -> three blind judge calls and immutable recommendation history
+  -> period-specific formula/zero application
+  -> immutable recovery applications and recovered financial metrics
 ```
 
 These seams are additive and tested, but the complete annual workflow is not yet
-wired into `ingest_company()`. Period-specific recovery application, recovered
-metric persistence, and atomic annual publication are not implemented.
+wired into `ingest_company()`. Atomic annual publication and the combined
+real-company acceptance proof are not implemented.
 
 ### Retrieval flow
 
@@ -143,14 +145,21 @@ SEC request logic remains separate from database repositories.
 - Company Facts/Inline normalization, period handling, and quality flags
 - typed Arelle extraction records and serializable evidence
 - observation reconciliation and accession/network/metadata precedence
+- shared SEC CIK identity comparison
 - target catalogs, approved direct mapping, and exact missing targets
 - inspectable shadow candidates
 - legacy report-only formula/metric-coverage diagnostics
 - MS3 semantic packets, grouping, response schemas, and canonical comparison
+- period-specific formula/zero validation and component lineage
 
 `direct_metric_mapping.py` can create only approved direct metric observations.
-`semantic_recommendations.py` compares structured judge decisions but does not
-calculate period values or write current metrics.
+`semantic_recommendations.py` compares structured judge decisions.
+`recovery_applications.py` independently resolves and validates each period,
+calculates only unanimous addition/subtraction formulas or affirmative zeros,
+and creates no metric directly. Formula components must match the requested
+actual period and retain blocking Arelle diagnostics when rejected. Zero
+requires a cited semantic concept backed by an actual precedence-selected
+Arelle fact whose value is zero for the same company and accounting context.
 
 ### Model-facing analysis
 
@@ -199,6 +208,7 @@ rebuildable artifacts.
 - approved learned mappings
 - shadow mapping candidates
 - semantic recommendation history
+- period-specific recovery application history
 - filing chunks and retrieval generation state
 
 Important tables include:
@@ -211,6 +221,7 @@ company_industry_labels
 xbrl_concept_mappings
 mapping_shadow_candidates
 semantic_recommendation_records
+recovery_application_records
 financial_metrics
 financial_indicators
 filing_chunks
@@ -224,8 +235,17 @@ schema. The approved MS2/MS3 migration has not been published.
 
 `src/workflows/semantic_recommendations.py` reuses an exact stored semantic
 group or calls the three configured judges concurrently, compares their
-responses, and persists immutable attempt history. It does not resolve numeric
-period facts or create financial metrics.
+responses, and persists immutable attempt history.
+
+`src/workflows/recovery_applications.py` persists period applications and
+creates `financial_metrics` only for successful formula/zero applications.
+Persistence rechecks the canonical expression, calculated value, target unit
+family, and stored raw-fact lineage before publishing a recovered metric.
+Recovered metrics carry an explicit origin and point to their application;
+direct metrics must retain raw-observation lineage. The workflow verifies the
+storage company against the recovery application's CIK and assigns recovered
+accession lineage from the source with the latest filing date. Company-wide
+atomic publication remains a later MS3 seam.
 
 Keep future workflow modules thin.
 
@@ -282,6 +302,7 @@ uv run python -m pytest -q tests/test_arelle_worker.py tests/test_arelle_invento
 uv run python -m pytest -q tests/test_observation_reconciliation.py tests/test_accession_precedence.py
 uv run python -m pytest -q tests/test_direct_metric_mapping.py tests/test_semantic_evidence.py
 uv run python -m pytest -q tests/test_semantic_recommendation_workflow.py
+uv run python -m pytest -q tests/test_recovery_applications.py tests/test_recovery_application_persistence.py
 uv run python -m pytest -q tests/test_indicators.py tests/test_retrieval.py
 ```
 

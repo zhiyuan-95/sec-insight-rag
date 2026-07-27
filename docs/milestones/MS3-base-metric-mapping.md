@@ -15,9 +15,11 @@ Implemented seams include precedence-selected direct mapping, exact missing
 targets, shadow candidate persistence, nonnumeric semantic packets,
 evidence-group reuse, three blind judge adapters, canonical unanimity, and
 immutable group recommendation history. Period-specific deterministic
-application, recovery-application persistence, recovered `financial_metrics`,
-atomic annual publication, and the complete real-company proof remain
-unfinished. `docs/structure.md` is authoritative for current behavior.
+formula/zero application, immutable recovery-application persistence, and
+recovered `financial_metrics` with explicit origin/provenance are also
+implemented. Atomic annual publication, workflow integration, and the complete
+real-company proof remain unfinished. `docs/structure.md` is authoritative for
+current behavior.
 
 ## Purpose and Deliverable
 
