@@ -1,3 +1,21 @@
+# MS4 — Derived Financial Indicators
+
+## Status
+
+`active`
+
+This file preserves the existing indicator design formerly called Milestone 3.
+It was implemented without a grilling session and has not been redesigned
+during the documentation migration. Its internal historical milestone wording
+is retained until a future focused review.
+
+Current evaluation found all 28 planned definitions, deterministic calculation,
+lineage, SQLite persistence, ingestion integration, focused tests, and complete
+annual report rows. The plan is not `completed` because its required quarterly
+active-window report evidence is absent.
+
+## Existing Accepted Design
+
 Milestone 3 Design: Indicator Engine
 
 Task Restatement
@@ -88,7 +106,7 @@ Likely Files Changed During Implementation
 - `src/storage/indicators_repository.py`
 - `src/storage/__init__.py`
 - `src/ingestion/company.py`
-- `experiments/MS3/milestone3_indicator_engine.py`
+- `experiments/MS4/indicator_engine.py`
 - `docs/structure.md`
 
 Core Data Flow
@@ -784,3 +802,38 @@ Open Decisions Before Coding
 - Whether `free_cash_flow` should always use `abs(capital_expenditure)` or preserve reported sign conventions for specific SEC concepts.
 - Which debt concepts should be accepted as debt components for `total_debt`.
 - Whether quick ratio and net debt should require `short_term_investments`, or skip when that metric is unavailable.
+
+## Deferred Indicator Extensions
+
+These extensions are preserved as future scope. They are not part of the
+current 28-indicator completion contract and require a future focused design
+review before implementation.
+
+General extensions:
+
+- ROIC
+- three-year and five-year CAGR
+- accrual ratio
+- stock-based compensation ratio
+- dividend and repurchase indicators
+- Altman Z-score
+- Piotroski F-score
+- Beneish M-score
+- DuPont decomposition
+- margin bridges
+- working-capital contribution analysis
+
+A universal indicator set is not appropriate for every industry. Candidate
+sector modules are:
+
+- Banks: net interest margin, efficiency ratio, return on average assets,
+  return on average equity, loan-to-deposit ratio, nonperforming-loan ratio,
+  net charge-off ratio, provision coverage, CET1 capital ratio, deposit growth,
+  and loan growth. Current ratio, inventory turnover, and debt-to-EBITDA are
+  generally inappropriate for banks.
+- Insurance: premium growth, loss ratio, expense ratio, combined ratio,
+  investment yield, reserve development, and return on equity.
+- REITs: FFO, AFFO, FFO per share, AFFO payout ratio, occupancy rate,
+  same-property NOI growth, and net debt-to-EBITDAre.
+- SaaS: ARR growth, net revenue retention, gross retention, Rule of 40, sales
+  efficiency, stock-based compensation to revenue, and FCF margin.

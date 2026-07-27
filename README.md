@@ -1,68 +1,38 @@
 # SEC Insight RAG
 
-Backend-first SEC Insight RAG system for evidence-grounded analysis of SEC filings and XBRL financial data.
+Local Python backend for traceable financial research from SEC filings, XBRL
+facts, deterministic calculations, filing retrieval, and evidence-grounded LLM
+analysis.
 
 ## Local Setup
 
-Install dependencies with `uv`:
-
 ```powershell
 uv sync
-```
-
-Start the local FastAPI backend:
-
-```powershell
+Copy-Item config.env.example config.env
+uv run python -m pytest -q
 uv run uvicorn src.api.main:app --reload
 ```
 
-Then open:
+Configure `SEC_USER_AGENT` before live SEC requests. Configure provider keys
+only for workflows that call those providers. Never commit `config.env`.
 
-```text
-http://127.0.0.1:8000/health
-```
+## Current Direction
 
-## Configuration
+The approved structured-data path processes all selected annual Inline XBRL
+`10-K`/`10-K/A` filings through Arelle-backed evidence extraction and
+source-aware metric mapping. Filing retrieval, indicators, analysis, RAG, and
+API workflows remain separate capabilities.
 
-Local settings are read from `config.env`. This file may contain secrets, so do not commit real API keys or credentials.
+Current runtime behavior may implement only part of an approved milestone.
+Use the milestone index for status and `docs/structure.md` for implemented
+truth.
 
-The FastAPI app shell can start without calling SEC, Gemini, LlamaIndex, or any external service. Live SEC ingestion helpers require `SEC_USER_AGENT`.
+## Documentation Map
 
-Expected local variables include:
-
-```env
-Gemini_API_KEY=
-SEC_USER_AGENT=
-STOCK_SQL_DB_PATH=stock_data.db
-STOCK_STORAGE_BASE_DIR=./storage/stock
-STOCK_FILINGS_BASE_DIR=./data_store/filings
-KNOWLEDGE_STORAGE_DIR=
-PRIMARY_CHAT_MODEL=gemini-2.5-flash
-ALLOWED_CHAT_MODELS=gemini-2.5-flash
-```
-
-## Current Scope
-
-Implemented so far:
-
-- Backend package scaffold
-- Typed settings loader
-- FastAPI app factory
-- `GET /health`
-- SEC ticker-to-CIK lookup helpers
-- SEC submissions and companyfacts retrieval helpers
-- Latest 10-K/10-Q filing selection and primary document download helpers
-- XBRL companyfacts normalization into raw fact records
-- SQLite storage for normalized raw XBRL facts
-- `ingest_company(...)` exported from `src.ingestion` to orchestrate ticker resolution, SEC retrieval, filing downloads, XBRL normalization, and SQLite persistence
-- Active-window base financial metric mapping
-- Deterministic derived indicator calculation and SQLite persistence
-- Milestone 2.5 and Milestone 3 experiment reports
-
-Not implemented yet:
-
-- Deterministic analytics
-- LlamaIndex retrieval
-- Gemini model calls
-- RAG analysis
-- CSV export routes
+- [Project proposal](proposal.md): overall direction, architecture, and roadmap
+- [Milestone index](docs/milestones/README.md): status, dependencies, and plans
+- [Domain glossary](CONTEXT.md): canonical project terminology
+- [Current structure](docs/structure.md): implemented modules and storage
+- [Mapping policy](docs/policies/mapping.md): durable mapping governance
+- [Experiment runbook](docs/experiments.md): shared inspection conventions
+- [Agent contract](agents.md): repository rules for coding agents

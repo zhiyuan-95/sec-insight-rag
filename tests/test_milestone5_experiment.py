@@ -8,8 +8,8 @@ from src.retrieval.models import FilingIndexSummary, IndexSyncResult, RetrievedE
 
 
 def _load_experiment_module() -> ModuleType:
-    module_path = Path("experiments/MS5/milestone5_retrieval_pipeline.py")
-    spec = importlib.util.spec_from_file_location("milestone5_retrieval_pipeline", module_path)
+    module_path = Path("experiments/MS6/retrieval_pipeline.py")
+    spec = importlib.util.spec_from_file_location("retrieval_pipeline", module_path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)

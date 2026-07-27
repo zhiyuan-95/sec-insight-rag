@@ -1,3 +1,15 @@
+# MS6 — Filing-Text Ingestion and Retrieval
+
+## Status
+
+`active`
+
+This is the accepted retrieval design formerly numbered Milestone 5. Its
+implementation exists, but completion evidence will be re-evaluated under the
+new milestone lifecycle before it is marked `completed`.
+
+## Existing Accepted Design
+
 Milestone 5 Design: Retrieval Pipeline
 
 Task Restatement
@@ -159,7 +171,7 @@ Milestone 5 Experiment
 Implement:
 
 ```text
-experiments/MS5/milestone5_retrieval_pipeline.py
+experiments/MS6/retrieval_pipeline.py
 ```
 
 Supported arguments:
@@ -174,7 +186,7 @@ Supported arguments:
 Default report path:
 
 ```text
-experiments/MS5/experiment_report_<TICKER>.txt
+experiments/MS6/experiment_report_<TICKER>.txt
 ```
 
 The terminal should show only a brief completion or error summary. The report
@@ -204,8 +216,8 @@ Likely Files Changed During Implementation
 - `src/storage/retrieval_repository.py`
 - `src/storage/__init__.py`
 - `src/ingestion/company.py`
-- `experiments/MS5/milestone5_retrieval_pipeline.py`
-- `experiments/MS5/experiment_proposal.md`
+- `experiments/MS6/retrieval_pipeline.py`
+- `docs/milestones/MS6-filing-retrieval.md`
 - `docs/structure.md`
 
 Out Of Scope

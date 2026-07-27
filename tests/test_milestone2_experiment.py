@@ -7,8 +7,8 @@ from types import ModuleType
 
 
 def _load_experiment_module() -> ModuleType:
-    module_path = Path("experiments/MS2/milestone2_ingestion_showcase.py")
-    spec = importlib.util.spec_from_file_location("milestone2_ingestion_showcase", module_path)
+    module_path = Path("experiments/MS2/ingestion_showcase.py")
+    spec = importlib.util.spec_from_file_location("ingestion_showcase", module_path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -73,7 +73,12 @@ def test_milestone2_fixture_mode_rejects_unsupported_ticker(capsys) -> None:
     assert "Result:" not in output
 
 
-def test_milestone2_live_mode_rejects_missing_sec_user_agent(tmp_path: Path, capsys) -> None:
+def test_milestone2_live_mode_rejects_missing_sec_user_agent(
+    tmp_path: Path,
+    capsys,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
     experiment = _load_experiment_module()
     env_file = tmp_path / "config.env"
     env_file.write_text(

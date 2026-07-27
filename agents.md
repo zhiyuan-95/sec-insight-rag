@@ -1,342 +1,215 @@
 # AGENTS.md
 
-## Role of this file
+## Purpose
 
-This file is the project-level coding contract for AI coding agents.
+This file is the coding contract for AI agents working in SEC Insight RAG. It
+defines authority, boundaries, safety, implementation, verification, and
+reporting rules. It is not the repository map.
 
-It defines how agents should work in this repository: which sources to trust,
-how to make changes, how to preserve architecture boundaries, how to use LLMs,
-and how to report completed work.
+## Authority Order
 
-Do not treat this file as the live repository map. For the current folder
-layout, implemented modules, generated storage locations, and verification
-workflow, read `docs/structure.md`.
+For repository-specific decisions, use:
 
-## Repository-specific priority
+1. The user's current request
+2. This agent contract
+3. `docs/structure.md` for implemented runtime truth
+4. `docs/milestones/README.md` and the owning milestone plan for approved design
+5. `docs/policies/` for durable mechanisms
+6. `proposal.md` for overall direction and roadmap
+7. `docs/experiments.md` for shared experiment conventions
+8. Git history for superseded designs
 
-For repository-specific guidance, use this order:
+`CONTEXT.md` owns canonical domain terminology. If authoritative documents
+conflict, stop and explain the conflict before making a dependent change.
 
-1. The user's direct request in the current task.
-2. This `AGENTS.md` file.
-3. `docs/structure.md` for current repository structure and implemented modules.
-4. `proposal.md` for product goals, architecture direction, MVP scope, and milestones.
-5. `docs/experiments.md` for experiment conventions and milestone experiment workflow.
-6. `experiments/MS*/experiment_proposal.md` for milestone-specific experiment designs.
-7. Historical plan files only as background context.
+Do not treat generated files, local databases, downloaded filings, caches,
+virtual environments, reports, or temporary outputs as source architecture.
 
-If repository documents conflict, stop and explain the conflict before making
-changes that depend on the disputed instruction.
+## Product and Evidence Boundaries
 
-Completed root `plan*.txt` milestone notes are local-only historical context.
-Use Git history when past reasoning is needed; do not treat those plans as
-current structure truth.
+SEC Insight RAG ingests SEC evidence, maps base metrics, calculates deterministic
+financial results, retrieves filing passages, and produces evidence-grounded
+interpretations.
 
-## Project overview
+Keep distinct:
 
-SEC Insight RAG is a backend-first financial research system that helps users
-understand company performance, risks, and possible drivers using SEC filings
-and XBRL financial data.
+- reported SEC/XBRL facts
+- base financial metrics
+- derived indicators
+- deterministic financial analysis
+- retrieved filing evidence
+- LLM-generated interpretation
 
-The system ingests SEC filings and structured XBRL facts, calculates derived
-financial indicators, runs deterministic financial analysis, retrieves relevant
-filing evidence, and generates retrieval-grounded language-model explanations.
+Never present a calculated value as reported, an LLM interpretation as
+deterministic analysis, or an unsupported hypothesis as causation. Preserve
+source lineage through every layer and state uncertainty when evidence is weak.
 
-The main goal is to make financial analysis evidence-grounded, traceable, and
-easier to understand.
+## Scope Control
 
-The system should keep these evidence types distinct:
+Do not add major services, dependencies, schemas, or source areas unless the
+request requires them. The initial project excludes:
 
-- Reported facts from SEC/XBRL sources.
-- Base financial metrics.
-- Derived financial indicators.
-- Deterministic financial analysis results.
-- Retrieved filing evidence.
-- LLM-generated interpretations.
+- frontend code
+- macro-data ingestion
+- graph storage
+- multi-agent runtime orchestration
+- external queues
+- cloud deployment infrastructure
 
-Unsupported causal claims are not allowed.
+Prefer the smallest change that completes the active milestone contract.
 
-## Source-of-truth rules
+## Interaction
 
-- Use `docs/structure.md` for the current repository and module structure.
-- Use `proposal.md` for product goals, architecture direction, MVP scope, and
-  milestones.
-- Use `docs/experiments.md` for experiment conventions and milestone experiment
-  workflow.
-- Use `experiments/MS*/experiment_proposal.md` for milestone-specific experiment
-  designs.
-- Treat historical plan files only as background context.
-- Check `docs/structure.md` before making architecture-sensitive changes.
-- If `proposal.md` and `docs/structure.md` disagree about current files or
-  module responsibilities, treat `docs/structure.md` as current truth.
-- Do not duplicate the full repository tree in this file.
-- Do not assume planned modules are implemented. Verify current status in
-  `docs/structure.md` and the filesystem.
-- Do not treat generated files, local databases, downloaded filings, caches,
-  virtual environments, or temporary experiment outputs as source architecture.
+Before implementation, state the task, important edge cases, likely changed
+files, and assumptions.
 
-## Scope control
+Ask at most one clarification question at a time, and only when the answer
+affects architecture, schema, public interfaces, data integrity, model choice,
+or generated-storage format. If a safe default exists, state it and proceed.
 
-Do not add source folders, services, dependencies, or major modules outside the
-current project scope unless explicitly requested.
+During design discussions:
 
-Do not add v1 source folders for:
+- resolve one decision at a time
+- distinguish product intent, domain language, workflow, data contracts,
+  edge cases, and implementation
+- do not treat a recommendation as accepted until the user confirms it
+- do not implement before the design is sufficiently resolved
 
-- Macro data.
-- Glossary data.
-- Graph storage.
-- Frontend code.
-- Multi-agent orchestration.
-- External job queues.
-- Cloud deployment infrastructure.
-
-Prefer completing the current milestone cleanly over expanding the system.
-
-## Interaction rules
-
-When the task is ambiguous:
-
-- Ask at most one clarification question at a time.
-- Ask only when the ambiguity affects implementation, architecture, schema,
-  public API behavior, data integrity, model/provider choice, or generated
-  storage format.
-- If a reasonable safe default exists, state the assumption and proceed.
-- If the user asks for clarification about your question, answer only that
-  clarification.
-- If the user asks for a recommendation about your question, give the
-  recommendation only.
-- Do not move to the next design question until the user explicitly says to
-  continue.
-- Do not assume the user accepted a recommendation until they confirm it.
-
-When discussing design before coding:
-
-- Help the user discover the idea through focused questions.
-- Prefer one concrete design question at a time.
-- Separate product intent, data model, workflow behavior, edge cases, and
-  implementation details.
-- Do not jump into implementation before the design target is clear.
-
-## Architecture boundaries
+## Architecture
 
 Keep these layers separate:
 
-- SEC/API ingestion.
-- XBRL normalization and cleanup.
-- Storage and repositories.
-- Retrieval.
-- Deterministic financial calculations.
-- Financial data analysis.
-- Semantic filing analysis.
-- LLM synthesis and interpretation.
-- Workflow orchestration.
+- SEC/API ingestion
+- XBRL normalization, reconciliation, and mapping
+- storage repositories
+- deterministic indicators and financial analysis
+- filing parsing and retrieval
+- LLM synthesis
+- API and workflow orchestration
 
 Rules:
 
-- Keep SEC API/client logic separate from database/repository logic.
-- Keep XBRL normalization and cleanup logic in processing code, not ingestion or
-  storage code.
-- Keep SQLite persistence in storage repositories and database helpers.
-- Keep deterministic financial calculations out of Gemini/RAG synthesis.
-- Keep financial data analysis logic separate from Gemini/RAG synthesis logic.
-- Keep semantic filing retrieval separate from numeric financial analysis.
-- Keep workflow orchestration thin.
-- Workflows may call ingestion, processing, storage, retrieval, analytics, or
-  analysis modules, but should not duplicate their internals.
-- Preserve traceability between reported facts, base metrics, derived
-  indicators, deterministic analysis, filing evidence, and LLM interpretations.
-- Do not change the database schema unless explicitly asked.
-- Preserve public function names and existing interfaces unless explicitly asked
-  to change them.
+- SEC clients do not write databases.
+- Processing code owns XBRL cleanup, precedence, mapping, and deterministic
+  transformation.
+- SQLite access remains in repositories and database helpers.
+- Deterministic calculations do not depend on Gemini or another LLM.
+- Numeric analysis and filing-text retrieval remain separate evidence sources.
+- Workflows coordinate layers without copying their internals.
+- Preserve public interfaces unless the user approves a change.
+- Do not change the database schema without explicit approval.
 
-## Data and evidence rules
+## Data Safety
 
-- Do not present calculated values as reported facts.
-- Do not present LLM interpretations as deterministic analysis.
-- Do not make causal claims unless supported by financial data, filing evidence,
-  or explicitly marked as a hypothesis.
-- Preserve source references when moving data through the pipeline.
-- Keep raw ingested data separate from cleaned, normalized, derived, or analyzed
-  data.
-- Treat raw data and fixtures as immutable unless the user explicitly asks to
-  update a fixture.
-- Do not modify downloaded SEC filings, raw XBRL payloads, local databases,
-  caches, or generated artifacts unless the task specifically requires it.
+- Raw fixtures and downloaded SEC evidence are immutable unless explicitly in
+  scope.
+- Keep raw observations separate from normalized, mapped, derived, or analyzed
+  state.
+- Preserve accession, period, source, and evidence references.
+- Do not silently guess missing, ambiguous, malformed, or conflicting values.
+- Keep generated caches and indexes rebuildable.
+- Do not hardcode credentials, user-specific paths, or API keys.
+- Treat `config.env` as local configuration.
+- Never commit secrets.
 
-## LLM and prompt rules
+## Models and Prompts
 
-Use `gemini-2.5-flash` as the default model for LLM reasoning, answer
-generation, and interpretation tasks.
+Use the model choices approved by the owning milestone or policy. Current
+project defaults are:
 
-Rules:
+- `gemini-3.1-flash-lite` for fiscal-period industry classification
+- the MS3 three-judge lineup defined in `docs/policies/mapping.md`
+- `gemini-2.5-flash` for general explanation and analysis
 
-- Do not introduce another LLM provider or model unless explicitly asked.
-- Retrieval embeddings, deterministic parsing, SEC/XBRL normalization, and
-  financial calculations should not depend on Gemini unless reasoning is
-  required.
-- Keep every LLM prompt template in `src/analyze/prompts.py`.
-- Do not define prompt strings inline in API routes, ingestion code, retrieval
-  code, storage code, or workflows.
-- Prompt templates should make the model separate reported facts, base metrics,
-  derived indicators, financial data analysis results, semantic filing analysis,
-  and interpretations.
-- Prompt templates should include financial data analysis results as a separate
-  evidence source when available.
-- Prompt templates should require evidence references.
-- Prompt templates should forbid unsupported causal claims.
-- Prompt templates should require uncertainty language when evidence is
-  incomplete.
+Do not introduce another provider or change a model contract without approval.
 
-## LlamaIndex rules
+Every prompt template belongs in `src/analyze/prompts.py`. Prompts must:
 
-Use built-in LlamaIndex tools for non-reasoning pipeline tasks when they fit the
-task.
+- distinguish facts, metrics, indicators, deterministic analysis, retrieved
+  evidence, and interpretation
+- require evidence references
+- forbid unsupported causal claims
+- require uncertainty language when evidence is incomplete
 
-Examples include document loading, text splitting, indexing, retrieval, and
-embedding integration.
+Retrieval loading, splitting, indexing, embedding, and parsing should not depend
+on LLM reasoning. Prefer fitting built-in LlamaIndex tools over new custom
+infrastructure.
 
-Rules:
+## Coding Discipline
 
-- Use `SentenceSplitter` as the default text splitter only when it fits the
-  task.
-- Do not add custom retrieval, indexing, or chunking infrastructure unless
-  built-in tools are insufficient.
-- Ask before adding a new library, external service, or major custom tooling.
-- Small local helper functions are allowed when they make the implementation
-  simpler and do not introduce architectural complexity.
-
-## Coding discipline
-
-### General style
-
-- Write simple, readable Python code.
+- Write simple, readable, typed Python.
 - Follow PEP 8.
 - Prefer small functions with clear inputs and outputs.
-- Add type hints for public functions and important internal functions.
-- Use descriptive names for variables, functions, and classes.
-- Prefer `pandas` for local tabular data processing when it improves clarity.
-- Use `pyspark` only when the task is explicitly about distributed processing.
-- Avoid clever, overly abstract, or framework-heavy code unless it clearly
-  reduces complexity.
-- Add comments only when the logic is not obvious.
-- Prefer explicit logic over hidden magic.
+- Reuse existing utilities and repositories.
+- Keep business logic out of API routes.
+- Keep prompt text out of routes, ingestion, retrieval, storage, and workflows.
+- Prefer explicit error handling; do not silently swallow failures.
+- Avoid broad `except Exception` unless it logs, re-raises, or returns a clearly
+  documented failure.
+- Add comments only where intent is not obvious.
+- Do not add a dependency for simple local behavior.
+- Do not create abstractions, base classes, services, or configuration systems
+  without repeated need.
 
-### Safety and configuration
+## Change Discipline
 
-- Do not hardcode file paths, API keys, credentials, or user-specific settings.
-- Use environment variables or config files for secrets and external settings.
-- Never commit secrets or credentials.
-- Treat `config.env` as local configuration, not public documentation.
-- Do not introduce new dependencies unless necessary.
-- If a new dependency is needed, explain why.
-- Do not silently swallow exceptions.
-- Prefer explicit error handling over hidden failure.
-- Avoid broad `except Exception` blocks unless they re-raise, log, or return a
-  clearly documented failure result.
-
-### Change discipline
-
-- Make the smallest reasonable change that solves the task.
-- Do not rewrite unrelated files.
-- Do not refactor unrelated code.
-- Do not rename files, functions, classes, modules, or public interfaces unless
-  explicitly asked.
-- Do not change database schema unless explicitly asked.
-- Keep local docs synchronized with behavior when the task changes documented
-  behavior.
-- Respect user-owned notes and planning files; do not rewrite them unless the
-  user asks.
-
-## Before coding
-
-Before implementation, briefly state:
-
-- The task being performed.
-- Important edge cases.
-- Files likely to be changed.
-- Assumptions.
-
-Ask for confirmation before changing code when the task affects architecture,
-database schema, public APIs, existing interfaces, data integrity, generated
-storage format, model/provider choice, or repository structure.
-
-If the task is small and unambiguous, proceed without unnecessary questions.
-
-## During coding
-
-- Keep the change focused.
-- Prefer local changes over broad rewrites.
-- Reuse existing utilities before adding new ones.
-- Keep business logic out of API route handlers when possible.
-- Keep storage logic inside repositories or database helpers.
-- Keep prompt logic inside prompt modules.
-- Keep workflows thin.
-- Do not duplicate existing behavior.
-- Update docs only when behavior, structure, or responsibilities change.
+- Preserve user-owned and unrelated work in a dirty tree.
+- Make the smallest complete change.
+- Do not refactor, rename, or rewrite unrelated code.
+- Do not alter public interfaces or schemas without approval.
+- Keep docs synchronized when responsibilities, behavior, artifacts, or
+  verification workflows change.
+- Keep completed canonical milestone plans; remove obsolete drafts only after
+  migrating unique durable content.
+- Preserve superseded versions in Git history, not an active archive.
 
 ## Verification
 
-Automated tests and milestone experiments serve different verification needs.
+Automated tests and milestone experiments serve different purposes.
 
-- Add focused automated tests for deterministic logic, repository behavior,
-  public interfaces, regressions, and important failure paths when implementing
-  or changing those behaviors.
-- Keep milestone experiments for human-readable workflow inspection, generated
-  evidence reports, and end-to-end checks against local or live SEC data.
-- Prefer `uv run python ...` for local scripts and experiment runs.
-- Do not add a new test framework or test-only dependency without confirming
-  the implementation scope and documenting the test command.
-- When behavior is changed, explain which automated and manual verification was
-  performed or why a relevant check was not run.
+- Add focused tests for deterministic behavior, repositories, public
+  interfaces, regressions, and failure paths.
+- Use milestone experiments for real filing/report inspection and end-to-end
+  evidence.
+- Prefer `uv run python ...`.
+- Do not add another test framework or test-only dependency without approval.
+- Do not call a milestone completed from green unit tests alone when its plan
+  requires real-data or report acceptance.
+- Report every check run and every relevant check not run.
 
-## Documentation rules
+## Documentation Ownership
 
-Update `docs/structure.md` when changes affect:
+- `proposal.md`: project direction, architecture intent, and roadmap
+- `CONTEXT.md`: domain glossary only
+- `docs/structure.md`: current implemented repository truth
+- `docs/milestones/`: one high-fidelity plan per designed milestone
+- `docs/policies/`: durable cross-milestone mechanisms
+- `docs/experiments.md`: shared experiment runbook
+- GitHub issues: implementation tasks
+- Git history: obsolete drafts and superseded versions
 
-- Folder structure.
-- Important files.
-- Module responsibilities.
-- Storage locations.
-- Generated artifacts.
-- Verification workflows.
+A milestone plan may name contract-relevant modules, interfaces, records, and
+tables. It should not maintain exhaustive file-edit lists or ticket-by-ticket
+work logs.
 
-Update `proposal.md` only when changes affect product goals, architecture
-direction, MVP scope, or milestone intent.
+Update:
 
-Update `docs/experiments.md` only when changes affect experiment conventions,
-experiment workflow, or experiment output expectations.
+- `docs/structure.md` when implemented modules, ownership, storage, generated
+  artifacts, or verification workflows change
+- `proposal.md` when overall direction, roadmap, or scope changes
+- the owning milestone when its accepted design, status, or completion evidence
+  changes
+- a policy when its durable mechanism changes
 
-Do not rewrite historical planning files unless explicitly asked.
-
-## Anti-overengineering rules
-
-Avoid unnecessary complexity.
-
-Do not add:
-
-- New abstractions without repeated need.
-- New dependencies for simple local logic.
-- New services for local workflows.
-- New configuration systems unless existing configuration is insufficient.
-- New base classes unless multiple implementations already exist.
-- New orchestration layers unless workflow complexity requires them.
-- New prompt frameworks unless plain prompt templates are insufficient.
-- New data stores unless SQLite/local files are insufficient for the current
-  milestone.
-
-Prefer clear functions, explicit data flow, small modules, traceable outputs,
-deterministic calculations, and minimal moving parts.
-
-## After coding
+## Completion Report
 
 After implementation, summarize:
 
-- Every file changed and why.
-- Important implementation decisions.
-- Assumptions made.
-- Edge cases handled.
-- Manual verification performed.
-- Any verification not run and why.
+- every changed file and why
+- important decisions and assumptions
+- edge cases handled
+- automated and manual verification
+- checks not run and why
+- documentation updated
 
-If the change affected repository structure, module responsibilities, important
-files, storage locations, generated artifacts, or verification workflows, mention
-that `docs/structure.md` was updated.
+Do not claim completion while required work or acceptance evidence remains.

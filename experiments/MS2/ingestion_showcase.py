@@ -150,7 +150,7 @@ def format_report(result: ExperimentResult) -> str:
             "  fact rows.",
             "",
             "Manual Judgment:",
-            "  Compare the observed report with experiments/MS2/experiment_proposal.md.",
+            "  Compare the observed report with docs/milestones/MS2-annual-xbrl-ingestion.md.",
             "  The project owner decides whether the milestone behavior looks correct.",
         ]
     )

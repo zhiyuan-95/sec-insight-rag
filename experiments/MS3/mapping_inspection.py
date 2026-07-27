@@ -1,4 +1,4 @@
-"""Manual examination harness for the Plan 2.5 company ingestion workflow."""
+"""Manual examination harness for the MS3 mapping workflow."""
 
 from __future__ import annotations
 
@@ -101,12 +101,12 @@ from src.processing.formula_proposals import (
 )
 from src.storage import CompanyRepository, connect_sqlite, initialize_database
 
-EXPERIMENT_DIR = PROJECT_ROOT / "experiments" / "MS2_5"
+EXPERIMENT_DIR = PROJECT_ROOT / "experiments" / "MS3"
 EXPERIMENT_STORAGE_DIR = PROJECT_ROOT / "experiments" / "storage"
 DEFAULT_DB_PATH = EXPERIMENT_STORAGE_DIR / "experiment.db"
-DEFAULT_REPORT_PREFIX = "milestone25_mapping_report"
+DEFAULT_REPORT_PREFIX = "mapping_report"
 DEFAULT_FILINGS_DIR = EXPERIMENT_STORAGE_DIR / "filings"
-DEFAULT_EXPORTS_DIR = PROJECT_ROOT / "data" / "exports" / "ms2_5"
+DEFAULT_EXPORTS_DIR = PROJECT_ROOT / "data" / "exports" / "ms3"
 FORMULA_PROPOSAL_CACHE_SUBDIR = "formula_proposals"
 FORMS = ("10-K", "10-Q")
 FORMULA_PANEL_SIZE = 3
@@ -248,7 +248,7 @@ class ExperimentRun:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the Milestone 2.5 experiment and write inspection artifacts."""
+    """Run the MS3 mapping experiment and write inspection artifacts."""
     args = _parse_args(argv)
     ticker = args.ticker.strip().upper()
     paths = _paths_from_args(args)
@@ -360,7 +360,7 @@ def run_experiment(
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate a manual examination report for the Plan 2.5 ingestion workflow.",
+        description="Generate a manual examination report for the MS3 mapping workflow.",
     )
     parser.add_argument("--ticker", required=True, help="Single company ticker to inspect.")
     parser.add_argument("--env-file", default="config.env", help="Environment file containing SEC_USER_AGENT.")
@@ -376,7 +376,7 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--full-report",
         action="store_true",
-        help="Accepted for compatibility; the saved report keeps the fixed Plan 2.5 mapping shape.",
+        help="Accepted for compatibility; the saved report keeps the fixed MS3 mapping shape.",
     )
     formula_group = parser.add_mutually_exclusive_group()
     formula_group.add_argument(
@@ -3244,7 +3244,7 @@ def format_lineage_report(run: ExperimentRun) -> str:
     annual_rows = _pivot_metric_rows(rows, annual=True)
     quarterly_rows = _pivot_metric_rows(rows, annual=False)
     lines = [
-        "Milestone 2.5 Financial Metric Data Lineage View",
+        "MS3 Financial Metric Data Lineage View",
         "",
         "Run Context:",
         f"  ticker: {run.ticker}",
@@ -3509,7 +3509,7 @@ def _lineage_rows_for_run(run: ExperimentRun) -> list[dict[str, Any]]:
 def format_report(run: ExperimentRun, *, report_output: str = "file") -> str:
     """Render a compact Markdown report for manual inspection."""
     lines = [
-        "# Milestone 2.5 Live SEC Experiment Report",
+        "# MS3 Mapping Inspection Report",
         "",
         "## Run Context",
         "",
@@ -3560,9 +3560,9 @@ def format_report(run: ExperimentRun, *, report_output: str = "file") -> str:
 
 
 def format_saved_report(run: ExperimentRun, *, full_report: bool = False) -> str:
-    """Render the saved Plan 2.5 target mapping report."""
+    """Render the saved MS3 target mapping report."""
     lines = [
-        "# Plan 2.5 Target Mapping Report",
+        "# MS3 Target Mapping Report",
     ]
 
     lines.extend(["", "## 0. Compact Summary", ""])
@@ -3644,9 +3644,9 @@ def _saved_compact_summary_rows(run: ExperimentRun, *, full_report: bool) -> lis
         in {PROVIDER_STATUS_NO_FORMULA, PROVIDER_STATUS_UNAVAILABLE, PROVIDER_STATUS_FAILED}
         for row in diagnostics
     )
-    report_output = "saved Plan 2.5 target mapping report"
+    report_output = "saved MS3 target mapping report"
     if full_report:
-        report_output = "saved Plan 2.5 target mapping report; --full-report kept for CLI compatibility"
+        report_output = "saved MS3 target mapping report; --full-report kept for CLI compatibility"
     new_filings = _new_filing_summary(run.session_decision.new_filings)
     return [
         {"Item": "Ticker", "Value": run.ticker},
@@ -4635,12 +4635,12 @@ def format_compact_report(run: ExperimentRun, *, full_report: bool = False) -> s
     setup_company = run.setup_snapshot.get("company") or {}
     session_after_company = run.session_after_snapshot.get("company") or {}
     report_output = (
-        "saved Plan 2.5 target mapping report; --full-report compatibility flag accepted"
+        "saved MS3 target mapping report; --full-report compatibility flag accepted"
         if full_report
-        else "saved Plan 2.5 target mapping report"
+        else "saved MS3 target mapping report"
     )
     lines = [
-        "Milestone 2.5 Plan 2.5 Ingestion Examination",
+        "MS3 Base Metric Mapping Examination",
         "",
         "Run Context",
         f"  ticker: {run.ticker}",
@@ -4690,7 +4690,7 @@ def format_compact_report(run: ExperimentRun, *, full_report: bool = False) -> s
         [
             "",
             "Saved Report",
-            "  milestone25_mapping_report contains compact summary, target metric status, and 10-K/10-Q proposed formulas.",
+            "  mapping_report contains compact summary, target metric status, and legacy 10-K/10-Q proposal evidence.",
         ]
     )
     return "\n".join(lines)

@@ -1,4 +1,4 @@
-"""Run the Milestone 5 local filing retrieval experiment."""
+"""Run the MS6 local filing retrieval experiment."""
 
 from __future__ import annotations
 
@@ -96,11 +96,11 @@ def main() -> int:
             ),
             encoding="utf-8",
         )
-        print(f"MS5 failed for {ticker}; details saved to {report_path}")
+        print(f"MS6 failed for {ticker}; details saved to {report_path}")
         return 1
 
     print(
-        f"MS5 {sync_result.status} {sync_result.chunk_count} chunks for {ticker}; "
+        f"MS6 {sync_result.status} {sync_result.chunk_count} chunks for {ticker}; "
         f"report saved to {report_path}"
     )
     return 0
@@ -181,7 +181,7 @@ def _render_report(
     captured_output: str,
 ) -> str:
     lines = [
-        "Milestone 5 Experiment: Retrieval Pipeline",
+        "MS6 Experiment: Retrieval Pipeline",
         "=" * 42,
         "",
         "Run Context:",
@@ -321,7 +321,7 @@ def _render_error_report(
     traceback_text: str,
 ) -> str:
     lines = [
-        "Milestone 5 Experiment: Retrieval Pipeline",
+        "MS6 Experiment: Retrieval Pipeline",
         "=" * 42,
         "",
         "Run Context:",

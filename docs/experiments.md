@@ -2,146 +2,115 @@
 
 ## Purpose
 
-This runbook defines the shared philosophy and location rules for milestone
-experiments. The explicit design for each milestone belongs in that milestone's
-own proposal file under `experiments/`.
+Milestone experiments produce human-inspectable evidence for workflows that
+unit tests alone cannot validate. They complement automated tests; they do not
+replace them.
 
-Use this file as the central index. Use the milestone proposal files for the
-actual experiment design.
+The corresponding milestone plan owns acceptance scenarios and required
+evidence. This runbook owns only shared execution and artifact conventions.
 
-## Core Rule
+## Core Rules
 
-```text
-Experiments demonstrate.
-Milestone proposal files define exactly what to print and inspect.
-Manual review is the verification path.
-```
-
-An experiment is a runnable, human-readable showcase of one milestone's main
-functionality. It should mimic the way the project owner naturally inspects that
-stage through a saved report and a concise terminal summary:
-
-```text
-I try the important user action.
-I save what the system found or created in a human-readable report.
-I inspect counts, paths, dates, table names, and sample rows in that report.
-I try alternate cases when the milestone has branch behavior.
-I decide whether the behavior looks right.
-```
-
-## File Layout
-
-Put detailed milestone experiment designs here:
-
-```text
-experiments/
-  MS1/
-    experiment_proposal.md
-  MS2/
-    experiment_proposal.md
-  MS2_5/
-    experiment_proposal.md
-  MS3/
-    experiment_proposal.md
-    milestone3_indicator_engine.py
-  MS4/
-    experiment_proposal.md
-  MS5/
-    experiment_proposal.md
-    milestone5_retrieval_pipeline.py
-  MS6/
-    experiment_proposal.md
-  MS7/
-    experiment_proposal.md
-```
-
-Folder naming rule:
-
-- Use `MS1`, `MS2`, `MS3`, and so on for whole-number milestones.
-- Use `MS2_5` for Milestone 2.5.
-- Keep runnable experiment scripts inside the same milestone folder as their
-  proposal.
+- Run experiments from the repository root with `uv run python ...`.
+- Keep executable scripts under `experiments/MS#/`.
+- Do not keep a separate `experiment_proposal.md`; acceptance design belongs in
+  `docs/milestones/`.
+- Prefer saved reports for detailed evidence and concise terminal summaries.
+- Preserve source IDs, accession numbers, periods, warnings, and skip/failure
+  reasons.
+- Do not reduce evidence to a predeclared pass/fail label.
+- Keep fixtures immutable.
+- Keep generated databases, filings, reports, caches, and exports untracked.
+- Never make a live SEC call without an identifying `SEC_USER_AGENT`.
 
 ## Data Modes
 
-Use these names consistently:
+Use the smallest mode that answers the question:
+
+- `fixture`: deterministic local data for repeatable behavior
+- `local`: existing local database, filing, or index artifacts
+- `live`: external SEC or model-provider calls
+
+An experiment should label its mode, inputs, database, models, configuration,
+and output paths. Live results are time-dependent and must not replace
+deterministic automated coverage.
+
+## Script Layout
 
 ```text
-fixture
-  Uses saved sample data under data/fixtures/.
-  Does not contact SEC or Gemini.
-  Best for repeatable milestone inspection.
-
-local
-  Uses local project storage such as stock_data.db and data_store/filings/.
-  May write generated local storage when the experiment intentionally ingests
-  or refreshes a company.
-  Shared isolated experiment storage should live under experiments/storage/
-  when multiple milestone experiments need to inspect the same generated state.
-
-live
-  Contacts an external service such as SEC or Gemini.
-  Must be explicit because data, network behavior, and credentials can change.
+experiments/
+  storage/                 generated shared experiment state
+  MS2/
+    ingestion_showcase.py
+  MS3/
+    mapping_inspection.py
+  MS4/
+    indicator_engine.py
+  MS6/
+    retrieval_pipeline.py
 ```
 
-Prefer `fixture` for repeatable early inspections. Use `local` for workflows
-that need to inspect the current database. Use `live` only when the experiment
-is specifically about real external behavior.
+Create future milestone folders only when their experiments are designed and
+implemented.
 
-## Standard Proposal Contents
+## Current Commands
 
-Each `experiment_proposal.md` should define:
+```powershell
+# MS2 deterministic SEC/XBRL ingestion showcase
+uv run python experiments/MS2/ingestion_showcase.py --ticker AAPL --mode fixture
 
-- purpose
-- human question
-- milestone scope
-- recommended script location
-- data modes
-- input cases
-- proposed report output
-- required report sections
-- implementation guidance
-- artifacts to inspect
-- edge cases to show
-- expected outcome
+# MS3 mapping inspection over local/live evidence
+uv run python experiments/MS3/mapping_inspection.py --ticker AAPL
 
-The proposal should be explicit enough that a coding agent can implement the
-runnable experiment without guessing what the report output should show.
+# MS4 indicator report from local stored metrics
+uv run python experiments/MS4/indicator_engine.py --ticker AAPL
 
-## Milestone Index
+# MS6 filing retrieval inspection
+uv run python experiments/MS6/retrieval_pipeline.py --ticker AAPL
+```
 
-| Milestone | Proposal file | Main inspection theme |
-| --- | --- | --- |
-| 1 | `experiments/MS1/experiment_proposal.md` | Project scaffold, settings, API health |
-| 2 | `experiments/MS2/experiment_proposal.md` | SEC/XBRL ingestion, filing paths, raw facts |
-| 2.5 | `experiments/MS2_5/experiment_proposal.md` | Update checks, persisted industry labels, Inline XBRL extensions, governed concept mapping, base metric lineage |
-| 3 | `experiments/MS3/experiment_proposal.md` | Derived indicators, active-window yearly and quarterly tables, formulas, source metric traceability |
-| 4 | `experiments/MS4/experiment_proposal.md` | Deterministic trends, comparisons, chart-ready output |
-| 5 | `experiments/MS5/experiment_proposal.md` | Filing chunking and retrieval evidence |
-| 6 | `experiments/MS6/experiment_proposal.md` | Gemini configuration, prompt source, call metadata |
-| 7 | `experiments/MS7/experiment_proposal.md` | RAG answer separation, evidence references, unsupported claims |
+Run each script with `--help` before relying on optional flags.
 
-## Update Policy
+## Report Contract
 
-Update this file when:
+A human-inspection report should include, when applicable:
 
-- milestone experiment folder naming changes
-- a milestone proposal file is added, removed, or renamed
-- the standard proposal contents change
-- the data-mode definitions change
+- purpose and question
+- run context and inputs
+- selected filing/accession scope
+- evidence inventory and coverage
+- calculated/mapped/retrieved results
+- source lineage
+- warnings, skips, failures, and unavailable evidence
+- timing and cache/reuse behavior
+- artifact paths and reproduction command
 
-Update the relevant `experiments/MS*/experiment_proposal.md` when:
+Large tables belong in saved artifacts, not terminal output.
 
-- an experiment command changes
-- expected printed output changes
-- expected outcome changes
-- a milestone moves from planned to implemented
-- the human question or input cases for that milestone change
+## Generated Artifacts
 
-Update `docs/structure.md` when:
+Typical local-only artifacts include:
 
-- `docs/experiments.md` is added, removed, or renamed
-- the `experiments/` folder is added
-- milestone experiment folders are added, removed, or renamed
-- runnable experiment files are added, removed, or renamed
-- experiment responsibilities change materially
+- `experiments/storage/experiment.db`
+- `experiments/storage/filings/`
+- `experiments/MS3/mapping_report_*.md`
+- `experiments/MS4/indicator_report_*.txt`
+- `experiments/MS6/experiment_report_*.txt`
+- generated CSV exports under `data/exports/`
+
+`docs/structure.md` records authoritative artifact locations. Generated output
+must not be treated as current evidence after producing code or inputs change;
+regenerate it before review.
+
+## Completion Evidence
+
+The milestone plan records:
+
+- exact automated and experiment commands
+- inspected artifact locations
+- acceptance results
+- commits, pull requests, or tickets
+- remaining limitations
+
+A milestone is not completed solely because automated tests pass. Named
+real-data or report-inspection gates must also be satisfied.

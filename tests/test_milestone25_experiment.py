@@ -38,8 +38,8 @@ from src.storage import (
 
 
 def _load_experiment_module() -> ModuleType:
-    module_path = Path("experiments/MS2_5/milestone25_live_sec_inspection.py")
-    spec = importlib.util.spec_from_file_location("milestone25_live_sec_inspection", module_path)
+    module_path = Path("experiments/MS3/mapping_inspection.py")
+    spec = importlib.util.spec_from_file_location("mapping_inspection", module_path)
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -77,7 +77,7 @@ def _assert_report_generation_output(output: str, report_path: Path | None = Non
     assert " second(s); saved report: " in output
     if report_path is not None:
         assert str(report_path) in output
-    assert "# Plan 2.5 Target Mapping Report" not in output
+    assert "# MS3 Target Mapping Report" not in output
 
 
 def test_milestone25_formula_rows_collapse_same_recommended_components() -> None:
@@ -812,7 +812,7 @@ def test_milestone25_experiment_presents_first_time_ingestion(
     assert exit_code == 0
     assert calls == ["TEST", "TEST"]
     _assert_report_generation_output(output, tmp_path / "experiment_report.md")
-    assert "# Plan 2.5 Target Mapping Report" in report
+    assert "# MS3 Target Mapping Report" in report
     assert "## 0. Compact Summary" in report
     assert "## 0A. XBRL Concepts Provided By Period" in report
     assert "### # of concepts provided from XBRL - 10-K" in report
@@ -901,7 +901,7 @@ def test_milestone25_uses_ticker_specific_default_report_path(
         ]
     )
     output = capsys.readouterr().out
-    report_path = tmp_path / "milestone25_mapping_report_MSFT.md"
+    report_path = tmp_path / "mapping_report_MSFT.md"
     report = report_path.read_text(encoding="utf-8")
 
     assert exit_code == 1
@@ -943,7 +943,7 @@ def test_milestone25_write_report_flag_preserves_markdown_artifact(
 
     assert exit_code == 0
     _assert_report_generation_output(output, tmp_path / "experiment_report.md")
-    assert "saved Plan 2.5 target mapping report" in report
+    assert "saved MS3 target mapping report" in report
     assert "## 0. Compact Summary" in report
     assert "## 1. Target Metrics Mapping Status" in report
     assert "## 2. Proposed Formulas For Formula Recommendations" in report
@@ -995,7 +995,7 @@ def test_milestone25_saves_warning_when_csv_export_is_locked(
 
     assert exit_code == 0
     _assert_report_generation_output(output, tmp_path / "experiment_report.md")
-    assert "# Plan 2.5 Target Mapping Report" in report
+    assert "# MS3 Target Mapping Report" in report
     assert "CSV export skipped for financial_metrics" in report
     assert "## 0. Compact Summary" in report
     assert "## 2. Missing Target Replacement Recommendations" not in report
@@ -1035,7 +1035,7 @@ def test_milestone25_full_report_flag_prints_detailed_markdown(
 
     assert exit_code == 0
     _assert_report_generation_output(output, tmp_path / "experiment_report.md")
-    assert "# Plan 2.5 Target Mapping Report" in report
+    assert "# MS3 Target Mapping Report" in report
     assert "## 0. Compact Summary" in report
     assert "## 2. Proposed Formulas For Formula Recommendations" in report
     assert "## 3. Summary Recommendation" in report

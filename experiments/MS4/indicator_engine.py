@@ -1,4 +1,4 @@
-"""Milestone 3 experiment report for stored derived indicators."""
+"""MS4 experiment report for stored derived indicators."""
 
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ CURRENCY_INDICATORS = frozenset({"free_cash_flow"})
 
 @dataclass(frozen=True)
 class TickerReport:
-    """All local evidence needed for one ticker's MS3 report."""
+    """All local evidence needed for one ticker's MS4 report."""
 
     ticker: str
     company: CompanyRecord | None
@@ -108,7 +108,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Inspect stored Milestone 3 derived indicators for one or more tickers.",
+        description="Inspect stored MS4 derived indicators for one or more tickers.",
     )
     parser.add_argument(
         "--ticker",
@@ -123,8 +123,8 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
         "--output-file",
         default=None,
         help=(
-            "Report .txt path. Relative paths are written under experiments/MS3. "
-            "Defaults to milestone3_indicator_report_<tickers>.txt."
+            "Report .txt path. Relative paths are written under experiments/MS4. "
+            "Defaults to indicator_report_<tickers>.txt."
         ),
     )
     parser.add_argument(
@@ -150,7 +150,7 @@ def _resolve_output_path(raw_output_file: str | None, tickers: tuple[str, ...]) 
         if not output_path.is_absolute():
             output_path = EXPERIMENT_DIR / output_path
     else:
-        output_path = EXPERIMENT_DIR / f"milestone3_indicator_report_{_ticker_slug(tickers)}.txt"
+        output_path = EXPERIMENT_DIR / f"indicator_report_{_ticker_slug(tickers)}.txt"
     if output_path.suffix.lower() != ".txt":
         output_path = output_path.with_suffix(".txt")
     return output_path
@@ -236,7 +236,7 @@ def format_report(
     output_path: Path,
 ) -> str:
     lines = [
-        "Milestone 3 Experiment: Indicator Engine",
+        "MS4 Experiment: Indicator Engine",
         "",
         "Human Question:",
         "  Can I inspect yearly and quarterly tables for every requested indicator",
